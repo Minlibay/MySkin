@@ -1,0 +1,1095 @@
+import 'package:flutter/material.dart';
+import '../../../core/theme/app_colors.dart';
+import '../../../core/theme/app_spacing.dart';
+import '../../../core/theme/app_typography.dart';
+import '../../../core/widgets/eyebrow_text.dart';
+import '../../../core/widgets/floating_tab_bar.dart';
+import '../../../core/widgets/glow_background.dart';
+import '../../../core/widgets/lina_avatar.dart';
+import '../../../core/widgets/metric_ring.dart';
+import '../../ai/domain/models.dart';
+import '../../ritual/domain/today.dart';
+
+class HomeScreen extends StatelessWidget {
+  const HomeScreen({
+    super.key,
+    required this.profile,
+    required this.lastResult,
+    this.today,
+    required this.onStandardMode,
+    required this.onDermMode,
+    required this.onRetake,
+    this.onLogout,
+    this.onOpenRoutine,
+    this.onOpenCatalog,
+    this.onOpenShelf,
+    this.onOpenScan,
+  });
+
+  final SkinProfile profile;
+  final RoutineResult? lastResult;
+  final Today? today;
+  final VoidCallback onStandardMode;
+  final VoidCallback onDermMode;
+  final VoidCallback onRetake;
+  final VoidCallback? onLogout;
+  final VoidCallback? onOpenRoutine;
+  final VoidCallback? onOpenCatalog;
+  final VoidCallback? onOpenShelf;
+  final VoidCallback? onOpenScan;
+
+  String get _greeting {
+    final h = DateTime.now().hour;
+    if (h < 5) return 'Доброй ночи';
+    if (h < 12) return 'Доброе утро';
+    if (h < 18) return 'Добрый день';
+    return 'Добрый вечер';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final name = profile.name?.trim().isNotEmpty == true ? profile.name! : null;
+
+    return Scaffold(
+      backgroundColor: AppColors.background,
+      body: Stack(
+        children: [
+          const Positioned.fill(
+            child: GlowBackground(variant: GlowVariant.blush),
+          ),
+          SafeArea(
+            child: Stack(
+              children: [
+                ListView(
+                  padding: const EdgeInsets.fromLTRB(
+                      AppSpacing.xl, AppSpacing.md, AppSpacing.xl, 110),
+                  children: [
+                    _Greeting(
+                      greeting: _greeting,
+                      name: name,
+                      onLogout: onLogout,
+                      onRetake: onRetake,
+                    ),
+                    const SizedBox(height: AppSpacing.lg),
+                    if (lastResult != null) ...[
+                      _TodayHeroCard(result: lastResult!),
+                      const SizedBox(height: AppSpacing.sm + 2),
+                      _LinaNudge(
+                        message: lastResult!.tips.isNotEmpty
+                            ? '«${lastResult!.tips.first}»'
+                            : '«Заметила, что вечерний уход важен — давай не пропускать.»',
+                        onTap: onDermMode,
+                      ),
+                      const SizedBox(height: AppSpacing.xl),
+                      _SectionRow(
+                        title: 'Сегодня · ритуал',
+                        actionLabel: 'Открыть',
+                        onTap: onOpenRoutine,
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      _RitualRow(
+                        result: lastResult!,
+                        today: today,
+                        onTap: onOpenRoutine,
+                      ),
+                      if (lastResult!.morning.isNotEmpty ||
+                          lastResult!.evening.isNotEmpty) ...[
+                        const SizedBox(height: AppSpacing.xl),
+                        _SectionRow(
+                          title: 'Подобрано тебе',
+                          actionLabel: 'Все',
+                          onTap: onOpenRoutine,
+                        ),
+                        const SizedBox(height: AppSpacing.sm),
+                        _RecommendationCard(
+                          steps: [
+                            ...lastResult!.morning,
+                            ...lastResult!.evening,
+                          ],
+                          onTap: onOpenRoutine,
+                        ),
+                      ],
+                      const SizedBox(height: AppSpacing.sm + 2),
+                      _StreakCard(streak: today?.streak ?? 0),
+                      const SizedBox(height: AppSpacing.xl),
+                      _SectionRow(title: 'Обновить уход'),
+                      const SizedBox(height: AppSpacing.sm),
+                    ] else ...[
+                      const _EmptyHero(),
+                      const SizedBox(height: AppSpacing.xl),
+                      _SectionRow(title: 'Подобрать уход'),
+                      const SizedBox(height: AppSpacing.sm),
+                    ],
+                    if (onOpenScan != null) ...[
+                      _ModeCard(
+                        icon: Icons.center_focus_strong_rounded,
+                        title: 'Сканировать кожу',
+                        subtitle: 'Селфи → метрики и карта улучшений',
+                        onTap: onOpenScan!,
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                    ],
+                    _ModeCard(
+                      icon: Icons.bolt_rounded,
+                      title: 'Быстрая рекомендация',
+                      subtitle: 'AI подберёт уход по твоему профилю',
+                      onTap: onStandardMode,
+                    ),
+                    const SizedBox(height: AppSpacing.sm),
+                    _ModeCard(
+                      icon: Icons.auto_awesome_rounded,
+                      title: 'Лина · диалог',
+                      subtitle: 'Точная формула после уточняющих вопросов',
+                      tinted: true,
+                      onTap: onDermMode,
+                    ),
+                  ],
+                ),
+                Align(
+                  alignment: Alignment.bottomCenter,
+                  child: FloatingTabBar(
+                    active: AppTab.home,
+                    onSelect: (t) {
+                      switch (t) {
+                        case AppTab.routine:
+                          onOpenRoutine?.call();
+                        case AppTab.chat:
+                          onDermMode();
+                        case AppTab.catalog:
+                          onOpenCatalog?.call();
+                        case AppTab.profile:
+                          onOpenShelf?.call();
+                        case AppTab.home:
+                          break;
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Greeting extends StatelessWidget {
+  const _Greeting({
+    required this.greeting,
+    required this.name,
+    this.onLogout,
+    this.onRetake,
+  });
+  final String greeting;
+  final String? name;
+  final VoidCallback? onLogout;
+  final VoidCallback? onRetake;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Container(
+          width: 44,
+          height: 44,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [AppColors.primary, AppColors.blush2],
+            ),
+            border: Border.all(color: Colors.white, width: 1.5),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.primaryAccent.withOpacity(0.5),
+                blurRadius: 14,
+                offset: const Offset(0, 4),
+                spreadRadius: -4,
+              ),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            (name?.isNotEmpty ?? false) ? name![0].toUpperCase() : 'Я',
+            style: AppTypography.serifItalic(
+              fontSize: 18,
+              color: AppColors.roseDeep,
+            ),
+          ),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(greeting,
+                  style: AppTypography.caption.copyWith(fontSize: 12)),
+              const SizedBox(height: 2),
+              Text(
+                name ?? 'Привет',
+                style: AppTypography.h2,
+              ),
+            ],
+          ),
+        ),
+        _CircleIconButton(
+          icon: Icons.notifications_none_rounded,
+          dot: true,
+          onTap: () {},
+        ),
+        const SizedBox(width: AppSpacing.xs),
+        _CircleIconButton(
+          icon: Icons.more_horiz_rounded,
+          onTap: () => _showMenu(context),
+        ),
+      ],
+    );
+  }
+
+  void _showMenu(BuildContext context) {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.dividerStrong,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 12),
+            ListTile(
+              leading: const Icon(Icons.refresh_rounded,
+                  color: AppColors.textPrimary),
+              title: Text('Пройти заново', style: AppTypography.body),
+              onTap: () {
+                Navigator.pop(ctx);
+                onRetake?.call();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.logout_rounded,
+                  color: AppColors.textPrimary),
+              title: Text('Выйти', style: AppTypography.body),
+              onTap: () {
+                Navigator.pop(ctx);
+                onLogout?.call();
+              },
+            ),
+            const SizedBox(height: 16),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CircleIconButton extends StatelessWidget {
+  const _CircleIconButton({
+    required this.icon,
+    required this.onTap,
+    this.dot = false,
+  });
+  final IconData icon;
+  final VoidCallback onTap;
+  final bool dot;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Material(
+            color: Colors.white.withOpacity(0.7),
+            shape: const CircleBorder(
+              side: BorderSide(color: AppColors.divider),
+            ),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onTap,
+              child: Icon(icon, size: 20, color: AppColors.textPrimary),
+            ),
+          ),
+          if (dot)
+            Positioned(
+              top: 10,
+              right: 12,
+              child: Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: AppColors.roseDeep,
+                  shape: BoxShape.circle,
+                  border: Border.all(color: Colors.white, width: 1.5),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TodayHeroCard extends StatelessWidget {
+  const _TodayHeroCard({required this.result});
+  final RoutineResult result;
+
+  @override
+  Widget build(BuildContext context) {
+    final score = result.skinScore ?? 70;
+    final summary = result.skinSummary ?? 'Подобран уход под твою кожу.';
+    return Stack(
+      children: [
+        Container(
+          padding: const EdgeInsets.all(22),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(28),
+            border:
+                Border.all(color: AppColors.primaryAccent.withOpacity(0.18)),
+            gradient: const LinearGradient(
+              begin: Alignment(-0.6, -1),
+              end: Alignment(1, 1),
+              colors: [Colors.white, AppColors.primary],
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.primaryAccent.withOpacity(0.3),
+                blurRadius: 40,
+                offset: const Offset(0, 18),
+                spreadRadius: -16,
+              ),
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              EyebrowText(_dateLabel(), color: AppColors.roseDeep),
+              const SizedBox(height: 10),
+              Text(
+                summary,
+                style: AppTypography.h1.copyWith(fontSize: 26),
+                maxLines: 3,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 18),
+              Container(
+                padding: const EdgeInsets.only(top: 16),
+                decoration: BoxDecoration(
+                  border: Border(
+                    top: BorderSide(
+                      color: AppColors.primaryAccent.withOpacity(0.18),
+                    ),
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    MetricRing(
+                      value: score,
+                      size: 56,
+                      stroke: 5,
+                      color: AppColors.roseDeep,
+                      suffix: null,
+                    ),
+                    const SizedBox(width: AppSpacing.md),
+                    Expanded(
+                      child: Column(
+                        children: [
+                          _MetricBar(
+                            label: 'Индекс',
+                            value: score,
+                            color: AppColors.roseDeep,
+                          ),
+                          const SizedBox(height: 8),
+                          _MetricBar(
+                            label: 'Увлажнение',
+                            value: 78,
+                            color: AppColors.info,
+                          ),
+                          const SizedBox(height: 8),
+                          _MetricBar(
+                            label: 'Тон',
+                            value: 67,
+                            color: AppColors.primaryAccent,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+        Positioned(
+          right: -50,
+          top: -50,
+          child: IgnorePointer(
+            child: Container(
+              width: 200,
+              height: 200,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: RadialGradient(
+                  colors: [
+                    AppColors.primaryAccent.withOpacity(0.35),
+                    Colors.transparent,
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  String _dateLabel() {
+    const months = [
+      '', 'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
+      'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
+    ];
+    final d = DateTime.now();
+    return 'Сегодня · ${d.day} ${months[d.month]}';
+  }
+}
+
+class _MetricBar extends StatelessWidget {
+  const _MetricBar({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+  final String label;
+  final int value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        SizedBox(
+          width: 76,
+          child: Text(label, style: AppTypography.micro.copyWith(fontSize: 11)),
+        ),
+        Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(99),
+            child: TweenAnimationBuilder<double>(
+              duration: const Duration(milliseconds: 600),
+              tween: Tween(begin: 0, end: value / 100),
+              builder: (_, t, __) => LinearProgressIndicator(
+                value: t,
+                minHeight: 4,
+                backgroundColor:
+                    AppColors.primaryAccent.withOpacity(0.18),
+                valueColor: AlwaysStoppedAnimation(color),
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        SizedBox(
+          width: 24,
+          child: Text(
+            '$value',
+            textAlign: TextAlign.right,
+            style: AppTypography.eyebrow().copyWith(
+              fontSize: 11,
+              color: AppColors.textPrimary,
+              letterSpacing: 0,
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _LinaNudge extends StatelessWidget {
+  const _LinaNudge({required this.message, this.onTap});
+  final String message;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Stack(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(20),
+                gradient: const LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [AppColors.roseDeep, AppColors.roseShadow],
+                ),
+              ),
+              child: Row(
+                children: [
+                  const LinaAvatar(size: 44),
+                  const SizedBox(width: 14),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Лина · только что',
+                          style: AppTypography.eyebrow(
+                            color: Colors.white.withOpacity(0.65),
+                          ).copyWith(fontSize: 11),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          message,
+                          style: AppTypography.serifItalic(
+                            fontSize: 16,
+                            color: Colors.white,
+                          ).copyWith(height: 1.35),
+                          maxLines: 3,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                    ),
+                  ),
+                  Icon(
+                    Icons.chevron_right_rounded,
+                    color: Colors.white.withOpacity(0.6),
+                  ),
+                ],
+              ),
+            ),
+            Positioned(
+              right: -30,
+              top: -30,
+              child: IgnorePointer(
+                child: Container(
+                  width: 120,
+                  height: 120,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    gradient: RadialGradient(
+                      colors: [
+                        AppColors.primaryAccent.withOpacity(0.4),
+                        Colors.transparent,
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionRow extends StatelessWidget {
+  const _SectionRow({
+    required this.title,
+    this.actionLabel,
+    this.onTap,
+  });
+  final String title;
+  final String? actionLabel;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.end,
+      children: [
+        Expanded(child: Text(title, style: AppTypography.h2)),
+        if (actionLabel != null && onTap != null)
+          GestureDetector(
+            onTap: onTap,
+            child: Text(
+              '$actionLabel →',
+              style: AppTypography.bodySm.copyWith(
+                color: AppColors.roseDeep,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _RitualRow extends StatelessWidget {
+  const _RitualRow({required this.result, this.today, this.onTap});
+  final RoutineResult result;
+  final Today? today;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Expanded(
+          child: _RitualCard(
+            icon: Icons.wb_sunny_rounded,
+            label: 'Утро',
+            steps: result.morning.length,
+            done: today?.morningDone ?? 0,
+            tinted: false,
+            onTap: onTap,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _RitualCard(
+            icon: Icons.nightlight_round,
+            label: 'Вечер',
+            steps: result.evening.length,
+            done: today?.eveningDone ?? 0,
+            tinted: true,
+            onTap: onTap,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _RitualCard extends StatelessWidget {
+  const _RitualCard({
+    required this.icon,
+    required this.label,
+    required this.steps,
+    required this.done,
+    required this.tinted,
+    this.onTap,
+  });
+  final IconData icon;
+  final String label;
+  final int steps;
+  final int done;
+  final bool tinted;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+                color: AppColors.primaryAccent.withOpacity(0.15)),
+            gradient: tinted
+                ? const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [AppColors.primary, Colors.white],
+                  )
+                : null,
+            color: tinted ? null : AppColors.surface,
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.primaryAccent.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, size: 18, color: AppColors.roseDeep),
+              ),
+              const SizedBox(height: 10),
+              Text(label, style: AppTypography.bodyMedium),
+              const SizedBox(height: 2),
+              Text(
+                '$steps шаг${_ending(steps)} · ~${steps * 2} мин',
+                style: AppTypography.caption.copyWith(fontSize: 12),
+              ),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(99),
+                      child: TweenAnimationBuilder<double>(
+                        duration: const Duration(milliseconds: 600),
+                        tween: Tween(
+                            begin: 0,
+                            end: steps == 0 ? 0 : done / steps),
+                        builder: (_, t, __) => LinearProgressIndicator(
+                          value: t,
+                          minHeight: 4,
+                          backgroundColor:
+                              AppColors.primaryAccent.withOpacity(0.18),
+                          valueColor: AlwaysStoppedAnimation(
+                            done == steps && steps > 0
+                                ? AppColors.success
+                                : AppColors.primaryAccent,
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '$done/$steps',
+                    style: AppTypography.eyebrow().copyWith(fontSize: 11),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _ending(int n) {
+    final m10 = n % 10;
+    final m100 = n % 100;
+    if (m10 == 1 && m100 != 11) return '';
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'а';
+    return 'ов';
+  }
+}
+
+class _RecommendationCard extends StatelessWidget {
+  const _RecommendationCard({required this.steps, this.onTap});
+  final List<RoutineStep> steps;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    if (steps.isEmpty) return const SizedBox.shrink();
+    final first = steps.first;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.divider),
+          ),
+          child: Row(
+            children: [
+              const _BottleIcon(),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    EyebrowText(
+                      first.ingredients.isNotEmpty
+                          ? first.ingredients.first
+                          : 'актив',
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      first.title,
+                      style: AppTypography.h3,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 10, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary,
+                        borderRadius: BorderRadius.circular(99),
+                      ),
+                      child: Text(
+                        '✦ подобрано Линой',
+                        style: AppTypography.caption.copyWith(
+                          color: AppColors.roseDeep,
+                          fontSize: 11,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded,
+                  color: AppColors.textSecondary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BottleIcon extends StatelessWidget {
+  const _BottleIcon();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 56,
+      height: 76,
+      child: Stack(
+        alignment: Alignment.topCenter,
+        children: [
+          Positioned(
+            top: 0,
+            child: Container(
+              width: 20,
+              height: 12,
+              decoration: BoxDecoration(
+                color: AppColors.roseDeep,
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(4),
+                  bottom: Radius.circular(2),
+                ),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 10,
+            child: Container(
+              width: 56,
+              height: 66,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.white, AppColors.primary],
+                ),
+                borderRadius: const BorderRadius.vertical(
+                  top: Radius.circular(12),
+                  bottom: Radius.circular(4),
+                ),
+                border: Border.all(
+                    color: AppColors.primaryAccent.withOpacity(0.3)),
+              ),
+            ),
+          ),
+          Positioned(
+            top: 30,
+            left: 6,
+            right: 6,
+            child: Container(
+              height: 30,
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [AppColors.primaryAccent, AppColors.blush2],
+                ),
+                borderRadius: BorderRadius.circular(3),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StreakCard extends StatelessWidget {
+  const _StreakCard({required this.streak});
+  final int streak;
+
+  @override
+  Widget build(BuildContext context) {
+    final hasStreak = streak > 0;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(20),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.champagne, Colors.white],
+        ),
+        border: Border.all(color: AppColors.gold.withOpacity(0.25)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: AppColors.gold,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.auto_awesome_rounded,
+                size: 20, color: Colors.white),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  hasStreak
+                      ? '$streak ${_dayWord(streak)} без пропусков'
+                      : 'Начни серию сегодня',
+                  style: AppTypography.bodySm
+                      .copyWith(fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  hasStreak
+                      ? 'Кожа замечает постоянство — продолжай.'
+                      : 'Отметь хотя бы один шаг — серия начнётся.',
+                  style: AppTypography.caption.copyWith(fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _dayWord(int n) {
+    final m10 = n % 10, m100 = n % 100;
+    if (m10 == 1 && m100 != 11) return 'день';
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'дня';
+    return 'дней';
+  }
+}
+
+class _EmptyHero extends StatelessWidget {
+  const _EmptyHero();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(22),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(28),
+        border:
+            Border.all(color: AppColors.primaryAccent.withOpacity(0.18)),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Colors.white, AppColors.primary],
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const EyebrowText('Начало', color: AppColors.roseDeep),
+          const SizedBox(height: 10),
+          Text.rich(
+            TextSpan(
+              children: [
+                TextSpan(text: 'Готова подобрать ', style: AppTypography.h1),
+                TextSpan(
+                    text: 'первый',
+                    style: AppTypography.serifItalic(fontSize: 28)),
+                TextSpan(text: ' уход', style: AppTypography.h1),
+              ],
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            'Анкета пройдена. Выбери режим ниже — Лина подберёт продукты под твою кожу.',
+            style: AppTypography.bodySecondary.copyWith(fontSize: 14),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ModeCard extends StatelessWidget {
+  const _ModeCard({
+    required this.icon,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+    this.tinted = false,
+  });
+  final IconData icon;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+  final bool tinted;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: tinted ? AppColors.primary : AppColors.surface,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: tinted
+                  ? AppColors.primaryAccent.withOpacity(0.25)
+                  : AppColors.divider,
+            ),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 44,
+                height: 44,
+                decoration: BoxDecoration(
+                  color: tinted
+                      ? Colors.white.withOpacity(0.7)
+                      : AppColors.primary,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, size: 22, color: AppColors.roseDeep),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: AppTypography.bodyMedium),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      style: AppTypography.caption.copyWith(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.arrow_forward_rounded,
+                  size: 20, color: AppColors.textSecondary),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}

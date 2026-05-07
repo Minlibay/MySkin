@@ -1,0 +1,42 @@
+# Prod overlay. Run with:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Differences vs base:
+#  - Caddy in front of backend + admin (auto-HTTPS via Let's Encrypt)
+#  - Backend / admin / DB are NOT exposed on host ports
+#  - Adminer disabled (security)
+
+services:
+  db:
+    ports: []                         # remove host port binding
+
+  backend:
+    ports: []                         # only reachable inside the docker network
+    environment:
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}  # must be set in .env
+
+  admin:
+    ports: []
+
+  adminer:
+    profiles: ["disabled"]            # don't start in prod
+
+  caddy:
+    image: caddy:2
+    container_name: myskin-caddy
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - admin
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+
+volumes:
+  caddy-data:
+  caddy-config:

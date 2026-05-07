@@ -1,0 +1,312 @@
+import 'package:dio/dio.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../ai/domain/models.dart';
+import '../catalog/domain/product.dart';
+import '../profile/domain/user_settings.dart';
+import '../progress/domain/progress.dart';
+import '../ritual/domain/today.dart';
+import '../scan/domain/scan_result.dart';
+
+/// Authenticated client for `/me/*` endpoints.
+class BackendApi {
+  BackendApi({required this.baseUrl, required this.tokenProvider, Dio? dio})
+      : _dio = dio ??
+            Dio(BaseOptions(
+              connectTimeout: const Duration(seconds: 10),
+              receiveTimeout: const Duration(seconds: 15),
+              headers: {'content-type': 'application/json'},
+            ));
+
+  final String baseUrl;
+  final String? Function() tokenProvider;
+  final Dio _dio;
+
+  Options _auth() {
+    final t = tokenProvider();
+    return Options(headers: {
+      if (t != null) 'authorization': 'Bearer $t',
+    });
+  }
+
+  Future<SkinProfile?> getProfile() async {
+    try {
+      final r = await _dio.get('$baseUrl/me/profile', options: _auth());
+      final j = r.data as Map<String, dynamic>;
+      return SkinProfile(
+        name: j['name'] as String?,
+        skinType: j['skin_type'] as String?,
+        pores: j['pores'] as String?,
+        concerns: ((j['concerns'] as List?) ?? const []).cast<String>(),
+        acneType: j['acne_type'] as String?,
+        sensitivity: j['sensitivity'] as String?,
+        sensitivityReaction: j['sensitivity_reaction'] as String?,
+        budget: j['budget'] as String?,
+        extras: ((j['extras'] as Map?) ?? const {}).map(
+          (k, v) => MapEntry(k as String, v?.toString() ?? ''),
+        ),
+      );
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 404) return null;
+      rethrow;
+    }
+  }
+
+  Future<void> putProfile(SkinProfile profile) async {
+    await _dio.put(
+      '$baseUrl/me/profile',
+      data: profile.toJson(),
+      options: _auth(),
+    );
+  }
+
+  Future<List<RoutineRecord>> listRoutines() async {
+    final r = await _dio.get('$baseUrl/me/routines', options: _auth());
+    final items = ((r.data as Map)['items'] as List).cast<Map<String, dynamic>>();
+    return items.map(RoutineRecord.fromJson).toList();
+  }
+
+  Future<void> saveRoutine({
+    required String kind,
+    required RoutineResult result,
+  }) async {
+    await _dio.post(
+      '$baseUrl/me/routines',
+      data: {
+        'kind': kind,
+        'confidence': result.confidence,
+        'payload': {
+          'morning': result.morning.map(_step).toList(),
+          'evening': result.evening.map(_step).toList(),
+          'warnings': result.warnings,
+          'tips': result.tips,
+          'skin_summary': result.skinSummary,
+          'skin_score': result.skinScore,
+        },
+      },
+      options: _auth(),
+    );
+  }
+
+  Future<void> saveDermSession({
+    required SkinProfile profile,
+    required List<Map<String, dynamic>> history,
+    String? finalPhase,
+    double? confidence,
+  }) async {
+    await _dio.post(
+      '$baseUrl/me/derm-sessions',
+      data: {
+        'profile': profile.toJson(),
+        'history': history,
+        'final_phase': finalPhase,
+        'confidence': confidence,
+      },
+      options: _auth(),
+    );
+  }
+
+  static Map<String, dynamic> _step(RoutineStep s) => {
+        'title': s.title,
+        'ingredients': s.ingredients,
+        'explanation': s.explanation,
+      };
+
+  // ===== Catalog =====
+
+  Future<List<Product>> listCatalog({
+    String? kind,
+    String? concern,
+    String? query,
+  }) async {
+    final r = await _dio.get(
+      '$baseUrl/catalog',
+      queryParameters: {
+        if (kind != null) 'kind': kind,
+        if (concern != null) 'concern': concern,
+        if (query != null && query.isNotEmpty) 'q': query,
+      },
+      options: _auth(),
+    );
+    final items = ((r.data as Map)['items'] as List).cast<Map<String, dynamic>>();
+    return items.map(Product.fromJson).toList();
+  }
+
+  Future<Product> getProduct(String slug) async {
+    final r = await _dio.get('$baseUrl/catalog/$slug', options: _auth());
+    return Product.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  Future<List<Product>> getShelf() async {
+    final r = await _dio.get('$baseUrl/me/shelf', options: _auth());
+    final items = ((r.data as Map)['items'] as List).cast<Map<String, dynamic>>();
+    return items.map(Product.fromJson).toList();
+  }
+
+  Future<void> addToShelf({
+    required String productId,
+    String status = 'have',
+  }) async {
+    await _dio.put(
+      '$baseUrl/me/shelf/$productId',
+      data: {'status': status},
+      options: _auth(),
+    );
+  }
+
+  Future<void> removeFromShelf(String productId) async {
+    await _dio.delete('$baseUrl/me/shelf/$productId', options: _auth());
+  }
+
+  // ===== Daily ritual =====
+
+  Future<Today> getToday() async {
+    final r = await _dio.get('$baseUrl/me/today', options: _auth());
+    return Today.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  Future<void> checkStep({
+    required String phase,
+    required int stepIndex,
+    String? stepTitle,
+  }) async {
+    await _dio.post(
+      '$baseUrl/me/today/check',
+      data: {
+        'phase': phase,
+        'step_index': stepIndex,
+        if (stepTitle != null) 'step_title': stepTitle,
+      },
+      options: _auth(),
+    );
+  }
+
+  Future<void> uncheckStep({
+    required String phase,
+    required int stepIndex,
+  }) async {
+    await _dio.post(
+      '$baseUrl/me/today/uncheck',
+      data: {'phase': phase, 'step_index': stepIndex},
+      options: _auth(),
+    );
+  }
+
+  // ===== Settings & account =====
+
+  Future<UserSettings> getSettings() async {
+    final r = await _dio.get('$baseUrl/me/settings', options: _auth());
+    return UserSettings.fromJson(
+        (r.data as Map?)?.cast<String, dynamic>() ?? const {});
+  }
+
+  Future<void> updateSettings(UserSettings settings) async {
+    await _dio.put(
+      '$baseUrl/me/settings',
+      data: settings.toJson(),
+      options: _auth(),
+    );
+  }
+
+  Future<void> deleteAccount() async {
+    await _dio.delete('$baseUrl/me/account', options: _auth());
+  }
+
+  /// Returns full export as JSON map. UI can stringify and offer download.
+  Future<Map<String, dynamic>> exportData() async {
+    final r = await _dio.get('$baseUrl/me/export', options: _auth());
+    return (r.data as Map).cast<String, dynamic>();
+  }
+
+  // ===== Scans =====
+
+  Future<ScanResult> uploadScan({
+    required String photoBase64,
+    String mime = 'image/jpeg',
+  }) async {
+    final r = await _dio.post(
+      '$baseUrl/me/scans',
+      data: {'photo_b64': photoBase64, 'mime': mime},
+      options: _auth(),
+    );
+    return ScanResult.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  Future<List<ScanResult>> listScans() async {
+    final r = await _dio.get('$baseUrl/me/scans', options: _auth());
+    final items = ((r.data as Map)['items'] as List).cast<Map<String, dynamic>>();
+    return items.map(ScanResult.fromJson).toList();
+  }
+
+  String scanPhotoUrl(String id) => '$baseUrl/me/scans/$id/photo';
+
+  String productPhotoUrl(String id) => '$baseUrl/products/$id/photo';
+
+  Future<ScanResult> getScan(String id) async {
+    final r = await _dio.get('$baseUrl/me/scans/$id', options: _auth());
+    return ScanResult.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  /// Free-form Лина chat — pass full {role, content} message history.
+  Future<String> chat(List<Map<String, String>> messages) async {
+    try {
+      final resp = await _dio.post(
+        '$baseUrl/ai/chat',
+        data: {'messages': messages},
+        options: _auth(),
+      );
+      return (resp.data as Map)['reply'] as String? ?? '';
+    } on DioException catch (e) {
+      final code = (e.response?.data is Map &&
+              (e.response!.data as Map)['error'] is String)
+          ? (e.response!.data as Map)['error'] as String
+          : 'network';
+      throw Exception(code);
+    }
+  }
+
+  Map<String, String> imageAuthHeaders() {
+    final t = tokenProvider();
+    return {if (t != null) 'authorization': 'Bearer $t'};
+  }
+
+  // ===== Progress =====
+
+  Future<ProgressData> getProgress({int days = 30}) async {
+    final r = await _dio.get(
+      '$baseUrl/me/progress',
+      queryParameters: {'days': days},
+      options: _auth(),
+    );
+    return ProgressData.fromJson(r.data as Map<String, dynamic>);
+  }
+}
+
+class RoutineRecord {
+  RoutineRecord({
+    required this.id,
+    required this.kind,
+    required this.createdAt,
+    required this.result,
+  });
+  final String id;
+  final String kind;
+  final DateTime createdAt;
+  final RoutineResult result;
+
+  factory RoutineRecord.fromJson(Map<String, dynamic> j) {
+    final payload = (j['payload'] as Map).cast<String, dynamic>();
+    return RoutineRecord(
+      id: j['id'] as String,
+      kind: j['kind'] as String,
+      createdAt: DateTime.parse(j['created_at'] as String),
+      result: RoutineResult.fromJson({
+        ...payload,
+        'confidence': j['confidence'],
+      }),
+    );
+  }
+}
+
+final backendApiProvider = Provider<BackendApi>((ref) {
+  throw UnimplementedError('Override backendApiProvider in main.dart');
+});

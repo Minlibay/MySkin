@@ -1,0 +1,21 @@
+name: myskin_backend
+description: Auth + SMS proxy for MySkin app, backed by PostgreSQL.
+publish_to: "none"
+version: 0.1.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  shelf: ^1.4.1
+  shelf_router: ^1.1.4
+  http: ^1.2.1
+  uuid: ^4.4.0
+  dotenv: ^4.2.0
+  postgres: 3.4.5
+  crypto: ^3.0.3
+  bcrypt: ^1.1.3
+  image: ^4.5.4
+
+dev_dependencies:
+  lints: ^3.0.0

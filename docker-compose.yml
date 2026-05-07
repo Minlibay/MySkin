@@ -1,0 +1,66 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: myskin-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-myskin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-myskin}
+      POSTGRES_DB: ${POSTGRES_DB:-myskin}
+      POSTGRES_HOST_AUTH_METHOD: md5
+      POSTGRES_INITDB_ARGS: "--auth-host=md5"
+    ports:
+      - "15432:5432"
+    volumes:
+      - myskin-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-myskin}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    container_name: myskin-backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 8080
+      DATABASE_URL: postgres://${POSTGRES_USER:-myskin}:${POSTGRES_PASSWORD:-myskin}@db:5432/${POSTGRES_DB:-myskin}
+      OTP_PEPPER: ${OTP_PEPPER:-change-me}
+      SMSC_LOGIN: ${SMSC_LOGIN:-}
+      SMSC_PASSWORD: ${SMSC_PASSWORD:-}
+      GIGACHAT_AUTH_KEY: ${GIGACHAT_AUTH_KEY:-}
+      GIGACHAT_SCOPE: ${GIGACHAT_SCOPE:-GIGACHAT_API_PERS}
+      ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+    ports:
+      - "8080:8080"
+
+  admin:
+    build:
+      context: ./admin
+      args:
+        VITE_BACKEND_URL: ${PUBLIC_BACKEND_URL:-http://localhost:8080}
+    container_name: myskin-admin
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8090:80"
+
+  adminer:
+    image: adminer:4
+    container_name: myskin-adminer
+    restart: unless-stopped
+    depends_on:
+      - db
+    ports:
+      - "8081:8080"
+
+volumes:
+  myskin-pgdata:

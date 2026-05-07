@@ -1,0 +1,249 @@
+import { useEffect, useState } from 'react';
+import { AdminProduct, PRODUCT_KINDS, api } from '../api';
+import ProductForm, { ProductFormResult } from '../components/ProductForm';
+
+export default function Products() {
+  const [items, setItems] = useState<AdminProduct[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [q, setQ] = useState('');
+  const [kind, setKind] = useState<string>('');
+  const [editing, setEditing] = useState<AdminProduct | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  async function load() {
+    setLoading(true);
+    try {
+      const r = await api.productList({
+        q: q || undefined,
+        kind: kind || undefined,
+      });
+      setItems(r.items);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function uploadPhotoIfAny(
+    id: string,
+    photo: ProductFormResult['photo']
+  ) {
+    if (!photo) return;
+    const b64 = photo.dataUrl.split(',')[1] ?? '';
+    if (!b64) return;
+    await api.productUploadPhoto(id, b64, photo.mime);
+  }
+
+  async function onCreate(r: ProductFormResult) {
+    const created = await api.productCreate(r.input);
+    await uploadPhotoIfAny(created.id, r.photo);
+    setItems((arr) => [
+      { ...created, has_photo: !!r.photo || created.has_photo },
+      ...arr,
+    ]);
+    setCreating(false);
+  }
+
+  async function onUpdate(r: ProductFormResult) {
+    if (!editing) return;
+    const updated = await api.productUpdate(editing.id, r.input);
+    if (r.photo) await uploadPhotoIfAny(updated.id, r.photo);
+    setItems((arr) =>
+      arr.map((p) =>
+        p.id === updated.id
+          ? {
+              ...updated,
+              has_photo: r.photo ? true : updated.has_photo,
+            }
+          : p
+      )
+    );
+    setEditing(null);
+  }
+
+  async function onDelete(p: AdminProduct) {
+    if (!confirm(`Удалить «${p.name}»?`)) return;
+    await api.productDelete(p.id);
+    setItems((arr) => arr.filter((x) => x.id !== p.id));
+  }
+
+  return (
+    <div>
+      <div className="flex items-end justify-between mb-6">
+        <div>
+          <div className="eyebrow text-rose mb-1">Каталог</div>
+          <h1 className="font-serif text-4xl">
+            Все <span className="italic text-rose">продукты</span>
+          </h1>
+        </div>
+        <button onClick={() => setCreating(true)} className="btn-primary">
+          + Новый продукт
+        </button>
+      </div>
+
+      <div className="flex gap-3 mb-4">
+        <input
+          className="input flex-1 max-w-sm"
+          placeholder="Поиск по названию или бренду…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') load();
+          }}
+        />
+        <select
+          className="input max-w-xs"
+          value={kind}
+          onChange={(e) => {
+            setKind(e.target.value);
+            setTimeout(load, 0);
+          }}
+        >
+          <option value="">Все типы</option>
+          {PRODUCT_KINDS.map((k) => (
+            <option key={k.id} value={k.id}>
+              {k.label}
+            </option>
+          ))}
+        </select>
+        <button className="btn-ghost" onClick={load} disabled={loading}>
+          Найти
+        </button>
+      </div>
+
+      <div className="card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-blush/40 text-ink2">
+            <tr>
+              <th className="px-4 py-3 text-left font-medium text-xs uppercase tracking-wide">
+                Бренд / Название
+              </th>
+              <th className="px-4 py-3 text-left font-medium text-xs uppercase tracking-wide">
+                Статус
+              </th>
+              <th className="px-4 py-3 text-left font-medium text-xs uppercase tracking-wide">
+                Тип
+              </th>
+              <th className="px-4 py-3 text-left font-medium text-xs uppercase tracking-wide">
+                Цена
+              </th>
+              <th className="px-4 py-3 text-left font-medium text-xs uppercase tracking-wide">
+                Цели
+              </th>
+              <th className="px-4 py-3 text-left font-medium text-xs uppercase tracking-wide">
+                Когда
+              </th>
+              <th className="px-4 py-3 text-right">Действия</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((p) => (
+              <tr
+                key={p.id}
+                className="border-t border-black/5 hover:bg-blush/20"
+              >
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    {p.has_photo ? (
+                      <img
+                        src={api.productPhotoUrl(p.id)}
+                        alt=""
+                        className="w-8 h-10 object-cover rounded shrink-0 border border-black/5"
+                      />
+                    ) : (
+                      <div
+                        className="w-8 h-10 rounded shrink-0"
+                        style={{
+                          background: `linear-gradient(180deg, white, ${p.accent_color})`,
+                          border: '1px solid rgba(0,0,0,0.05)',
+                        }}
+                      />
+                    )}
+                    <div>
+                      <div className="text-xs text-ink2">{p.brand}</div>
+                      <div className="font-medium">{p.name}</div>
+                    </div>
+                  </div>
+                </td>
+                <td className="px-4 py-3">
+                  {p.status === 'published' ? (
+                    <span className="px-2 py-0.5 rounded-full bg-success/15 text-success text-xs">
+                      ● опубликован
+                    </span>
+                  ) : (
+                    <span className="px-2 py-0.5 rounded-full bg-ink2/15 text-ink2 text-xs">
+                      ○ черновик
+                    </span>
+                  )}
+                </td>
+                <td className="px-4 py-3">{kindLabel(p.kind)}</td>
+                <td className="px-4 py-3 font-mono">{p.price_rub} ₽</td>
+                <td className="px-4 py-3">
+                  <div className="flex flex-wrap gap-1">
+                    {p.tags.map((t) => (
+                      <span
+                        key={t}
+                        className="px-2 py-0.5 rounded-full bg-blush text-rose text-[10px]"
+                      >
+                        {t}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-xs">
+                  {p.routine_phase === 'morning'
+                    ? '🌅 утро'
+                    : p.routine_phase === 'evening'
+                    ? '🌙 вечер'
+                    : '↻ любое'}
+                  {p.is_active && ' · актив'}
+                  {p.gentle && ' · деликат.'}
+                </td>
+                <td className="px-4 py-3 text-right whitespace-nowrap">
+                  <button
+                    className="btn-ghost h-8 px-3 text-xs"
+                    onClick={() => setEditing(p)}
+                  >
+                    Изменить
+                  </button>
+                  <button
+                    className="ml-2 text-warning hover:underline text-xs"
+                    onClick={() => onDelete(p)}
+                  >
+                    Удалить
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!loading && items.length === 0 && (
+              <tr>
+                <td colSpan={7} className="px-4 py-12 text-center text-ink2">
+                  Пока пусто
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {(creating || editing) && (
+        <ProductForm
+          initial={editing ?? undefined}
+          onCancel={() => {
+            setCreating(false);
+            setEditing(null);
+          }}
+          onSave={editing ? onUpdate : onCreate}
+        />
+      )}
+    </div>
+  );
+}
+
+function kindLabel(id: string) {
+  return PRODUCT_KINDS.find((k) => k.id === id)?.label ?? id;
+}
