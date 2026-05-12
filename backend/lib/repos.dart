@@ -605,7 +605,11 @@ class ProductRepository {
     await db.execute(
       Sql.named(
           'UPDATE products SET photo = @b, photo_mime = @m WHERE id = @id'),
-      parameters: {'id': id, 'b': bytes, 'm': mime},
+      parameters: {
+        'id': id,
+        'b': TypedValue(Type.byteArray, Uint8List.fromList(bytes)),
+        'm': mime,
+      },
     );
   }
 
@@ -853,7 +857,9 @@ class ScanRepository {
       parameters: {
         'id': id,
         'u': userId,
-        'p': photo,
+        'p': photo == null
+            ? null
+            : TypedValue(Type.byteArray, Uint8List.fromList(photo)),
         'm': mime,
         'sc': score,
         'h': hydration,
@@ -1076,7 +1082,9 @@ ScanAnalysis analyzeScan({
     'skin_pct': (skinPct * 100).clamp(0, 100).toStringAsFixed(1),
   };
 
-  if (all.count < 1500) {
+  // Threshold fraction-based, not absolute. Works for both small selfies and
+  // larger frames. Need ≥3% skin-tone pixels OR at least 600 absolute samples.
+  if (all.count < 600 && skinPct < 0.03) {
     return _profileFallback(profile,
         warnings: ['no_face_detected'], meta: meta);
   }

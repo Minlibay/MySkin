@@ -1,15 +1,13 @@
-# MySkin reverse proxy.
+# MySkin reverse proxy — мойскин.рф (Punycode form for SSL/Caddy).
 #
-# Replace example.com with your real domain. Caddy will auto-issue and
-# auto-renew SSL certs from Let's Encrypt as long as DNS A-records point at
-# the server.
+# DNS setup in registrar (укажи кириллицей или Punycode — конвертится автоматом):
+#   api.мойскин.рф    A  <vps-ip>     (api.xn--80allhkb1j.xn--p1ai)
+#   admin.мойскин.рф  A  <vps-ip>     (admin.xn--80allhkb1j.xn--p1ai)
 #
-# DNS setup (in your registrar):
-#   api.example.com     A  <vps-ip>
-#   admin.example.com   A  <vps-ip>
-#   app.example.com     A  <vps-ip>     (optional — for the Flutter web app)
+# Caddy получит SSL от Let's Encrypt автоматически на Punycode-имена,
+# браузер отобразит как кириллицу.
 
-api.example.com {
+api.xn--80allhkb1j.xn--p1ai {
     encode zstd gzip
     reverse_proxy backend:8080
     request_body {
@@ -18,16 +16,9 @@ api.example.com {
     }
 }
 
-admin.example.com {
+admin.xn--80allhkb1j.xn--p1ai {
     encode zstd gzip
     reverse_proxy admin:80
 }
-
-# Optional: serve the Flutter web app from somewhere.
-# app.example.com {
-#     root * /srv/myskin-web
-#     try_files {path} /index.html
-#     file_server
-# }
 
 # HTTP → HTTPS redirect happens automatically.

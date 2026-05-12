@@ -17,7 +17,9 @@ const bool kUseMockAuth =
 
 const String kBackendUrl = String.fromEnvironment(
   'BACKEND_URL',
-  defaultValue: 'http://localhost:8080',
+  // Production default — мойскин.рф (Punycode form for HTTP).
+  // Override locally with --dart-define=BACKEND_URL=http://localhost:8080
+  defaultValue: 'https://api.xn--80allhkb1j.xn--p1ai',
 );
 
 void main() {

@@ -45,7 +45,61 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     super.dispose();
   }
 
+  Future<ImageSource?> _pickSource() async {
+    return showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: const Color(0xFF1B1216),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.25),
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ListTile(
+              leading: const Icon(Icons.photo_camera_rounded,
+                  color: AppColors.primaryAccent),
+              title: Text('Сделать фото',
+                  style: AppTypography.body.copyWith(color: Colors.white)),
+              subtitle: Text('Селфи фронтальной камерой',
+                  style: AppTypography.caption.copyWith(
+                    color: Colors.white.withOpacity(0.55),
+                    fontSize: 12,
+                  )),
+              onTap: () => Navigator.pop(ctx, ImageSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_rounded,
+                  color: AppColors.primaryAccent),
+              title: Text('Из галереи',
+                  style: AppTypography.body.copyWith(color: Colors.white)),
+              subtitle: Text('Выбрать существующее фото',
+                  style: AppTypography.caption.copyWith(
+                    color: Colors.white.withOpacity(0.55),
+                    fontSize: 12,
+                  )),
+              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+            ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+  }
+
   Future<void> _capture() async {
+    final source = await _pickSource();
+    if (source == null) return;
     setState(() {
       _error = null;
       _busy = true;
@@ -53,9 +107,10 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     try {
       final picker = ImagePicker();
       final picked = await picker.pickImage(
-        source: ImageSource.gallery,
-        imageQuality: 85,
-        maxWidth: 1280,
+        source: source,
+        imageQuality: 90,
+        maxWidth: 1600,
+        preferredCameraDevice: CameraDevice.front,
       );
       if (picked == null) {
         if (!mounted) return;
