@@ -256,6 +256,11 @@ class _AppShellState extends ConsumerState<_AppShell> {
           onOpenCatalog: () => setState(() => _view = _Shell.catalog),
           onOpenShelf: () => setState(() => _view = _Shell.profile),
           onOpenScan: () => setState(() => _view = _Shell.scan),
+          onOpenProduct: (Product p) => setState(() {
+            _previousView = _Shell.home;
+            _openProductSlug = p.slug;
+            _view = _Shell.productDetail;
+          }),
         );
       case _Shell.standardLoading:
         return AILoadingScreen(

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
@@ -8,9 +9,12 @@ import '../../../core/widgets/glow_background.dart';
 import '../../../core/widgets/lina_avatar.dart';
 import '../../../core/widgets/metric_ring.dart';
 import '../../ai/domain/models.dart';
+import '../../api/backend_api.dart';
+import '../../catalog/domain/product.dart';
+import '../../catalog/presentation/product_bottle.dart';
 import '../../ritual/domain/today.dart';
 
-class HomeScreen extends StatelessWidget {
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({
     super.key,
     required this.profile,
@@ -24,6 +28,7 @@ class HomeScreen extends StatelessWidget {
     this.onOpenCatalog,
     this.onOpenShelf,
     this.onOpenScan,
+    this.onOpenProduct,
   });
 
   final SkinProfile profile;
@@ -37,6 +42,29 @@ class HomeScreen extends StatelessWidget {
   final VoidCallback? onOpenCatalog;
   final VoidCallback? onOpenShelf;
   final VoidCallback? onOpenScan;
+  final ValueChanged<Product>? onOpenProduct;
+
+  @override
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
+}
+
+class _HomeScreenState extends ConsumerState<HomeScreen> {
+  late Future<List<Product>> _catalog;
+
+  @override
+  void initState() {
+    super.initState();
+    _catalog = _loadTopMatches();
+  }
+
+  Future<List<Product>> _loadTopMatches() async {
+    final items = await ref.read(backendApiProvider).listCatalog();
+    final scored = items
+        .where((p) => p.matchScore != null && p.matchScore! > 0)
+        .toList()
+      ..sort((a, b) => (b.matchScore ?? 0).compareTo(a.matchScore ?? 0));
+    return scored.take(8).toList();
+  }
 
   String get _greeting {
     final h = DateTime.now().hour;
@@ -48,6 +76,9 @@ class HomeScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final profile = widget.profile;
+    final lastResult = widget.lastResult;
+    final today = widget.today;
     final name = profile.name?.trim().isNotEmpty == true ? profile.name! : null;
 
     return Scaffold(
@@ -67,48 +98,43 @@ class HomeScreen extends StatelessWidget {
                     _Greeting(
                       greeting: _greeting,
                       name: name,
-                      onLogout: onLogout,
-                      onRetake: onRetake,
+                      onLogout: widget.onLogout,
+                      onRetake: widget.onRetake,
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     if (lastResult != null) ...[
-                      _TodayHeroCard(result: lastResult!),
+                      _TodayHeroCard(result: lastResult),
                       const SizedBox(height: AppSpacing.sm + 2),
                       _LinaNudge(
-                        message: lastResult!.tips.isNotEmpty
-                            ? '«${lastResult!.tips.first}»'
+                        message: lastResult.tips.isNotEmpty
+                            ? '«${lastResult.tips.first}»'
                             : '«Заметила, что вечерний уход важен — давай не пропускать.»',
-                        onTap: onDermMode,
+                        onTap: widget.onDermMode,
                       ),
                       const SizedBox(height: AppSpacing.xl),
                       _SectionRow(
                         title: 'Сегодня · ритуал',
                         actionLabel: 'Открыть',
-                        onTap: onOpenRoutine,
+                        onTap: widget.onOpenRoutine,
                       ),
                       const SizedBox(height: AppSpacing.sm),
                       _RitualRow(
-                        result: lastResult!,
+                        result: lastResult,
                         today: today,
-                        onTap: onOpenRoutine,
+                        onTap: widget.onOpenRoutine,
                       ),
-                      if (lastResult!.morning.isNotEmpty ||
-                          lastResult!.evening.isNotEmpty) ...[
-                        const SizedBox(height: AppSpacing.xl),
-                        _SectionRow(
-                          title: 'Подобрано тебе',
-                          actionLabel: 'Все',
-                          onTap: onOpenRoutine,
-                        ),
-                        const SizedBox(height: AppSpacing.sm),
-                        _RecommendationCard(
-                          steps: [
-                            ...lastResult!.morning,
-                            ...lastResult!.evening,
-                          ],
-                          onTap: onOpenRoutine,
-                        ),
-                      ],
+                      const SizedBox(height: AppSpacing.xl),
+                      _SectionRow(
+                        title: 'Подобрано тебе',
+                        actionLabel: 'Каталог',
+                        onTap: widget.onOpenCatalog,
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
+                      _MatchedProductsStrip(
+                        future: _catalog,
+                        onOpen: widget.onOpenProduct,
+                        onOpenCatalog: widget.onOpenCatalog,
+                      ),
                       const SizedBox(height: AppSpacing.sm + 2),
                       _StreakCard(streak: today?.streak ?? 0),
                       const SizedBox(height: AppSpacing.xl),
@@ -120,12 +146,12 @@ class HomeScreen extends StatelessWidget {
                       _SectionRow(title: 'Подобрать уход'),
                       const SizedBox(height: AppSpacing.sm),
                     ],
-                    if (onOpenScan != null) ...[
+                    if (widget.onOpenScan != null) ...[
                       _ModeCard(
                         icon: Icons.center_focus_strong_rounded,
                         title: 'Сканировать кожу',
                         subtitle: 'Селфи → метрики и карта улучшений',
-                        onTap: onOpenScan!,
+                        onTap: widget.onOpenScan!,
                       ),
                       const SizedBox(height: AppSpacing.sm),
                     ],
@@ -133,7 +159,7 @@ class HomeScreen extends StatelessWidget {
                       icon: Icons.bolt_rounded,
                       title: 'Быстрая рекомендация',
                       subtitle: 'AI подберёт уход по твоему профилю',
-                      onTap: onStandardMode,
+                      onTap: widget.onStandardMode,
                     ),
                     const SizedBox(height: AppSpacing.sm),
                     _ModeCard(
@@ -141,7 +167,7 @@ class HomeScreen extends StatelessWidget {
                       title: 'Лина · диалог',
                       subtitle: 'Точная формула после уточняющих вопросов',
                       tinted: true,
-                      onTap: onDermMode,
+                      onTap: widget.onDermMode,
                     ),
                   ],
                 ),
@@ -152,13 +178,13 @@ class HomeScreen extends StatelessWidget {
                     onSelect: (t) {
                       switch (t) {
                         case AppTab.routine:
-                          onOpenRoutine?.call();
+                          widget.onOpenRoutine?.call();
                         case AppTab.chat:
-                          onDermMode();
+                          widget.onDermMode();
                         case AppTab.catalog:
-                          onOpenCatalog?.call();
+                          widget.onOpenCatalog?.call();
                         case AppTab.profile:
-                          onOpenShelf?.call();
+                          widget.onOpenShelf?.call();
                         case AppTab.home:
                           break;
                       }
@@ -169,6 +195,189 @@ class HomeScreen extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _MatchedProductsStrip extends StatelessWidget {
+  const _MatchedProductsStrip({
+    required this.future,
+    required this.onOpen,
+    required this.onOpenCatalog,
+  });
+
+  final Future<List<Product>> future;
+  final ValueChanged<Product>? onOpen;
+  final VoidCallback? onOpenCatalog;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 210,
+      child: FutureBuilder<List<Product>>(
+        future: future,
+        builder: (_, snap) {
+          if (snap.connectionState != ConnectionState.done) {
+            return const Center(
+              child: SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(
+                  color: AppColors.primaryAccent,
+                  strokeWidth: 2,
+                ),
+              ),
+            );
+          }
+          final items = snap.data ?? const <Product>[];
+          if (items.isEmpty) {
+            return _EmptyStrip(onOpenCatalog: onOpenCatalog);
+          }
+          return ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: items.length,
+            padding: EdgeInsets.zero,
+            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            itemBuilder: (_, i) => _MatchedProductCard(
+              product: items[i],
+              onTap: () => onOpen?.call(items[i]),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _MatchedProductCard extends StatelessWidget {
+  const _MatchedProductCard({required this.product, required this.onTap});
+  final Product product;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final reason = product.matchReasons.isNotEmpty
+        ? product.matchReasons.first
+        : product.kindLabel;
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onTap,
+        child: Container(
+          width: 156,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.divider),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (product.matchScore != null)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 8, vertical: 3),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.auto_awesome,
+                          size: 11, color: AppColors.roseDeep),
+                      const SizedBox(width: 4),
+                      Text(
+                        '${product.matchScore}%',
+                        style: AppTypography.caption.copyWith(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.roseDeep,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              const SizedBox(height: 8),
+              Center(
+                child: ProductBottle(
+                  product: product,
+                  width: 50,
+                  height: 76,
+                ),
+              ),
+              const SizedBox(height: 10),
+              Text(
+                product.brand,
+                style: AppTypography.eyebrow().copyWith(fontSize: 10),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const SizedBox(height: 2),
+              Text(
+                product.name,
+                style: AppTypography.body.copyWith(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                  height: 1.2,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              const Spacer(),
+              Text(
+                reason,
+                style: AppTypography.caption.copyWith(
+                  fontSize: 11,
+                  color: AppColors.textSecondary,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _EmptyStrip extends StatelessWidget {
+  const _EmptyStrip({required this.onOpenCatalog});
+  final VoidCallback? onOpenCatalog;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(20),
+        onTap: onOpenCatalog,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+              horizontal: 18, vertical: 22),
+          decoration: BoxDecoration(
+            color: AppColors.surface,
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.divider),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.auto_awesome,
+                  color: AppColors.roseDeep, size: 22),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                  'Открой каталог — Лина подберёт средства под твою кожу',
+                  style: AppTypography.bodySecondary,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -778,143 +987,6 @@ class _RitualCard extends StatelessWidget {
   }
 }
 
-class _RecommendationCard extends StatelessWidget {
-  const _RecommendationCard({required this.steps, this.onTap});
-  final List<RoutineStep> steps;
-  final VoidCallback? onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    if (steps.isEmpty) return const SizedBox.shrink();
-    final first = steps.first;
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: AppColors.divider),
-          ),
-          child: Row(
-            children: [
-              const _BottleIcon(),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    EyebrowText(
-                      first.ingredients.isNotEmpty
-                          ? first.ingredients.first
-                          : 'актив',
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      first.title,
-                      style: AppTypography.h3,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 6),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 10, vertical: 3),
-                      decoration: BoxDecoration(
-                        color: AppColors.primary,
-                        borderRadius: BorderRadius.circular(99),
-                      ),
-                      child: Text(
-                        '✦ подобрано Линой',
-                        style: AppTypography.caption.copyWith(
-                          color: AppColors.roseDeep,
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Icon(Icons.chevron_right_rounded,
-                  color: AppColors.textSecondary),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _BottleIcon extends StatelessWidget {
-  const _BottleIcon();
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 56,
-      height: 76,
-      child: Stack(
-        alignment: Alignment.topCenter,
-        children: [
-          Positioned(
-            top: 0,
-            child: Container(
-              width: 20,
-              height: 12,
-              decoration: BoxDecoration(
-                color: AppColors.roseDeep,
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(4),
-                  bottom: Radius.circular(2),
-                ),
-              ),
-            ),
-          ),
-          Positioned(
-            top: 10,
-            child: Container(
-              width: 56,
-              height: 66,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [Colors.white, AppColors.primary],
-                ),
-                borderRadius: const BorderRadius.vertical(
-                  top: Radius.circular(12),
-                  bottom: Radius.circular(4),
-                ),
-                border: Border.all(
-                    color: AppColors.primaryAccent.withOpacity(0.3)),
-              ),
-            ),
-          ),
-          Positioned(
-            top: 30,
-            left: 6,
-            right: 6,
-            child: Container(
-              height: 30,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [AppColors.primaryAccent, AppColors.blush2],
-                ),
-                borderRadius: BorderRadius.circular(3),
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _StreakCard extends StatelessWidget {
   const _StreakCard({required this.streak});

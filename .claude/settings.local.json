@@ -56,7 +56,9 @@
       "Bash(xxd)",
       "Bash(git commit -m ' *)",
       "Bash(tee /tmp/myskin_apk_build.log)",
-      "Bash(adb devices *)"
+      "Bash(adb devices *)",
+      "Bash(sed -i '990,1126d' D:/MySkin/lib/features/home/presentation/home_screen.dart)",
+      "Bash(sed -n '985,995p' D:/MySkin/lib/features/home/presentation/home_screen.dart)"
     ]
   }
 }
