@@ -247,14 +247,24 @@ class BackendApi {
   }
 
   /// Free-form Лина chat — pass full {role, content} message history.
-  Future<String> chat(List<Map<String, String>> messages) async {
+  /// Returns Лина's reply + a (possibly empty) list of products picked
+  /// from the catalog based on the user's profile match.
+  Future<ChatReply> chat(List<Map<String, String>> messages) async {
     try {
       final resp = await _dio.post(
         '$baseUrl/ai/chat',
         data: {'messages': messages},
         options: _auth(),
       );
-      return (resp.data as Map)['reply'] as String? ?? '';
+      final data = resp.data as Map;
+      final products = ((data['recommended_products'] as List?) ?? const [])
+          .whereType<Map<String, dynamic>>()
+          .map(Product.fromJson)
+          .toList();
+      return ChatReply(
+        reply: data['reply'] as String? ?? '',
+        products: products,
+      );
     } on DioException catch (e) {
       final code = (e.response?.data is Map &&
               (e.response!.data as Map)['error'] is String)
@@ -305,6 +315,12 @@ class RoutineRecord {
       }),
     );
   }
+}
+
+class ChatReply {
+  const ChatReply({required this.reply, required this.products});
+  final String reply;
+  final List<Product> products;
 }
 
 final backendApiProvider = Provider<BackendApi>((ref) {

@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:dotenv/dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/io_client.dart';
+import 'package:http_parser/http_parser.dart';
 import 'package:uuid/uuid.dart';
 
 class GigaChatException implements Exception {
@@ -20,7 +21,9 @@ class GigaChatClient {
   GigaChatClient({
     required this.authKey,
     this.scope = 'GIGACHAT_API_PERS',
-    this.model = 'GigaChat',
+    this.defaultModel = 'GigaChat',
+    this.chatModel = 'GigaChat-2-Lite',
+    this.visionModel = 'GigaChat-2-Max',
     this.oauthUrl = 'https://ngw.devices.sberbank.ru:9443/api/v2/oauth',
     this.baseUrl = 'https://gigachat.devices.sberbank.ru/api/v1',
   });
@@ -28,11 +31,19 @@ class GigaChatClient {
   factory GigaChatClient.fromEnv(DotEnv env) => GigaChatClient(
         authKey: env['GIGACHAT_AUTH_KEY']!,
         scope: env['GIGACHAT_SCOPE'] ?? 'GIGACHAT_API_PERS',
+        chatModel: env['GIGACHAT_CHAT_MODEL'] ?? 'GigaChat-2-Lite',
+        visionModel: env['GIGACHAT_VISION_MODEL'] ?? 'GigaChat-2-Max',
       );
 
   final String authKey;
   final String scope;
-  final String model;
+
+  /// Fallback model when caller doesn't pass one explicitly.
+  final String defaultModel;
+  /// Lightweight Lite model for free-form conversation.
+  final String chatModel;
+  /// Heavy multimodal model used for photo analysis.
+  final String visionModel;
   final String oauthUrl;
   final String baseUrl;
 
@@ -91,9 +102,10 @@ class GigaChatClient {
   /// Used for free-form Лина conversation.
   Future<String> chatWithMessages({
     required String systemPrompt,
-    required List<Map<String, String>> messages,
+    required List<Map<String, dynamic>> messages,
     double temperature = 0.6,
     int maxRetries = 2,
+    String? model,
   }) {
     return _chatRequest(
       messages: [
@@ -102,6 +114,7 @@ class GigaChatClient {
       ],
       temperature: temperature,
       maxRetries: maxRetries,
+      model: model ?? chatModel,
     );
   }
 
@@ -110,6 +123,7 @@ class GigaChatClient {
     required String userMessage,
     double temperature = 0.4,
     int maxRetries = 2,
+    String? model,
   }) {
     return _chatRequest(
       messages: [
@@ -118,13 +132,83 @@ class GigaChatClient {
       ],
       temperature: temperature,
       maxRetries: maxRetries,
+      model: model ?? defaultModel,
     );
   }
 
+  /// Vision: photo analysis. Upload bytes via /files, then send a chat
+  /// completion whose user message references the uploaded file_id via
+  /// `attachments`. Returns the raw text reply (typically JSON, parsed by
+  /// caller).
+  Future<String> analyzePhoto({
+    required String systemPrompt,
+    required String userText,
+    required List<int> photoBytes,
+    String mime = 'image/jpeg',
+    double temperature = 0.2,
+    String? model,
+  }) async {
+    final fileId = await uploadFile(
+      bytes: photoBytes,
+      mime: mime,
+      filename: 'scan_${DateTime.now().millisecondsSinceEpoch}.jpg',
+    );
+    return _chatRequest(
+      messages: [
+        {'role': 'system', 'content': systemPrompt},
+        {
+          'role': 'user',
+          'content': userText,
+          'attachments': [fileId],
+        },
+      ],
+      temperature: temperature,
+      maxRetries: 1,
+      model: model ?? visionModel,
+    );
+  }
+
+  Future<String> uploadFile({
+    required List<int> bytes,
+    required String mime,
+    required String filename,
+    String purpose = 'general',
+  }) async {
+    final client = _newClient();
+    try {
+      final token = await _ensureToken();
+      final req = http.MultipartRequest('POST', Uri.parse('$baseUrl/files'))
+        ..headers['Authorization'] = 'Bearer $token'
+        ..headers['Accept'] = 'application/json'
+        ..fields['purpose'] = purpose
+        ..files.add(http.MultipartFile.fromBytes(
+          'file',
+          bytes,
+          filename: filename,
+          contentType: MediaType.parse(mime),
+        ));
+      final streamed =
+          await client.send(req).timeout(const Duration(seconds: 60));
+      final resp = await http.Response.fromStream(streamed);
+      if (resp.statusCode != 200) {
+        throw GigaChatException('files ${resp.statusCode}: ${resp.body}');
+      }
+      final data = jsonDecode(resp.body) as Map<String, dynamic>;
+      final id = data['id'];
+      if (id is! String) {
+        throw GigaChatException('files: no id in $data');
+      }
+      return id;
+    } finally {
+      client.close();
+    }
+  }
+
   Future<String> _chatRequest({
-    required List<Map<String, String>> messages,
+    required List<Map<String, dynamic>> messages,
     required double temperature,
     required int maxRetries,
+    required String model,
   }) async {
     Object? lastError;
     for (var attempt = 0; attempt <= maxRetries; attempt++) {
@@ -260,6 +344,43 @@ explanation, warnings, tips) — ТОЛЬКО на русском языке. Н
 skin_score — целое 0..100 (90+ отлично, 70+ хорошо, 50+ среднее, иначе ниже).
 
 Без markdown. Только JSON.
+''';
+
+const visionScanSystemPrompt = '''
+Ты профессиональный косметолог-аналитик. На вход — селфи пользователя.
+Проанализируй кожу лица на фото.
+
+ВАЖНО: все строки — только на русском, в женском роде. Английский разрешён
+лишь в названиях ингредиентов (Niacinamide, Hyaluronic Acid).
+
+Верни ТОЛЬКО валидный JSON без markdown:
+{
+  "score": 0,
+  "hydration": 0,
+  "sebum": 0,
+  "tone": 0,
+  "pores": 0,
+  "zones": {"forehead": 0, "nose": 0, "left_cheek": 0, "right_cheek": 0, "chin": 0},
+  "insight": "одна короткая фраза-вывод",
+  "concerns": ["acne", "dehydration", "redness", "pih", "dullness", "aging"],
+  "quality_warnings": []
+}
+
+Шкалы 0..100:
+  score — общая оценка состояния (90+ отлично, 70+ хорошо, 50+ среднее)
+  hydration — увлажнённость
+  sebum — себум-баланс (50 = норма, ниже = сухо, выше = жирно)
+  tone — ровность тона
+  pores — закрытость пор (выше = меньше видны)
+
+concerns — список тегов из строго фиксированного набора:
+acne, pih, redness, dehydration, dullness, aging, sensitivity, oiliness, dryness.
+Включай только то, что реально видно на фото.
+
+quality_warnings — массив строк, если что-то мешает анализу
+("no_face_detected", "too_dark", "too_blurry", "too_far"). Пустой массив — норм.
+
+Без markdown, без префиксов, только JSON.
 ''';
 
 Map<String, dynamic> parseJsonReply(String raw) {

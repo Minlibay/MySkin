@@ -4,6 +4,8 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/lina_avatar.dart';
+import '../../catalog/domain/product.dart';
+import '../../catalog/presentation/product_bottle.dart';
 import '../domain/chat_message.dart';
 import 'chat_controller.dart';
 
@@ -378,8 +380,109 @@ class _Bubble extends StatelessWidget {
               ),
             if (message.card != null)
               _PlanCard(card: message.card!, onApply: onAction),
+            if (message.products.isNotEmpty)
+              _ProductStrip(products: message.products),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class _ProductStrip extends StatelessWidget {
+  const _ProductStrip({required this.products});
+  final List<Product> products;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 4, bottom: 12),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Что подойдёт',
+            style: AppTypography.eyebrow().copyWith(
+              color: AppColors.textSecondary,
+              fontSize: 11,
+            ),
+          ),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 168,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: EdgeInsets.zero,
+              itemCount: products.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 10),
+              itemBuilder: (_, i) => _ProductChipCard(product: products[i]),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ProductChipCard extends StatelessWidget {
+  const _ProductChipCard({required this.product});
+  final Product product;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: 132,
+      padding: const EdgeInsets.all(10),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: ProductBottle(product: product, width: 48, height: 70),
+          ),
+          const SizedBox(height: 6),
+          Text(
+            product.brand,
+            style: AppTypography.caption.copyWith(
+              fontSize: 10,
+              color: AppColors.textSecondary,
+            ),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+          Text(
+            product.name,
+            style: AppTypography.body.copyWith(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              height: 1.2,
+            ),
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+          ),
+          const Spacer(),
+          if (product.matchScore != null)
+            Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: AppColors.primaryAccent.withOpacity(0.12),
+                borderRadius: BorderRadius.circular(99),
+              ),
+              child: Text(
+                '${product.matchScore}% match',
+                style: AppTypography.caption.copyWith(
+                  fontSize: 10,
+                  color: AppColors.roseDeep,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }

@@ -422,9 +422,16 @@ class AdminHandlers {
 }
 
 class AiHandlers {
-  AiHandlers({required this.sessions, required this.giga});
+  AiHandlers({
+    required this.sessions,
+    required this.giga,
+    required this.products,
+    required this.profiles,
+  });
   final SessionRepository sessions;
   final GigaChatClient giga;
+  final ProductRepository products;
+  final ProfileRepository profiles;
 
   Router router() => Router()
     ..post('/ai/generate-routine', _withUser(_generate))
@@ -464,8 +471,7 @@ class AiHandlers {
     final body =
         jsonDecode(await req.readAsString()) as Map<String, dynamic>;
     final raw = (body['messages'] as List?) ?? const [];
-    // Sanitise + clip to last 30 turns to keep prompt small.
-    final messages = <Map<String, String>>[];
+    final messages = <Map<String, dynamic>>[];
     for (final m in raw) {
       if (m is! Map) continue;
       final role = m['role'] as String?;
@@ -480,12 +486,54 @@ class AiHandlers {
     if (messages.isEmpty || messages.last['role'] != 'user') {
       return jsonResponse(400, {'error': 'last_message_must_be_user'});
     }
+
+    // Pre-compute top-matched products for this user so Лина can mention
+    // them and the frontend can render them as a strip beside her reply.
+    final profile = await profiles.get(user.id) ?? <String, dynamic>{};
+    final catalog =
+        await products.list(status: 'published', limit: 200);
+    final scored = <({ProductRow p, int score, List<String> reasons})>[];
+    for (final p in catalog) {
+      final m = computeMatch(profile: profile, product: p);
+      scored.add((p: p, score: m.score, reasons: m.reasons));
+    }
+    scored.sort((a, b) => b.score.compareTo(a.score));
+    final top = scored.take(8).toList();
+
+    final catalogHint = top
+        .map((e) => {
+              'id': e.p.id,
+              'brand': e.p.brand,
+              'name': e.p.name,
+              'kind': e.p.kind,
+              'tags': e.p.tags,
+              'match_score': e.score,
+            })
+        .toList();
+    final enrichedSystem =
+        '$linaChatSystemPrompt\n\nДоступный каталог (топ-${top.length} '
+        'по соответствию профилю пользователя):\n${jsonEncode(catalogHint)}\n\n'
+        'Когда уместно, упоминай эти продукты по бренду и названию. '
+        'Не выдумывай продукты, которых нет в списке.';
+
     try {
       final reply = await giga.chatWithMessages(
-        systemPrompt: linaChatSystemPrompt,
+        systemPrompt: enrichedSystem,
         messages: messages,
+        model: giga.chatModel,
       );
-      return jsonResponse(200, {'reply': reply.trim()});
+      return jsonResponse(200, {
+        'reply': reply.trim(),
+        'recommended_products': top
+            .where((e) => e.score >= 40)
+            .take(5)
+            .map((e) => {
+                  ...e.p.toJson(),
+                  'match_score': e.score,
+                  'match_reasons': e.reasons,
+                })
+            .toList(),
+      });
     } on GigaChatException catch (e) {
       stderr.writeln('GigaChat /chat failed: $e');
       return jsonResponse(502, {'error': 'ai_failed', 'message': e.message});
@@ -514,16 +562,52 @@ class AiHandlers {
   }
 }
 
+ScanAnalysis _mergeAiAnalysis(ScanAnalysis local, Map<String, dynamic> ai) {
+  int clamp(num? v, int fallback) {
+    if (v == null) return fallback;
+    final i = v.toInt();
+    return i.clamp(0, 100);
+  }
+
+  final aiZones = (ai['zones'] as Map?) ?? const {};
+  final mergedZones = <String, int>{};
+  for (final k in const ['forehead', 'nose', 'left_cheek', 'right_cheek', 'chin']) {
+    mergedZones[k] = clamp(aiZones[k] as num?, local.zones[k] ?? 60);
+  }
+  final aiWarnings =
+      ((ai['quality_warnings'] as List?) ?? const []).cast<String>();
+  return ScanAnalysis(
+    score: clamp(ai['score'] as num?, local.score),
+    hydration: clamp(ai['hydration'] as num?, local.hydration),
+    sebum: clamp(ai['sebum'] as num?, local.sebum),
+    tone: clamp(ai['tone'] as num?, local.tone),
+    pores: clamp(ai['pores'] as num?, local.pores),
+    zones: mergedZones,
+    insight: (ai['insight'] as String?)?.trim().isNotEmpty == true
+        ? (ai['insight'] as String).trim()
+        : local.insight,
+    qualityWarnings:
+        aiWarnings.isNotEmpty ? aiWarnings : local.qualityWarnings,
+    meta: {
+      ...local.meta,
+      'source': 'gigachat-vision',
+      if (ai['concerns'] is List) 'ai_concerns': ai['concerns'],
+    },
+  );
+}
+
 class ScanHandlers {
   ScanHandlers({
     required this.sessions,
     required this.scans,
     required this.profiles,
+    this.giga,
   });
 
   final SessionRepository sessions;
   final ScanRepository scans;
   final ProfileRepository profiles;
+  final GigaChatClient? giga;
 
   Router router() => Router()
     ..post('/me/scans', _withUser(_create))
@@ -560,10 +644,28 @@ class ScanHandlers {
       }
     }
     final profile = await profiles.get(user.id) ?? <String, dynamic>{};
-    final analysis = analyzeScan(
+    var analysis = analyzeScan(
       photoBytes: bytes ?? [DateTime.now().millisecondsSinceEpoch & 0xFF],
       profile: profile,
     );
+    // If GigaChat (vision) is available and a photo was supplied, prefer the
+    // AI-derived metrics. On any error we silently keep the local pixel
+    // analysis so the user still gets a result.
+    if (giga != null && bytes != null && bytes.length > 1000) {
+      try {
+        final raw = await giga!.analyzePhoto(
+          systemPrompt: visionScanSystemPrompt,
+          userText:
+              'Проанализируй кожу на этой селфи. Профиль: ${jsonEncode(profile)}',
+          photoBytes: bytes,
+          mime: mime,
+        );
+        final j = parseJsonReply(raw);
+        analysis = _mergeAiAnalysis(analysis, j);
+      } catch (e) {
+        stderr.writeln('Vision scan failed, using local analysis: $e');
+      }
+    }
     final scan = await scans.create(
       userId: user.id,
       photo: bytes,

@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../../catalog/domain/product.dart';
+
 enum ChatRole { user, assistant }
 
 class ChatAction {
@@ -51,6 +53,7 @@ class ChatMessage {
     required this.content,
     this.actions = const [],
     this.card,
+    this.products = const [],
     DateTime? timestamp,
   }) : timestamp = timestamp ?? DateTime.now();
 
@@ -59,10 +62,14 @@ class ChatMessage {
   final String content;
   final List<ChatAction> actions;
   final ChatCard? card;
+  /// Products surfaced by the backend alongside this assistant message
+  /// (top matches from catalog vs. user profile).
+  final List<Product> products;
   final DateTime timestamp;
 
   bool get isUser => role == ChatRole.user;
-  bool get hasRichContent => actions.isNotEmpty || card != null;
+  bool get hasRichContent =>
+      actions.isNotEmpty || card != null || products.isNotEmpty;
 
   Map<String, String> toApiJson() => {
         'role': role == ChatRole.user ? 'user' : 'assistant',
@@ -71,7 +78,10 @@ class ChatMessage {
 
   /// Best-effort parse of Лина's reply. Tries to read JSON `{text, actions?, card?}`,
   /// falls back to treating the whole string as plain text.
-  factory ChatMessage.parseAssistantReply(String raw) {
+  factory ChatMessage.parseAssistantReply(
+    String raw, {
+    List<Product> products = const [],
+  }) {
     final cleaned = _stripFence(raw.trim());
     Map<String, dynamic>? json;
     try {
@@ -81,7 +91,11 @@ class ChatMessage {
       json = null;
     }
     if (json == null || json['text'] is! String) {
-      return ChatMessage(role: ChatRole.assistant, content: raw.trim());
+      return ChatMessage(
+        role: ChatRole.assistant,
+        content: raw.trim(),
+        products: products,
+      );
     }
     final actions = ((json['actions'] as List?) ?? const [])
         .whereType<Map<String, dynamic>>()
@@ -97,6 +111,7 @@ class ChatMessage {
       content: (json['text'] as String).trim(),
       actions: actions,
       card: (card != null && card.items.isNotEmpty) ? card : null,
+      products: products,
     );
   }
 

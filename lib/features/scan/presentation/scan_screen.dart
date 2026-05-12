@@ -1,5 +1,7 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
+import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
@@ -8,8 +10,6 @@ import '../../../core/theme/app_typography.dart';
 import '../../api/backend_api.dart';
 import '../domain/scan_result.dart';
 
-/// Camera-styled screen with face mesh overlay. Uses gallery picker under
-/// the hood (web doesn't have reliable camera access on iOS Safari).
 class ScanScreen extends ConsumerStatefulWidget {
   const ScanScreen({
     super.key,
@@ -25,92 +25,125 @@ class ScanScreen extends ConsumerStatefulWidget {
 }
 
 class _ScanScreenState extends ConsumerState<ScanScreen>
-    with SingleTickerProviderStateMixin {
+    with SingleTickerProviderStateMixin, WidgetsBindingObserver {
   bool _busy = false;
   String? _error;
   late final AnimationController _pulse;
 
+  CameraController? _camera;
+  Future<void>? _initFuture;
+  String? _cameraError;
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pulse = AnimationController(
       vsync: this,
       duration: const Duration(seconds: 3),
     )..repeat();
+    _initFuture = _initCamera();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _pulse.dispose();
+    _camera?.dispose();
     super.dispose();
   }
 
-  Future<ImageSource?> _pickSource() async {
-    return showModalBottomSheet<ImageSource>(
-      context: context,
-      backgroundColor: const Color(0xFF1B1216),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-      ),
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 8),
-            Container(
-              width: 36,
-              height: 4,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.25),
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            const SizedBox(height: 16),
-            ListTile(
-              leading: const Icon(Icons.photo_camera_rounded,
-                  color: AppColors.primaryAccent),
-              title: Text('Сделать фото',
-                  style: AppTypography.body.copyWith(color: Colors.white)),
-              subtitle: Text('Селфи фронтальной камерой',
-                  style: AppTypography.caption.copyWith(
-                    color: Colors.white.withOpacity(0.55),
-                    fontSize: 12,
-                  )),
-              onTap: () => Navigator.pop(ctx, ImageSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library_rounded,
-                  color: AppColors.primaryAccent),
-              title: Text('Из галереи',
-                  style: AppTypography.body.copyWith(color: Colors.white)),
-              subtitle: Text('Выбрать существующее фото',
-                  style: AppTypography.caption.copyWith(
-                    color: Colors.white.withOpacity(0.55),
-                    fontSize: 12,
-                  )),
-              onTap: () => Navigator.pop(ctx, ImageSource.gallery),
-            ),
-            const SizedBox(height: 12),
-          ],
-        ),
-      ),
-    );
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    final cam = _camera;
+    if (cam == null || !cam.value.isInitialized) return;
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      cam.dispose();
+      _camera = null;
+      if (mounted) setState(() {});
+    } else if (state == AppLifecycleState.resumed) {
+      _initFuture = _initCamera();
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _initCamera() async {
+    try {
+      final cameras = await availableCameras();
+      if (cameras.isEmpty) {
+        if (!mounted) return;
+        setState(() => _cameraError = 'Камера недоступна на этом устройстве');
+        return;
+      }
+      final front = cameras.firstWhere(
+        (c) => c.lensDirection == CameraLensDirection.front,
+        orElse: () => cameras.first,
+      );
+      final ctrl = CameraController(
+        front,
+        ResolutionPreset.high,
+        enableAudio: false,
+        imageFormatGroup: ImageFormatGroup.jpeg,
+      );
+      await ctrl.initialize();
+      if (!mounted) {
+        await ctrl.dispose();
+        return;
+      }
+      setState(() {
+        _camera = ctrl;
+        _cameraError = null;
+      });
+    } on CameraException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _cameraError = e.code == 'CameraAccessDenied'
+            ? 'Нет доступа к камере. Разреши в настройках.'
+            : 'Камера: ${e.description ?? e.code}';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _cameraError = 'Камера: $e');
+    }
   }
 
   Future<void> _capture() async {
-    final source = await _pickSource();
-    if (source == null) return;
+    final cam = _camera;
+    if (cam == null || !cam.value.isInitialized) {
+      // Camera not ready — fall back to gallery so the user isn't stuck.
+      return _pickFromGallery();
+    }
+    if (_busy) return;
     setState(() {
-      _error = null;
       _busy = true;
+      _error = null;
+    });
+    try {
+      final pic = await cam.takePicture();
+      final bytes = await File(pic.path).readAsBytes();
+      await _uploadAndFinish(bytes, mime: 'image/jpeg');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = 'Не получилось снять: $e';
+      });
+    }
+  }
+
+  Future<void> _pickFromGallery() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
     });
     try {
       final picker = ImagePicker();
       final picked = await picker.pickImage(
-        source: source,
+        source: ImageSource.gallery,
         imageQuality: 90,
         maxWidth: 1600,
-        preferredCameraDevice: CameraDevice.front,
       );
       if (picked == null) {
         if (!mounted) return;
@@ -118,13 +151,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         return;
       }
       final bytes = await picked.readAsBytes();
-      final b64 = base64Encode(bytes);
-      final result = await ref.read(backendApiProvider).uploadScan(
-            photoBase64: b64,
-            mime: picked.mimeType ?? 'image/jpeg',
-          );
-      if (!mounted) return;
-      widget.onResult(result);
+      await _uploadAndFinish(bytes, mime: picked.mimeType ?? 'image/jpeg');
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -134,46 +161,63 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     }
   }
 
+  Future<void> _uploadAndFinish(List<int> bytes,
+      {required String mime}) async {
+    final b64 = base64Encode(bytes);
+    final result = await ref.read(backendApiProvider).uploadScan(
+          photoBase64: b64,
+          mime: mime,
+        );
+    if (!mounted) return;
+    widget.onResult(result);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF0F0A0C),
       body: Stack(
         children: [
-          // simulated camera surface
+          // Live camera feed (or dark fallback while initialising / on error)
+          Positioned.fill(child: _CameraBackdrop(
+            controller: _camera,
+            initFuture: _initFuture,
+            errorText: _cameraError,
+          )),
+          // dark vignette so the mesh is readable on bright frames
           Positioned.fill(
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: RadialGradient(
-                  center: Alignment(0, -0.2),
-                  radius: 1.1,
-                  colors: [
-                    Color(0xFF5A3744),
-                    Color(0xFF2A1A20),
-                    Color(0xFF0F0A0C),
-                  ],
-                  stops: [0, 0.45, 1],
+            child: IgnorePointer(
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: RadialGradient(
+                    center: const Alignment(0, -0.2),
+                    radius: 1.1,
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withOpacity(0.35),
+                      Colors.black.withOpacity(0.75),
+                    ],
+                    stops: const [0.35, 0.7, 1],
+                  ),
                 ),
               ),
             ),
           ),
-          // face mesh
+          // face mesh overlay
           Positioned.fill(
-            child: AnimatedBuilder(
-              animation: _pulse,
-              builder: (_, __) => CustomPaint(
-                painter: _FaceMeshPainter(t: _pulse.value),
+            child: IgnorePointer(
+              child: AnimatedBuilder(
+                animation: _pulse,
+                builder: (_, __) => CustomPaint(
+                  painter: _FaceMeshPainter(t: _pulse.value),
+                ),
               ),
             ),
           ),
-          // All controls in one Column flow inside SafeArea — top chrome at
-          // the top, big headline below, shutter card pushed to the bottom
-          // by the Spacer. No more positional ambiguity.
           Positioned.fill(
             child: SafeArea(
               child: Column(
                 children: [
-                  // Top chrome
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
                     child: Row(
@@ -186,14 +230,13 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                         _LightStatusPill(),
                         const Spacer(),
                         _GlassButton(
-                          icon: Icons.flash_on_rounded,
-                          onTap: () {},
+                          icon: Icons.photo_library_rounded,
+                          onTap: _busy ? () {} : _pickFromGallery,
                         ),
                       ],
                     ),
                   ),
                   const SizedBox(height: 36),
-                  // Headline
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 24),
                     child: Column(
@@ -217,9 +260,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                       ],
                     ),
                   ),
-                  // Pushes shutter to bottom.
                   const Spacer(),
-                  // Bottom shutter card
                   Padding(
                     padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
                     child: Container(
@@ -248,9 +289,11 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                                 const SizedBox(height: 4),
                                 Text(
                                   _error ??
+                                      _cameraError ??
                                       '12 параметров · фото не покидает наш сервер',
                                   style: AppTypography.caption.copyWith(
-                                    color: _error != null
+                                    color: (_error != null ||
+                                            _cameraError != null)
                                         ? AppColors.warning
                                         : Colors.white.withOpacity(0.55),
                                     fontSize: 12,
@@ -277,6 +320,68 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   }
 }
 
+class _CameraBackdrop extends StatelessWidget {
+  const _CameraBackdrop({
+    required this.controller,
+    required this.initFuture,
+    required this.errorText,
+  });
+
+  final CameraController? controller;
+  final Future<void>? initFuture;
+  final String? errorText;
+
+  @override
+  Widget build(BuildContext context) {
+    if (errorText != null) {
+      return Container(
+        decoration: const BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(0, -0.2),
+            radius: 1.1,
+            colors: [
+              Color(0xFF5A3744),
+              Color(0xFF2A1A20),
+              Color(0xFF0F0A0C),
+            ],
+            stops: [0, 0.45, 1],
+          ),
+        ),
+      );
+    }
+    return FutureBuilder<void>(
+      future: initFuture,
+      builder: (context, snap) {
+        final c = controller;
+        if (c == null || !c.value.isInitialized) {
+          return Container(color: const Color(0xFF1A1116));
+        }
+        // `aspectRatio` from the camera plugin is the sensor's native
+        // (landscape) ratio, e.g. 16:9 ≈ 1.78. On a portrait screen we want
+        // the rotated dimensions, so multiply width by aspectRatio to get
+        // the portrait height. FittedBox.cover then crops sides instead of
+        // stretching the face horizontally.
+        final size = MediaQuery.of(context).size;
+        return ClipRect(
+          child: OverflowBox(
+            maxWidth: double.infinity,
+            maxHeight: double.infinity,
+            alignment: Alignment.center,
+            child: FittedBox(
+              fit: BoxFit.cover,
+              child: SizedBox(
+                width: size.width,
+                height: size.width * c.value.aspectRatio,
+                child: CameraPreview(c),
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
 class _FaceMeshPainter extends CustomPainter {
   _FaceMeshPainter({required this.t});
   final double t;
@@ -286,10 +391,9 @@ class _FaceMeshPainter extends CustomPainter {
     final cx = size.width / 2;
     final cy = size.height * 0.42;
 
-    // outer dashed oval
     final ovalPaint = Paint()
       ..style = PaintingStyle.stroke
-      ..color = AppColors.primaryAccent.withOpacity(0.55)
+      ..color = AppColors.primaryAccent.withOpacity(0.7)
       ..strokeWidth = 1;
     final dash = Path();
     final ovalRect =
@@ -297,10 +401,9 @@ class _FaceMeshPainter extends CustomPainter {
     _addDashedOval(dash, ovalRect, dashWidth: 4, dashSpace: 5);
     canvas.drawPath(dash, ovalPaint);
 
-    // mesh strokes
     final mesh = Paint()
       ..style = PaintingStyle.stroke
-      ..color = AppColors.primaryAccent.withOpacity(0.32)
+      ..color = AppColors.primaryAccent.withOpacity(0.4)
       ..strokeWidth = 0.7;
     final paths = [
       Path()
@@ -329,7 +432,6 @@ class _FaceMeshPainter extends CustomPainter {
       canvas.drawPath(p, mesh);
     }
 
-    // anchors
     final anchor = Paint()..color = AppColors.primaryAccent;
     final anchorPositions = [
       Offset(cx - 35, cy - 25),
@@ -343,7 +445,6 @@ class _FaceMeshPainter extends CustomPainter {
       canvas.drawCircle(p, 2.5, anchor);
     }
 
-    // pulse ring
     final pulseR = 145 + 12 * (math.sin(t * 2 * math.pi) + 1) / 2;
     final pulseO = 0.2 + 0.5 * ((math.cos(t * 2 * math.pi) + 1) / 2);
     final pulse = Paint()
@@ -352,7 +453,6 @@ class _FaceMeshPainter extends CustomPainter {
       ..strokeWidth = 1.2;
     canvas.drawCircle(Offset(cx, cy), pulseR, pulse);
 
-    // corner brackets
     final cornerColor = AppColors.primaryAccent;
     final corners = [
       (cx - 130, cy - 150, 0.0),

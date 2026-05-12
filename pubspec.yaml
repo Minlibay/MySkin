@@ -17,6 +17,7 @@ dependencies:
   freezed_annotation: ^2.4.1
   google_fonts: ^6.2.1
   image_picker: ^1.1.2
+  camera: ^0.11.0
   json_annotation: ^4.8.1
 
 dev_dependencies:

@@ -53,7 +53,10 @@ class ChatController extends StateNotifier<ChatState> {
       final reply = await _api.chat(
         state.messages.map((m) => m.toApiJson()).toList(),
       );
-      final assistantMsg = ChatMessage.parseAssistantReply(reply);
+      final assistantMsg = ChatMessage.parseAssistantReply(
+        reply.reply,
+        products: reply.products,
+      );
       state = state.copyWith(
         messages: [...state.messages, assistantMsg],
         sending: false,

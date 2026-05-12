@@ -64,17 +64,24 @@ void main(List<String> args) async {
     shelf: shelf,
     profiles: profiles,
   );
+  final gigaKey = env['GIGACHAT_AUTH_KEY'];
+  final giga = (gigaKey != null && gigaKey.isNotEmpty)
+      ? GigaChatClient.fromEnv(env)
+      : null;
+
   final scanHandlers = ScanHandlers(
     sessions: sessions,
     scans: scans,
     profiles: profiles,
+    giga: giga,
   );
 
-  final gigaKey = env['GIGACHAT_AUTH_KEY'];
-  final ai = (gigaKey != null && gigaKey.isNotEmpty)
+  final ai = giga != null
       ? AiHandlers(
           sessions: sessions,
-          giga: GigaChatClient.fromEnv(env),
+          giga: giga,
+          products: products,
+          profiles: profiles,
         )
       : null;
 

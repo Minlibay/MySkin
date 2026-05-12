@@ -54,7 +54,9 @@
       "Bash(grep -E \"^\\\\.env$|^\\\\.env\\\\.[^e]\")",
       "Bash(flutter install *)",
       "Bash(xxd)",
-      "Bash(git commit -m ' *)"
+      "Bash(git commit -m ' *)",
+      "Bash(tee /tmp/myskin_apk_build.log)",
+      "Bash(adb devices *)"
     ]
   }
 }
