@@ -564,17 +564,32 @@ class AiHandlers {
         messages: messages,
         model: chatModel,
       );
+
+      // Only surface products when Лина explicitly flagged this turn as a
+      // product recommendation. Falls back to a regex sniff if the JSON
+      // body is malformed but contains the flag verbatim.
+      var showProducts = false;
+      try {
+        final parsed = parseJsonReply(reply);
+        showProducts = parsed['show_products'] == true;
+      } catch (_) {
+        showProducts =
+            RegExp(r'"show_products"\s*:\s*true').hasMatch(reply);
+      }
+
       return jsonResponse(200, {
         'reply': reply.trim(),
-        'recommended_products': top
-            .where((e) => e.score >= 40)
-            .take(5)
-            .map((e) => {
-                  ...e.p.toJson(),
-                  'match_score': e.score,
-                  'match_reasons': e.reasons,
-                })
-            .toList(),
+        'recommended_products': showProducts
+            ? top
+                .where((e) => e.score >= 40)
+                .take(5)
+                .map((e) => {
+                      ...e.p.toJson(),
+                      'match_score': e.score,
+                      'match_reasons': e.reasons,
+                    })
+                .toList()
+            : const [],
       });
     } on GigaChatException catch (e) {
       stderr.writeln('GigaChat /chat failed: $e');
