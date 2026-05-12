@@ -54,7 +54,11 @@ class ScanResultScreen extends ConsumerWidget {
                       const SizedBox(height: AppSpacing.lg),
                       const EyebrowText('Карта улучшений'),
                       const SizedBox(height: AppSpacing.sm),
-                      _Heatmap(zones: scan.zones),
+                      _Heatmap(
+                        scan: scan,
+                        photoUrl: api.scanPhotoUrl(scan.id),
+                        photoHeaders: api.imageAuthHeaders(),
+                      ),
                       const SizedBox(height: AppSpacing.lg),
                       _LinaInsight(text: scan.insight),
                       if (scan.meta.isNotEmpty) ...[
@@ -342,32 +346,62 @@ class _MetricsGrid extends StatelessWidget {
 }
 
 class _Heatmap extends StatelessWidget {
-  const _Heatmap({required this.zones});
-  final ScanZones zones;
+  const _Heatmap({
+    required this.scan,
+    required this.photoUrl,
+    required this.photoHeaders,
+  });
+  final ScanResult scan;
+  final String photoUrl;
+  final Map<String, String> photoHeaders;
 
   @override
   Widget build(BuildContext context) {
+    final zones = scan.zones;
+    final face = scan.face;
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),
         border: Border.all(color: AppColors.divider),
-        gradient: const LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [AppColors.blush, Colors.white],
-        ),
+        color: Colors.white,
       ),
+      clipBehavior: Clip.antiAlias,
       child: Column(
         children: [
-          SizedBox(
-            height: 240,
-            child: CustomPaint(
-              painter: _HeatmapPainter(zones: zones),
-              child: const SizedBox.expand(),
+          AspectRatio(
+            aspectRatio: 3 / 4,
+            child: Stack(
+              fit: StackFit.expand,
+              children: [
+                if (scan.hasPhoto)
+                  Image.network(
+                    photoUrl,
+                    headers: photoHeaders,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => _emptyBackdrop(),
+                  )
+                else
+                  _emptyBackdrop(),
+                Container(
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.black.withOpacity(0.0),
+                        Colors.black.withOpacity(0.25),
+                      ],
+                    ),
+                  ),
+                ),
+                CustomPaint(
+                  painter: _HeatmapPainter(zones: zones, face: face),
+                ),
+              ],
             ),
           ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
             child: Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -384,6 +418,16 @@ class _Heatmap extends StatelessWidget {
     );
   }
 
+  Widget _emptyBackdrop() => Container(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [AppColors.blush, Colors.white],
+          ),
+        ),
+      );
+
   Widget _zonePill(String label, int score) {
     final variant = score >= 75
         ? PillVariant.success
@@ -393,8 +437,9 @@ class _Heatmap extends StatelessWidget {
 }
 
 class _HeatmapPainter extends CustomPainter {
-  _HeatmapPainter({required this.zones});
+  _HeatmapPainter({required this.zones, required this.face});
   final ScanZones zones;
+  final FaceGeometry? face;
 
   Color _colorFor(int score) {
     if (score >= 75) return AppColors.success;
@@ -402,9 +447,10 @@ class _HeatmapPainter extends CustomPainter {
     return AppColors.warning;
   }
 
-  void _drawBlob(Canvas canvas, Offset center, double rx, double ry, int score) {
+  void _drawBlob(
+      Canvas canvas, Offset center, double rx, double ry, int score) {
     final color = _colorFor(score);
-    final intensity = (1 - (score / 100)).clamp(0.15, 0.55);
+    final intensity = (1 - (score / 100)).clamp(0.25, 0.7);
     final paint = Paint()
       ..shader = RadialGradient(
         colors: [color.withOpacity(intensity), color.withOpacity(0)],
@@ -412,7 +458,8 @@ class _HeatmapPainter extends CustomPainter {
         center: center,
         width: rx * 2,
         height: ry * 2,
-      ));
+      ))
+      ..blendMode = BlendMode.screen;
     canvas.drawOval(
       Rect.fromCenter(center: center, width: rx * 2, height: ry * 2),
       paint,
@@ -421,42 +468,71 @@ class _HeatmapPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height / 2;
+    // Determine where the face actually sits inside this widget. Falls back
+    // to a centred oval covering most of the frame when we have no bbox.
+    final Rect faceRect;
+    final f = face;
+    if (f != null) {
+      faceRect = Rect.fromLTRB(
+        f.x0 * size.width,
+        f.y0 * size.height,
+        f.x1 * size.width,
+        f.y1 * size.height,
+      );
+    } else {
+      faceRect = Rect.fromCenter(
+        center: Offset(size.width / 2, size.height * 0.5),
+        width: size.width * 0.6,
+        height: size.height * 0.75,
+      );
+    }
 
-    // dashed face outline
+    // Soft oval outline around the detected face area.
     final outline = Paint()
       ..style = PaintingStyle.stroke
-      ..color = AppColors.primaryAccent.withOpacity(0.4)
-      ..strokeWidth = 1;
-    final fill = Paint()
-      ..color = AppColors.primaryAccent.withOpacity(0.06);
-    final faceRect =
-        Rect.fromCenter(center: Offset(cx, cy), width: 140, height: 190);
-    canvas.drawOval(faceRect, fill);
-
+      ..color = Colors.white.withOpacity(0.6)
+      ..strokeWidth = 1.2;
     final dashed = Path();
     final src = Path()..addOval(faceRect);
     for (final m in src.computeMetrics()) {
       var dist = 0.0;
       while (dist < m.length) {
-        final next = math.min(dist + 4, m.length);
+        final next = math.min(dist + 5, m.length);
         dashed.addPath(m.extractPath(dist, next), Offset.zero);
-        dist = next + 4;
+        dist = next + 5;
       }
     }
     canvas.drawPath(dashed, outline);
 
-    // heat blobs
-    _drawBlob(canvas, Offset(cx, cy - 65), 50, 24, zones.forehead);
-    _drawBlob(canvas, Offset(cx, cy - 18), 28, 36, zones.tzone);
-    _drawBlob(canvas, Offset(cx - 48, cy + 10), 26, 22, zones.cheeks);
-    _drawBlob(canvas, Offset(cx + 48, cy + 10), 26, 22, zones.cheeks);
-    _drawBlob(canvas, Offset(cx, cy + 65), 36, 18, zones.chin);
+    final fx = faceRect.left, fy = faceRect.top;
+    final fw = faceRect.width, fh = faceRect.height;
+
+    // Zones are placed proportionally inside the detected face bbox, so the
+    // markers line up with the actual forehead / cheeks / chin of the user.
+    Offset p(double rx, double ry) => Offset(fx + fw * rx, fy + fh * ry);
+
+    _drawBlob(canvas, p(0.50, 0.15), fw * 0.34, fh * 0.10, zones.forehead);
+    _drawBlob(canvas, p(0.50, 0.45), fw * 0.16, fh * 0.18, zones.tzone);
+    _drawBlob(canvas, p(0.25, 0.55), fw * 0.18, fh * 0.12, zones.cheeks);
+    _drawBlob(canvas, p(0.75, 0.55), fw * 0.18, fh * 0.12, zones.cheeks);
+    _drawBlob(canvas, p(0.50, 0.86), fw * 0.22, fh * 0.10, zones.chin);
+
+    // Subtle marker dots so it reads as 'analysed' even at low intensity.
+    final dot = Paint()..color = Colors.white.withOpacity(0.85);
+    for (final c in [
+      p(0.50, 0.15),
+      p(0.50, 0.45),
+      p(0.25, 0.55),
+      p(0.75, 0.55),
+      p(0.50, 0.86),
+    ]) {
+      canvas.drawCircle(c, 2.4, dot);
+    }
   }
 
   @override
-  bool shouldRepaint(covariant _HeatmapPainter old) => old.zones != zones;
+  bool shouldRepaint(covariant _HeatmapPainter old) =>
+      old.zones != zones || old.face != face;
 }
 
 class _QualityBanner extends StatelessWidget {

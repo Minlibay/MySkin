@@ -650,6 +650,7 @@ ScanAnalysis _mergeAiAnalysis(ScanAnalysis local, Map<String, dynamic> ai) {
       'source': 'gigachat-vision',
       if (ai['concerns'] is List) 'ai_concerns': ai['concerns'],
     },
+    faceGeom: local.faceGeom,
   );
 }
 
@@ -739,6 +740,7 @@ class ScanHandlers {
       pores: analysis.pores,
       zones: analysis.zones,
       insight: analysis.insight,
+      faceGeom: analysis.faceGeom,
     );
     // Augment response with non-persisted analysis metadata.
     return jsonResponse(200, {

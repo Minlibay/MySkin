@@ -879,6 +879,7 @@ class ScanRow {
     required this.insight,
     required this.createdAt,
     this.hasPhoto = true,
+    this.faceGeom,
   });
 
   final String id;
@@ -892,6 +893,7 @@ class ScanRow {
   final String insight;
   final DateTime createdAt;
   final bool hasPhoto;
+  final Map<String, dynamic>? faceGeom;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -904,6 +906,7 @@ class ScanRow {
         'insight': insight,
         'has_photo': hasPhoto,
         'created_at': createdAt.toUtc().toIso8601String(),
+        if (faceGeom != null) 'face': faceGeom,
       };
 }
 
@@ -922,13 +925,15 @@ class ScanRepository {
     required int pores,
     required Map<String, int> zones,
     required String insight,
+    Map<String, dynamic>? faceGeom,
   }) async {
     final id = _uuid.v4();
     await db.execute(
       Sql.named('''
         INSERT INTO scans (id, user_id, photo, photo_mime, score, hydration,
-                           sebum, tone, pores, zones, insight)
-        VALUES (@id, @u, @p, @m, @sc, @h, @se, @t, @po, @z::jsonb, @i)
+                           sebum, tone, pores, zones, insight, face_geom)
+        VALUES (@id, @u, @p, @m, @sc, @h, @se, @t, @po, @z::jsonb, @i,
+                @fg::jsonb)
       '''),
       parameters: {
         'id': id,
@@ -944,6 +949,7 @@ class ScanRepository {
         'po': pores,
         'z': jsonEncode(zones),
         'i': insight,
+        'fg': faceGeom == null ? null : jsonEncode(faceGeom),
       },
     );
     return ScanRow(
@@ -958,6 +964,7 @@ class ScanRepository {
       insight: insight,
       createdAt: DateTime.now().toUtc(),
       hasPhoto: photo != null,
+      faceGeom: faceGeom,
     );
   }
 
@@ -966,7 +973,7 @@ class ScanRepository {
     final r = await db.execute(
       Sql.named('''
         SELECT id, user_id, score, hydration, sebum, tone, pores, zones,
-               insight, created_at, photo IS NOT NULL
+               insight, created_at, photo IS NOT NULL, face_geom
         FROM scans WHERE id = @id AND user_id = @u
       '''),
       parameters: {'id': id, 'u': userId},
@@ -986,6 +993,7 @@ class ScanRepository {
       insight: row[8] as String? ?? '',
       createdAt: row[9] as DateTime,
       hasPhoto: row[10] as bool,
+      faceGeom: (row[11] as Map?)?.cast<String, dynamic>(),
     );
   }
 
@@ -1009,7 +1017,7 @@ class ScanRepository {
     final r = await db.execute(
       Sql.named('''
         SELECT id, user_id, score, hydration, sebum, tone, pores, zones,
-               insight, created_at, photo IS NOT NULL
+               insight, created_at, photo IS NOT NULL, face_geom
         FROM scans WHERE user_id = @u
         ORDER BY created_at DESC LIMIT @lim
       '''),
@@ -1029,6 +1037,7 @@ class ScanRepository {
               insight: row[8] as String? ?? '',
               createdAt: row[9] as DateTime,
               hasPhoto: row[10] as bool,
+              faceGeom: (row[11] as Map?)?.cast<String, dynamic>(),
             ))
         .toList();
   }
@@ -1048,6 +1057,7 @@ class ScanAnalysis {
     required this.insight,
     required this.qualityWarnings,
     required this.meta,
+    this.faceGeom,
   });
 
   final int score;
@@ -1059,6 +1069,10 @@ class ScanAnalysis {
   final String insight;
   final List<String> qualityWarnings;
   final Map<String, dynamic> meta;
+  /// Normalised face bounding box on the source photo:
+  /// `{"bbox": [x0, y0, x1, y1]}` with values in [0..1]. Null when no
+  /// face could be located (e.g. fallback path with no photo).
+  final Map<String, dynamic>? faceGeom;
 }
 
 /// Heuristic skin-tone detection in RGB (Kovac et al., simplified).
@@ -1119,11 +1133,19 @@ ScanAnalysis analyzeScan({
   final xCenter = w / 2;
   final tzoneHalfW = w * 0.12;
 
+  // Face bbox in pixel coords. Grows to include each detected skin pixel.
+  var faceMinX = w, faceMaxX = 0, faceMinY = h, faceMaxY = 0;
+
   for (var y = 0; y < h; y += 2) {
     for (var x = 0; x < w; x += 2) {
       final px = image.getPixel(x, y);
       final r = px.r.toInt(), g = px.g.toInt(), b = px.b.toInt();
       if (!_isSkinPixel(r, g, b)) continue;
+
+      if (x < faceMinX) faceMinX = x;
+      if (x > faceMaxX) faceMaxX = x;
+      if (y < faceMinY) faceMinY = y;
+      if (y > faceMaxY) faceMaxY = y;
 
       final lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
       final all = regions['all']!;
@@ -1242,6 +1264,27 @@ ScanAnalysis analyzeScan({
   meta['processing_ms'] =
       DateTime.now().difference(t0).inMilliseconds;
 
+  Map<String, dynamic>? faceGeom;
+  if (faceMaxX > faceMinX && faceMaxY > faceMinY) {
+    // Tighten the bbox slightly — skin detection picks up neck/edges and
+    // the raw extents drift outside the actual face. 4 % inset works well
+    // for selfie framing.
+    final pad = 0.04;
+    final x0 = (faceMinX / w).clamp(0.0, 1.0);
+    final y0 = (faceMinY / h).clamp(0.0, 1.0);
+    final x1 = (faceMaxX / w).clamp(0.0, 1.0);
+    final y1 = (faceMaxY / h).clamp(0.0, 1.0);
+    final bw = x1 - x0, bh = y1 - y0;
+    faceGeom = {
+      'bbox': [
+        (x0 + bw * pad).clamp(0.0, 1.0),
+        (y0 + bh * pad).clamp(0.0, 1.0),
+        (x1 - bw * pad).clamp(0.0, 1.0),
+        (y1 - bh * pad).clamp(0.0, 1.0),
+      ],
+    };
+  }
+
   return ScanAnalysis(
     score: score,
     hydration: hydration,
@@ -1257,6 +1300,7 @@ ScanAnalysis analyzeScan({
     insight: insight,
     qualityWarnings: warnings,
     meta: meta,
+    faceGeom: faceGeom,
   );
 }
 
