@@ -5,6 +5,7 @@ import Codes from './pages/Codes';
 import Dashboard from './pages/Dashboard';
 import Login from './pages/Login';
 import Products from './pages/Products';
+import Settings from './pages/Settings';
 import UserDetail from './pages/UserDetail';
 import Users from './pages/Users';
 
@@ -28,6 +29,7 @@ export default function App() {
         <Route path="/users/:id" element={<UserDetail />} />
         <Route path="/products" element={<Products />} />
         <Route path="/codes" element={<Codes />} />
+        <Route path="/settings" element={<Settings />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

@@ -393,6 +393,42 @@ class OtpRepository {
   }
 }
 
+class AppSettingsRepository {
+  AppSettingsRepository(this.db);
+  final Pool db;
+
+  Future<String?> get(String key) async {
+    final r = await db.execute(
+      Sql.named('SELECT value FROM app_settings WHERE key = @k'),
+      parameters: {'k': key},
+    );
+    if (r.isEmpty) return null;
+    return r.first[0] as String?;
+  }
+
+  Future<Map<String, String>> getMany(List<String> keys) async {
+    if (keys.isEmpty) return {};
+    final r = await db.execute(
+      Sql.named(
+          'SELECT key, value FROM app_settings WHERE key = ANY(@ks::text[])'),
+      parameters: {'ks': keys},
+    );
+    return {for (final row in r) row[0] as String: row[1] as String};
+  }
+
+  Future<void> set(String key, String value) async {
+    await db.execute(
+      Sql.named('''
+        INSERT INTO app_settings (key, value, updated_at)
+        VALUES (@k, @v, now())
+        ON CONFLICT (key) DO UPDATE
+          SET value = EXCLUDED.value, updated_at = now()
+      '''),
+      parameters: {'k': key, 'v': value},
+    );
+  }
+}
+
 class AdminRow {
   AdminRow({required this.id, required this.login, required this.passwordHash});
   final String id;

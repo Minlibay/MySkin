@@ -143,6 +143,23 @@ export const api = {
   pendingCodes() {
     return this.request<{ items: PendingCode[] }>('/admin/pending-codes');
   },
+
+  getGigaSettings() {
+    return this.request<GigaSettings>('/admin/settings/gigachat');
+  },
+
+  setGigaSettings(input: { chat_model?: string; vision_model?: string }) {
+    return this.request<{ ok: boolean }>('/admin/settings/gigachat', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+};
+
+export type GigaSettings = {
+  chat_model: string | null;
+  vision_model: string | null;
+  available_models: string[];
 };
 
 export type PendingCode = {

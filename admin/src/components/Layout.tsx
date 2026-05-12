@@ -7,6 +7,7 @@ const NAV = [
   { to: '/users', label: 'Юзеры', icon: '◌' },
   { to: '/products', label: 'Каталог', icon: '◇' },
   { to: '/codes', label: 'Коды', icon: '⎘' },
+  { to: '/settings', label: 'GigaChat', icon: '✦' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

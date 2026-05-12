@@ -32,6 +32,7 @@ void main(List<String> args) async {
   final shelf = UserProductRepository(pool);
   final completions = RoutineCompletionRepository(pool);
   final scans = ScanRepository(pool);
+  final appSettings = AppSettingsRepository(pool);
 
   final auth = AuthHandlers(
     users: users,
@@ -48,6 +49,7 @@ void main(List<String> args) async {
     shelf: shelf,
     products: products,
     otps: otps,
+    appSettings: appSettings,
   );
   final me = MeHandlers(
     sessions: sessions,
@@ -74,6 +76,7 @@ void main(List<String> args) async {
     scans: scans,
     profiles: profiles,
     giga: giga,
+    appSettings: appSettings,
   );
 
   final ai = giga != null
@@ -82,6 +85,7 @@ void main(List<String> args) async {
           giga: giga,
           products: products,
           profiles: profiles,
+          appSettings: appSettings,
         )
       : null;
 

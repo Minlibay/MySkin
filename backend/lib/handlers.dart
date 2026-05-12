@@ -190,6 +190,7 @@ class AdminHandlers {
     required this.shelf,
     required this.products,
     required this.otps,
+    required this.appSettings,
   });
 
   final AdminRepository admins;
@@ -200,6 +201,7 @@ class AdminHandlers {
   final UserProductRepository shelf;
   final ProductRepository products;
   final OtpRepository otps;
+  final AppSettingsRepository appSettings;
 
   static const _uuid = Uuid();
 
@@ -217,7 +219,9 @@ class AdminHandlers {
     ..patch('/admin/products/<id>', _withAdmin(_updateProduct))
     ..delete('/admin/products/<id>', _withAdmin(_deleteProduct))
     ..post('/admin/products/<id>/photo', _withAdmin(_uploadProductPhoto))
-    ..get('/admin/pending-codes', _withAdmin(_pendingCodes));
+    ..get('/admin/pending-codes', _withAdmin(_pendingCodes))
+    ..get('/admin/settings/gigachat', _withAdmin(_getGigaSettings))
+    ..put('/admin/settings/gigachat', _withAdmin(_setGigaSettings));
 
   Handler _withAdmin(Handler inner) => (Request req) async {
         final token = _bearer(req);
@@ -275,6 +279,40 @@ class AdminHandlers {
 
   Future<Response> _stats(Request req) async =>
       jsonResponse(200, await stats.overview());
+
+  Future<Response> _getGigaSettings(Request req) async {
+    final m = await appSettings.getMany(
+        const ['gigachat_chat_model', 'gigachat_vision_model']);
+    return jsonResponse(200, {
+      'chat_model': m['gigachat_chat_model'],
+      'vision_model': m['gigachat_vision_model'],
+      // Suggested choices the admin can pick from; the field accepts any
+      // string so new model names work without a code change.
+      'available_models': const [
+        'GigaChat',
+        'GigaChat-Plus',
+        'GigaChat-Pro',
+        'GigaChat-Max',
+        'GigaChat-2-Lite',
+        'GigaChat-2-Pro',
+        'GigaChat-2-Max',
+      ],
+    });
+  }
+
+  Future<Response> _setGigaSettings(Request req) async {
+    final body =
+        jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final chat = (body['chat_model'] as String?)?.trim();
+    final vision = (body['vision_model'] as String?)?.trim();
+    if (chat != null && chat.isNotEmpty) {
+      await appSettings.set('gigachat_chat_model', chat);
+    }
+    if (vision != null && vision.isNotEmpty) {
+      await appSettings.set('gigachat_vision_model', vision);
+    }
+    return jsonResponse(200, {'ok': true});
+  }
 
   Future<Response> _pendingCodes(Request req) async {
     final list = await otps.listPending();
@@ -427,11 +465,13 @@ class AiHandlers {
     required this.giga,
     required this.products,
     required this.profiles,
+    required this.appSettings,
   });
   final SessionRepository sessions;
   final GigaChatClient giga;
   final ProductRepository products;
   final ProfileRepository profiles;
+  final AppSettingsRepository appSettings;
 
   Router router() => Router()
     ..post('/ai/generate-routine', _withUser(_generate))
@@ -517,10 +557,12 @@ class AiHandlers {
         'Не выдумывай продукты, которых нет в списке.';
 
     try {
+      final chatModel = await appSettings.get('gigachat_chat_model') ??
+          giga.chatModel;
       final reply = await giga.chatWithMessages(
         systemPrompt: enrichedSystem,
         messages: messages,
-        model: giga.chatModel,
+        model: chatModel,
       );
       return jsonResponse(200, {
         'reply': reply.trim(),
@@ -601,12 +643,14 @@ class ScanHandlers {
     required this.sessions,
     required this.scans,
     required this.profiles,
+    required this.appSettings,
     this.giga,
   });
 
   final SessionRepository sessions;
   final ScanRepository scans;
   final ProfileRepository profiles;
+  final AppSettingsRepository appSettings;
   final GigaChatClient? giga;
 
   Router router() => Router()
@@ -653,12 +697,15 @@ class ScanHandlers {
     // analysis so the user still gets a result.
     if (giga != null && bytes != null && bytes.length > 1000) {
       try {
+        final visionModel =
+            await appSettings.get('gigachat_vision_model');
         final raw = await giga!.analyzePhoto(
           systemPrompt: visionScanSystemPrompt,
           userText:
               'Проанализируй кожу на этой селфи. Профиль: ${jsonEncode(profile)}',
           photoBytes: bytes,
           mime: mime,
+          model: visionModel,
         );
         final j = parseJsonReply(raw);
         analysis = _mergeAiAnalysis(analysis, j);
