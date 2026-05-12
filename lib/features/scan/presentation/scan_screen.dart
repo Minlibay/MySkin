@@ -1,14 +1,48 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+
 import 'package:camera/camera.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image_picker/image_picker.dart';
+
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../api/backend_api.dart';
 import '../domain/scan_result.dart';
+
+enum _LightLevel { tooDark, ok, tooBright, unknown }
+
+extension on _LightLevel {
+  String get label {
+    switch (this) {
+      case _LightLevel.tooDark:
+        return 'Темновато';
+      case _LightLevel.ok:
+        return 'Дневной свет · ОК';
+      case _LightLevel.tooBright:
+        return 'Слишком ярко';
+      case _LightLevel.unknown:
+        return 'Свет: проверяю…';
+    }
+  }
+
+  Color get color {
+    switch (this) {
+      case _LightLevel.ok:
+        return AppColors.success;
+      case _LightLevel.tooDark:
+      case _LightLevel.tooBright:
+        return AppColors.warning;
+      case _LightLevel.unknown:
+        return Colors.white.withOpacity(0.6);
+    }
+  }
+}
 
 class ScanScreen extends ConsumerStatefulWidget {
   const ScanScreen({
@@ -31,8 +65,21 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   late final AnimationController _pulse;
 
   CameraController? _camera;
+  CameraDescription? _cameraDesc;
   Future<void>? _initFuture;
   String? _cameraError;
+
+  late final FaceDetector _faceDetector;
+  bool _processing = false;
+  int _frameSkip = 0;
+  bool _streaming = false;
+
+  _LightLevel _light = _LightLevel.unknown;
+  // EMA of average luminance to avoid flicker.
+  double _lumaEma = -1;
+
+  _DetectedFace? _face;
+  DateTime _faceSeenAt = DateTime.fromMillisecondsSinceEpoch(0);
 
   @override
   void initState() {
@@ -42,6 +89,15 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       vsync: this,
       duration: const Duration(seconds: 3),
     )..repeat();
+    _faceDetector = FaceDetector(
+      options: FaceDetectorOptions(
+        enableLandmarks: true,
+        enableContours: true,
+        enableTracking: true,
+        performanceMode: FaceDetectorMode.fast,
+        minFaceSize: 0.25,
+      ),
+    );
     _initFuture = _initCamera();
   }
 
@@ -49,7 +105,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _pulse.dispose();
+    _stopStream();
     _camera?.dispose();
+    _faceDetector.close();
     super.dispose();
   }
 
@@ -59,6 +117,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     if (cam == null || !cam.value.isInitialized) return;
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
+      _stopStream();
       cam.dispose();
       _camera = null;
       if (mounted) setState(() {});
@@ -84,7 +143,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         front,
         ResolutionPreset.high,
         enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.jpeg,
+        imageFormatGroup: Platform.isAndroid
+            ? ImageFormatGroup.nv21
+            : ImageFormatGroup.bgra8888,
       );
       await ctrl.initialize();
       if (!mounted) {
@@ -93,8 +154,10 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       }
       setState(() {
         _camera = ctrl;
+        _cameraDesc = front;
         _cameraError = null;
       });
+      await _startStream();
     } on CameraException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -108,10 +171,198 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     }
   }
 
+  Future<void> _startStream() async {
+    final cam = _camera;
+    if (cam == null || _streaming) return;
+    try {
+      await cam.startImageStream(_onFrame);
+      _streaming = true;
+    } catch (e) {
+      // Image streaming might not be supported (e.g. emulator). Silent fallback.
+      debugPrint('startImageStream failed: $e');
+    }
+  }
+
+  Future<void> _stopStream() async {
+    final cam = _camera;
+    if (cam == null || !_streaming) return;
+    try {
+      await cam.stopImageStream();
+    } catch (_) {}
+    _streaming = false;
+  }
+
+  void _onFrame(CameraImage image) {
+    if (_processing) return;
+    // Process roughly every 3rd frame to keep CPU low.
+    _frameSkip = (_frameSkip + 1) % 3;
+    if (_frameSkip != 0) return;
+    _processing = true;
+    _analyzeFrame(image).whenComplete(() => _processing = false);
+  }
+
+  Future<void> _analyzeFrame(CameraImage image) async {
+    _updateLight(image);
+    await _detectFace(image);
+  }
+
+  void _updateLight(CameraImage image) {
+    if (image.planes.isEmpty) return;
+    double avg;
+    if (Platform.isAndroid) {
+      // NV21: first plane is Y (luminance, 0..255).
+      final y = image.planes.first.bytes;
+      avg = _sampleAverage(y, step: 137);
+    } else {
+      // BGRA8888 single plane — average of B,G,R.
+      final px = image.planes.first.bytes;
+      avg = _sampleAverageBgra(px, step: 41);
+    }
+    // Smooth with EMA so flicker doesn't toggle the pill rapidly.
+    _lumaEma = _lumaEma < 0 ? avg : (_lumaEma * 0.7 + avg * 0.3);
+    final level = _lumaEma < 55
+        ? _LightLevel.tooDark
+        : _lumaEma > 215
+            ? _LightLevel.tooBright
+            : _LightLevel.ok;
+    if (level != _light && mounted) {
+      setState(() => _light = level);
+    }
+  }
+
+  double _sampleAverage(Uint8List bytes, {required int step}) {
+    if (bytes.isEmpty) return 0;
+    var sum = 0;
+    var n = 0;
+    for (var i = 0; i < bytes.length; i += step) {
+      sum += bytes[i];
+      n++;
+    }
+    return n == 0 ? 0 : sum / n;
+  }
+
+  double _sampleAverageBgra(Uint8List bytes, {required int step}) {
+    if (bytes.length < 4) return 0;
+    final stride = 4 * step;
+    var sum = 0;
+    var n = 0;
+    for (var i = 0; i + 2 < bytes.length; i += stride) {
+      // luminance approximation: 0.114*B + 0.587*G + 0.299*R
+      sum += (0.114 * bytes[i] + 0.587 * bytes[i + 1] + 0.299 * bytes[i + 2])
+          .round();
+      n++;
+    }
+    return n == 0 ? 0 : sum / n;
+  }
+
+  Future<void> _detectFace(CameraImage image) async {
+    final desc = _cameraDesc;
+    if (desc == null) return;
+    final input = _toInputImage(image, desc);
+    if (input == null) return;
+    try {
+      final faces = await _faceDetector.processImage(input);
+      if (!mounted) return;
+      if (faces.isEmpty) {
+        // Hold the last face for a short window to avoid flicker between frames.
+        if (DateTime.now().difference(_faceSeenAt) >
+            const Duration(milliseconds: 600)) {
+          if (_face != null) setState(() => _face = null);
+        }
+        return;
+      }
+      // Pick the largest face (closest to camera).
+      faces.sort((a, b) =>
+          (b.boundingBox.width * b.boundingBox.height)
+              .compareTo(a.boundingBox.width * a.boundingBox.height));
+      final f = faces.first;
+      final rotated = _rotatedImageSize(image, desc);
+      final detected = _DetectedFace(
+        bounds: f.boundingBox,
+        imageSize: rotated,
+        mirror: desc.lensDirection == CameraLensDirection.front,
+        leftEye: f.landmarks[FaceLandmarkType.leftEye]?.position,
+        rightEye: f.landmarks[FaceLandmarkType.rightEye]?.position,
+        noseBase: f.landmarks[FaceLandmarkType.noseBase]?.position,
+        mouthLeft: f.landmarks[FaceLandmarkType.leftMouth]?.position,
+        mouthRight: f.landmarks[FaceLandmarkType.rightMouth]?.position,
+        mouthBottom: f.landmarks[FaceLandmarkType.bottomMouth]?.position,
+        leftCheek: f.landmarks[FaceLandmarkType.leftCheek]?.position,
+        rightCheek: f.landmarks[FaceLandmarkType.rightCheek]?.position,
+        faceContour: f.contours[FaceContourType.face]?.points,
+        leftEyeContour: f.contours[FaceContourType.leftEye]?.points,
+        rightEyeContour: f.contours[FaceContourType.rightEye]?.points,
+        upperLipTop: f.contours[FaceContourType.upperLipTop]?.points,
+        lowerLipBottom: f.contours[FaceContourType.lowerLipBottom]?.points,
+        noseBridge: f.contours[FaceContourType.noseBridge]?.points,
+      );
+      _faceSeenAt = DateTime.now();
+      setState(() => _face = detected);
+    } catch (e) {
+      debugPrint('Face detect error: $e');
+    }
+  }
+
+  Size _rotatedImageSize(CameraImage image, CameraDescription desc) {
+    final rot = desc.sensorOrientation;
+    if (rot == 90 || rot == 270) {
+      return Size(image.height.toDouble(), image.width.toDouble());
+    }
+    return Size(image.width.toDouble(), image.height.toDouble());
+  }
+
+  InputImage? _toInputImage(CameraImage image, CameraDescription desc) {
+    final rotation =
+        InputImageRotationValue.fromRawValue(desc.sensorOrientation) ??
+            InputImageRotation.rotation0deg;
+    final format =
+        InputImageFormatValue.fromRawValue(image.format.raw) ?? (Platform.isAndroid
+            ? InputImageFormat.nv21
+            : InputImageFormat.bgra8888);
+    if (Platform.isAndroid && format != InputImageFormat.nv21) return null;
+    if (Platform.isIOS && format != InputImageFormat.bgra8888) return null;
+    final plane = image.planes.first;
+    return InputImage.fromBytes(
+      bytes: plane.bytes,
+      metadata: InputImageMetadata(
+        size: Size(image.width.toDouble(), image.height.toDouble()),
+        rotation: rotation,
+        format: format,
+        bytesPerRow: plane.bytesPerRow,
+      ),
+    );
+  }
+
+  String _hint() {
+    if (_cameraError != null) return 'Камера недоступна';
+    if (_light == _LightLevel.tooDark) {
+      return 'Темновато — найди свет поярче';
+    }
+    if (_light == _LightLevel.tooBright) {
+      return 'Слишком ярко — отойди от окна';
+    }
+    final f = _face;
+    if (f == null) return 'Совмести овал лица с маркерами';
+    final fillRatio = (f.bounds.width * f.bounds.height) /
+        (f.imageSize.width * f.imageSize.height);
+    if (fillRatio < 0.07) return 'Чуть ближе';
+    if (fillRatio > 0.35) return 'Чуть дальше';
+    return 'Отлично — держи ровно';
+  }
+
+  String _headline() {
+    final f = _face;
+    if (_cameraError != null) return 'Не вижу камеру';
+    if (_light == _LightLevel.tooDark) {
+      return 'Нужно больше света —\nподойди к окну';
+    }
+    if (f == null) return 'Покажи лицо в кадр —\nи держи ровно';
+    return 'Чуть выше подбородок —\nи держи ровно';
+  }
+
   Future<void> _capture() async {
     final cam = _camera;
     if (cam == null || !cam.value.isInitialized) {
-      // Camera not ready — fall back to gallery so the user isn't stuck.
       return _pickFromGallery();
     }
     if (_busy) return;
@@ -120,6 +371,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       _error = null;
     });
     try {
+      await _stopStream();
       final pic = await cam.takePicture();
       final bytes = await File(pic.path).readAsBytes();
       await _uploadAndFinish(bytes, mime: 'image/jpeg');
@@ -129,6 +381,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         _busy = false;
         _error = 'Не получилось снять: $e';
       });
+      await _startStream();
     }
   }
 
@@ -174,17 +427,19 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
 
   @override
   Widget build(BuildContext context) {
+    final cam = _camera;
+    final previewAspect = cam?.value.aspectRatio ?? (16 / 9);
     return Scaffold(
       backgroundColor: const Color(0xFF0F0A0C),
       body: Stack(
         children: [
-          // Live camera feed (or dark fallback while initialising / on error)
-          Positioned.fill(child: _CameraBackdrop(
-            controller: _camera,
-            initFuture: _initFuture,
-            errorText: _cameraError,
-          )),
-          // dark vignette so the mesh is readable on bright frames
+          Positioned.fill(
+            child: _CameraBackdrop(
+              controller: _camera,
+              initFuture: _initFuture,
+              errorText: _cameraError,
+            ),
+          ),
           Positioned.fill(
             child: IgnorePointer(
               child: Container(
@@ -203,13 +458,18 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
               ),
             ),
           ),
-          // face mesh overlay
+          // Adaptive face mask overlay
           Positioned.fill(
             child: IgnorePointer(
               child: AnimatedBuilder(
                 animation: _pulse,
                 builder: (_, __) => CustomPaint(
-                  painter: _FaceMeshPainter(t: _pulse.value),
+                  painter: _FaceMeshPainter(
+                    t: _pulse.value,
+                    face: _face,
+                    previewAspect: previewAspect,
+                    locked: _light == _LightLevel.ok && _face != null,
+                  ),
                 ),
               ),
             ),
@@ -227,7 +487,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                           onTap: widget.onBack,
                         ),
                         const Spacer(),
-                        _LightStatusPill(),
+                        _LightStatusPill(level: _light),
                         const Spacer(),
                         _GlassButton(
                           icon: Icons.photo_library_rounded,
@@ -242,7 +502,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                     child: Column(
                       children: [
                         Text(
-                          'Чуть выше подбородок —\nи держи ровно',
+                          _headline(),
                           textAlign: TextAlign.center,
                           style: AppTypography.serifItalic(
                             fontSize: 26,
@@ -251,7 +511,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          'Совмести овал лица с маркерами',
+                          _hint(),
                           textAlign: TextAlign.center,
                           style: AppTypography.caption.copyWith(
                             color: Colors.white.withOpacity(0.6),
@@ -356,11 +616,6 @@ class _CameraBackdrop extends StatelessWidget {
         if (c == null || !c.value.isInitialized) {
           return Container(color: const Color(0xFF1A1116));
         }
-        // `aspectRatio` from the camera plugin is the sensor's native
-        // (landscape) ratio, e.g. 16:9 ≈ 1.78. On a portrait screen we want
-        // the rotated dimensions, so multiply width by aspectRatio to get
-        // the portrait height. FittedBox.cover then crops sides instead of
-        // stretching the face horizontally.
         final size = MediaQuery.of(context).size;
         return ClipRect(
           child: OverflowBox(
@@ -382,96 +637,360 @@ class _CameraBackdrop extends StatelessWidget {
   }
 }
 
+/// Snapshot of the latest detected face, in image-coordinates (already
+/// rotated to upright by ML Kit). The painter projects these onto the
+/// canvas using [_previewRect].
+class _DetectedFace {
+  _DetectedFace({
+    required this.bounds,
+    required this.imageSize,
+    required this.mirror,
+    this.leftEye,
+    this.rightEye,
+    this.noseBase,
+    this.mouthLeft,
+    this.mouthRight,
+    this.mouthBottom,
+    this.leftCheek,
+    this.rightCheek,
+    this.faceContour,
+    this.leftEyeContour,
+    this.rightEyeContour,
+    this.upperLipTop,
+    this.lowerLipBottom,
+    this.noseBridge,
+  });
+
+  final Rect bounds;
+  final Size imageSize;
+  final bool mirror;
+  final math.Point<int>? leftEye;
+  final math.Point<int>? rightEye;
+  final math.Point<int>? noseBase;
+  final math.Point<int>? mouthLeft;
+  final math.Point<int>? mouthRight;
+  final math.Point<int>? mouthBottom;
+  final math.Point<int>? leftCheek;
+  final math.Point<int>? rightCheek;
+  final List<math.Point<int>>? faceContour;
+  final List<math.Point<int>>? leftEyeContour;
+  final List<math.Point<int>>? rightEyeContour;
+  final List<math.Point<int>>? upperLipTop;
+  final List<math.Point<int>>? lowerLipBottom;
+  final List<math.Point<int>>? noseBridge;
+}
+
 class _FaceMeshPainter extends CustomPainter {
-  _FaceMeshPainter({required this.t});
+  _FaceMeshPainter({
+    required this.t,
+    required this.face,
+    required this.previewAspect,
+    required this.locked,
+  });
+
   final double t;
+  final _DetectedFace? face;
+  final double previewAspect;
+  final bool locked;
+
+  /// On-screen rect occupied by the camera preview, matching the layout in
+  /// [_CameraBackdrop]: width = screen, height = screen * aspectRatio,
+  /// vertically centred, overflow clipped.
+  Rect _previewRect(Size canvas) {
+    final h = canvas.width * previewAspect;
+    final top = (canvas.height - h) / 2;
+    return Rect.fromLTWH(0, top, canvas.width, h);
+  }
+
+  Offset _map(num x, num y, Size imgSize, bool mirror, Rect rect) {
+    double mx = x.toDouble();
+    if (mirror) mx = imgSize.width - mx;
+    final sx = rect.width / imgSize.width;
+    final sy = rect.height / imgSize.height;
+    return Offset(rect.left + mx * sx, rect.top + y.toDouble() * sy);
+  }
 
   @override
   void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height * 0.42;
+    final f = face;
+    if (f == null) {
+      _paintPlaceholder(canvas, size);
+      return;
+    }
+    final rect = _previewRect(size);
 
-    final ovalPaint = Paint()
-      ..style = PaintingStyle.stroke
-      ..color = AppColors.primaryAccent.withOpacity(0.7)
-      ..strokeWidth = 1;
-    final dash = Path();
-    final ovalRect =
-        Rect.fromCenter(center: Offset(cx, cy), width: 220, height: 300);
-    _addDashedOval(dash, ovalRect, dashWidth: 4, dashSpace: 5);
-    canvas.drawPath(dash, ovalPaint);
+    Offset mp(num x, num y) => _map(x, y, f.imageSize, f.mirror, rect);
+    Offset mPoint(math.Point<int> p) => mp(p.x, p.y);
 
+    // Face oval — derived from bounding box, slightly inflated.
+    final left = f.mirror ? f.imageSize.width - f.bounds.right : f.bounds.left;
+    final centerImg =
+        Offset(left + f.bounds.width / 2, f.bounds.top + f.bounds.height / 2);
+    final center = Offset(
+      rect.left + centerImg.dx * (rect.width / f.imageSize.width),
+      rect.top + centerImg.dy * (rect.height / f.imageSize.height),
+    );
+    final wScale = rect.width / f.imageSize.width;
+    final hScale = rect.height / f.imageSize.height;
+    final ovalRect = Rect.fromCenter(
+      center: center,
+      width: f.bounds.width * wScale * 1.08,
+      height: f.bounds.height * hScale * 1.18,
+    );
+
+    final accent = locked
+        ? AppColors.success
+        : AppColors.primaryAccent;
+
+    // 1) Face contour from ML Kit (preferred) — falls back to dashed oval.
+    final contour = f.faceContour;
+    if (contour != null && contour.length > 6) {
+      final path = Path();
+      for (var i = 0; i < contour.length; i++) {
+        final pt = mPoint(contour[i]);
+        if (i == 0) {
+          path.moveTo(pt.dx, pt.dy);
+        } else {
+          path.lineTo(pt.dx, pt.dy);
+        }
+      }
+      path.close();
+      canvas.drawPath(
+        _dashed(path, dash: 5, gap: 4),
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..color = accent.withOpacity(0.75)
+          ..strokeWidth = 1.2,
+      );
+    } else {
+      final dashed = Path();
+      _addDashedOval(dashed, ovalRect, dashWidth: 4, dashSpace: 5);
+      canvas.drawPath(
+        dashed,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..color = accent.withOpacity(0.75)
+          ..strokeWidth = 1.2,
+      );
+    }
+
+    // 2) Mesh — curved guides aligned to detected landmarks.
     final mesh = Paint()
       ..style = PaintingStyle.stroke
-      ..color = AppColors.primaryAccent.withOpacity(0.4)
+      ..color = accent.withOpacity(0.35)
       ..strokeWidth = 0.7;
-    final paths = [
-      Path()
-        ..moveTo(cx - 80, cy - 60)
-        ..quadraticBezierTo(cx, cy - 90, cx + 80, cy - 60),
-      Path()
-        ..moveTo(cx - 90, cy - 25)
-        ..quadraticBezierTo(cx, cy - 45, cx + 90, cy - 25),
-      Path()
-        ..moveTo(cx - 80, cy + 30)
-        ..quadraticBezierTo(cx, cy + 20, cx + 80, cy + 30),
-      Path()
-        ..moveTo(cx - 70, cy + 80)
-        ..quadraticBezierTo(cx, cy + 80, cx + 70, cy + 80),
-      Path()
-        ..moveTo(cx - 80, cy - 60)
-        ..lineTo(cx - 70, cy + 120),
-      Path()
-        ..moveTo(cx, cy - 90)
-        ..lineTo(cx, cy + 130),
-      Path()
-        ..moveTo(cx + 80, cy - 60)
-        ..lineTo(cx + 70, cy + 120),
-    ];
-    for (final p in paths) {
-      canvas.drawPath(p, mesh);
+    final lEye = f.leftEye, rEye = f.rightEye;
+    if (lEye != null && rEye != null) {
+      final l = mPoint(lEye);
+      final r = mPoint(rEye);
+      final brow = Path()
+        ..moveTo(l.dx - 18, l.dy - 22)
+        ..quadraticBezierTo(
+          (l.dx + r.dx) / 2,
+          ((l.dy + r.dy) / 2) - 40,
+          r.dx + 18,
+          r.dy - 22,
+        );
+      canvas.drawPath(brow, mesh);
+      final eyeLine = Path()
+        ..moveTo(l.dx - 24, l.dy)
+        ..quadraticBezierTo(
+          (l.dx + r.dx) / 2,
+          ((l.dy + r.dy) / 2) - 6,
+          r.dx + 24,
+          r.dy,
+        );
+      canvas.drawPath(eyeLine, mesh);
+    }
+    final ml = f.mouthLeft, mr = f.mouthRight, mb = f.mouthBottom;
+    if (ml != null && mr != null) {
+      final l = mPoint(ml);
+      final r = mPoint(mr);
+      final lipLine = Path()
+        ..moveTo(l.dx - 14, l.dy)
+        ..quadraticBezierTo(
+          (l.dx + r.dx) / 2,
+          mb != null ? mPoint(mb).dy : ((l.dy + r.dy) / 2 + 6),
+          r.dx + 14,
+          r.dy,
+        );
+      canvas.drawPath(lipLine, mesh);
+    }
+    // Vertical guides (nose bridge + side temples)
+    final nb = f.noseBridge;
+    if (nb != null && nb.length > 1) {
+      final path = Path();
+      for (var i = 0; i < nb.length; i++) {
+        final pt = mPoint(nb[i]);
+        if (i == 0) {
+          path.moveTo(pt.dx, pt.dy);
+        } else {
+          path.lineTo(pt.dx, pt.dy);
+        }
+      }
+      canvas.drawPath(path, mesh);
     }
 
-    final anchor = Paint()..color = AppColors.primaryAccent;
-    final anchorPositions = [
-      Offset(cx - 35, cy - 25),
-      Offset(cx + 35, cy - 25),
-      Offset(cx, cy + 25),
-      Offset(cx - 28, cy + 80),
-      Offset(cx + 28, cy + 80),
-      Offset(cx, cy + 110),
-    ];
-    for (final p in anchorPositions) {
-      canvas.drawCircle(p, 2.5, anchor);
+    // 3) Eye outlines from contour points.
+    void drawEye(List<math.Point<int>>? pts) {
+      if (pts == null || pts.length < 4) return;
+      final path = Path();
+      for (var i = 0; i < pts.length; i++) {
+        final p = mPoint(pts[i]);
+        if (i == 0) {
+          path.moveTo(p.dx, p.dy);
+        } else {
+          path.lineTo(p.dx, p.dy);
+        }
+      }
+      path.close();
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..color = accent.withOpacity(0.85)
+          ..strokeWidth = 1.0,
+      );
     }
+
+    drawEye(f.leftEyeContour);
+    drawEye(f.rightEyeContour);
+
+    // 4) Mouth outline (upper + lower lip)
+    void drawLip(List<math.Point<int>>? pts) {
+      if (pts == null || pts.length < 2) return;
+      final path = Path();
+      for (var i = 0; i < pts.length; i++) {
+        final p = mPoint(pts[i]);
+        if (i == 0) {
+          path.moveTo(p.dx, p.dy);
+        } else {
+          path.lineTo(p.dx, p.dy);
+        }
+      }
+      canvas.drawPath(
+        path,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..color = accent.withOpacity(0.85)
+          ..strokeWidth = 1.0,
+      );
+    }
+
+    drawLip(f.upperLipTop);
+    drawLip(f.lowerLipBottom);
+
+    // 5) Landmark anchors
+    final anchorPaint = Paint()..color = accent;
+    final anchors = <Offset>[
+      if (f.leftEye != null) mPoint(f.leftEye!),
+      if (f.rightEye != null) mPoint(f.rightEye!),
+      if (f.noseBase != null) mPoint(f.noseBase!),
+      if (f.mouthLeft != null) mPoint(f.mouthLeft!),
+      if (f.mouthRight != null) mPoint(f.mouthRight!),
+      if (f.mouthBottom != null) mPoint(f.mouthBottom!),
+      if (f.leftCheek != null) mPoint(f.leftCheek!),
+      if (f.rightCheek != null) mPoint(f.rightCheek!),
+    ];
+    for (final p in anchors) {
+      canvas.drawCircle(p, 2.6, anchorPaint);
+      canvas.drawCircle(
+        p,
+        5,
+        Paint()
+          ..style = PaintingStyle.stroke
+          ..color = accent.withOpacity(0.4)
+          ..strokeWidth = 1,
+      );
+    }
+
+    // 6) Pulse halo around the face
+    final pulseR = (ovalRect.width / 2) +
+        8 +
+        10 * (math.sin(t * 2 * math.pi) + 1) / 2;
+    final pulseO = 0.15 + 0.4 * ((math.cos(t * 2 * math.pi) + 1) / 2);
+    canvas.drawCircle(
+      ovalRect.center,
+      pulseR,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..color = accent.withOpacity(pulseO)
+        ..strokeWidth = 1.2,
+    );
+
+    // 7) Bracket corners around face bbox — visual lock indicator.
+    _drawBrackets(canvas, ovalRect.inflate(20), accent, locked);
+  }
+
+  void _paintPlaceholder(Canvas canvas, Size size) {
+    final cx = size.width / 2;
+    final cy = size.height * 0.42;
+    final accent = AppColors.primaryAccent.withOpacity(0.6);
+
+    final ovalRect =
+        Rect.fromCenter(center: Offset(cx, cy), width: 220, height: 300);
+    final dash = Path();
+    _addDashedOval(dash, ovalRect, dashWidth: 4, dashSpace: 5);
+    canvas.drawPath(
+      dash,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..color = accent
+        ..strokeWidth = 1,
+    );
 
     final pulseR = 145 + 12 * (math.sin(t * 2 * math.pi) + 1) / 2;
-    final pulseO = 0.2 + 0.5 * ((math.cos(t * 2 * math.pi) + 1) / 2);
-    final pulse = Paint()
-      ..style = PaintingStyle.stroke
-      ..color = AppColors.primaryAccent.withOpacity(pulseO)
-      ..strokeWidth = 1.2;
-    canvas.drawCircle(Offset(cx, cy), pulseR, pulse);
+    final pulseO = 0.2 + 0.4 * ((math.cos(t * 2 * math.pi) + 1) / 2);
+    canvas.drawCircle(
+      Offset(cx, cy),
+      pulseR,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..color = AppColors.primaryAccent.withOpacity(pulseO)
+        ..strokeWidth = 1.2,
+    );
 
-    final cornerColor = AppColors.primaryAccent;
-    final corners = [
-      (cx - 130, cy - 150, 0.0),
-      (cx + 130, cy - 150, 90.0),
-      (cx - 130, cy + 200, 270.0),
-      (cx + 130, cy + 200, 180.0),
-    ];
-    for (final c in corners) {
-      canvas.save();
-      canvas.translate(c.$1, c.$2);
-      canvas.rotate(c.$3 * math.pi / 180);
-      final cp = Paint()
-        ..color = cornerColor
-        ..strokeWidth = 2
-        ..strokeCap = StrokeCap.round;
-      canvas.drawLine(const Offset(0, 0), const Offset(18, 0), cp);
-      canvas.drawLine(const Offset(0, 0), const Offset(0, 18), cp);
-      canvas.restore();
+    _drawBrackets(
+      canvas,
+      Rect.fromLTRB(cx - 130, cy - 150, cx + 130, cy + 200),
+      AppColors.primaryAccent,
+      false,
+    );
+  }
+
+  void _drawBrackets(Canvas canvas, Rect r, Color color, bool locked) {
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = locked ? 2.4 : 2
+      ..strokeCap = StrokeCap.round;
+    const len = 18.0;
+    // top-left
+    canvas.drawLine(r.topLeft, r.topLeft + const Offset(len, 0), paint);
+    canvas.drawLine(r.topLeft, r.topLeft + const Offset(0, len), paint);
+    // top-right
+    canvas.drawLine(r.topRight, r.topRight + const Offset(-len, 0), paint);
+    canvas.drawLine(r.topRight, r.topRight + const Offset(0, len), paint);
+    // bottom-left
+    canvas.drawLine(r.bottomLeft, r.bottomLeft + const Offset(len, 0), paint);
+    canvas.drawLine(r.bottomLeft, r.bottomLeft + const Offset(0, -len), paint);
+    // bottom-right
+    canvas.drawLine(
+        r.bottomRight, r.bottomRight + const Offset(-len, 0), paint);
+    canvas.drawLine(
+        r.bottomRight, r.bottomRight + const Offset(0, -len), paint);
+  }
+
+  Path _dashed(Path src, {required double dash, required double gap}) {
+    final out = Path();
+    for (final m in src.computeMetrics()) {
+      var d = 0.0;
+      while (d < m.length) {
+        final next = math.min(d + dash, m.length);
+        out.addPath(m.extractPath(d, next), Offset.zero);
+        d = next + gap;
+      }
     }
+    return out;
   }
 
   void _addDashedOval(Path target, Rect rect,
@@ -488,7 +1007,11 @@ class _FaceMeshPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant _FaceMeshPainter old) => old.t != t;
+  bool shouldRepaint(covariant _FaceMeshPainter old) =>
+      old.t != t ||
+      old.face != face ||
+      old.previewAspect != previewAspect ||
+      old.locked != locked;
 }
 
 class _GlassButton extends StatelessWidget {
@@ -515,9 +1038,14 @@ class _GlassButton extends StatelessWidget {
 }
 
 class _LightStatusPill extends StatelessWidget {
+  const _LightStatusPill({required this.level});
+  final _LightLevel level;
+
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final color = level.color;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 250),
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
       decoration: BoxDecoration(
         color: Colors.white.withOpacity(0.18),
@@ -531,19 +1059,14 @@ class _LightStatusPill extends StatelessWidget {
             width: 8,
             height: 8,
             decoration: BoxDecoration(
-              color: AppColors.success,
+              color: color,
               shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: AppColors.success,
-                  blurRadius: 8,
-                ),
-              ],
+              boxShadow: [BoxShadow(color: color, blurRadius: 8)],
             ),
           ),
           const SizedBox(width: 8),
           Text(
-            'Дневной свет · ОК',
+            level.label,
             style: AppTypography.caption.copyWith(
               color: Colors.white,
               fontSize: 12,
