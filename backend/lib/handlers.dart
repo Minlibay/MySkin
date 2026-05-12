@@ -105,19 +105,23 @@ class AuthHandlers {
     }
 
     final code = _generateCode();
+    final ok = await sendSmsViaSmsc(phone: phone, code: code, env: env);
+    // Store the OTP regardless of SMS outcome: when the SMS provider fails
+    // (e.g. balance gone) an admin can still relay the plaintext code to the
+    // user via Codes page in the admin panel.
     await otps.upsert(
       phone: phone,
       codeHash: hashOtp(phone, code, _pepper),
+      codePlain: code,
       ttl: const Duration(minutes: 5),
+      smsSent: ok,
     );
-
-    final ok = await sendSmsViaSmsc(phone: phone, code: code, env: env);
-    if (!ok) {
-      await otps.delete(phone);
-      return jsonResponse(502, {'error': 'sms_provider_failed'});
-    }
-    return jsonResponse(
-        200, {'ok': true, 'phone': phone, 'expires_in_sec': 300});
+    return jsonResponse(200, {
+      'ok': true,
+      'phone': phone,
+      'expires_in_sec': 300,
+      'sms_sent': ok,
+    });
   }
 
   Future<Response> _verifyCode(Request req) async {
@@ -185,6 +189,7 @@ class AdminHandlers {
     required this.scans,
     required this.shelf,
     required this.products,
+    required this.otps,
   });
 
   final AdminRepository admins;
@@ -194,6 +199,7 @@ class AdminHandlers {
   final ScanRepository scans;
   final UserProductRepository shelf;
   final ProductRepository products;
+  final OtpRepository otps;
 
   static const _uuid = Uuid();
 
@@ -210,7 +216,8 @@ class AdminHandlers {
     ..post('/admin/products', _withAdmin(_createProduct))
     ..patch('/admin/products/<id>', _withAdmin(_updateProduct))
     ..delete('/admin/products/<id>', _withAdmin(_deleteProduct))
-    ..post('/admin/products/<id>/photo', _withAdmin(_uploadProductPhoto));
+    ..post('/admin/products/<id>/photo', _withAdmin(_uploadProductPhoto))
+    ..get('/admin/pending-codes', _withAdmin(_pendingCodes));
 
   Handler _withAdmin(Handler inner) => (Request req) async {
         final token = _bearer(req);
@@ -268,6 +275,22 @@ class AdminHandlers {
 
   Future<Response> _stats(Request req) async =>
       jsonResponse(200, await stats.overview());
+
+  Future<Response> _pendingCodes(Request req) async {
+    final list = await otps.listPending();
+    return jsonResponse(200, {
+      'items': list
+          .map((it) => {
+                'phone': it.phone,
+                'code': it.code,
+                'sms_sent': it.smsSent,
+                'attempts': it.attempts,
+                'created_at': it.createdAt.toUtc().toIso8601String(),
+                'expires_at': it.expiresAt.toUtc().toIso8601String(),
+              })
+          .toList(),
+    });
+  }
 
   Future<Response> _getUser(Request req) async {
     final id = req.params['id']!;

@@ -306,20 +306,60 @@ class OtpRepository {
   Future<void> upsert({
     required String phone,
     required String codeHash,
+    required String codePlain,
     required Duration ttl,
+    required bool smsSent,
   }) async {
     await db.execute(
       Sql.named('''
-        INSERT INTO otp_codes (phone, code_hash, expires_at, attempts, created_at)
-        VALUES (@p, @h, now() + (@s::text || ' seconds')::interval, 0, now())
+        INSERT INTO otp_codes (phone, code_hash, code_plain, sms_sent,
+                               expires_at, attempts, created_at)
+        VALUES (@p, @h, @cp, @ss,
+                now() + (@s::text || ' seconds')::interval, 0, now())
         ON CONFLICT (phone) DO UPDATE
           SET code_hash = EXCLUDED.code_hash,
+              code_plain = EXCLUDED.code_plain,
+              sms_sent = EXCLUDED.sms_sent,
               expires_at = EXCLUDED.expires_at,
               attempts = 0,
               created_at = now()
       '''),
-      parameters: {'p': phone, 'h': codeHash, 's': ttl.inSeconds.toString()},
+      parameters: {
+        'p': phone,
+        'h': codeHash,
+        'cp': codePlain,
+        'ss': smsSent,
+        's': ttl.inSeconds.toString(),
+      },
     );
+  }
+
+  Future<
+      List<
+          ({
+            String phone,
+            String code,
+            bool smsSent,
+            DateTime createdAt,
+            DateTime expiresAt,
+            int attempts,
+          })>> listPending() async {
+    final r = await db.execute(Sql.named('''
+      SELECT phone, code_plain, sms_sent, created_at, expires_at, attempts
+      FROM otp_codes
+      WHERE code_plain IS NOT NULL AND expires_at > now()
+      ORDER BY created_at DESC
+    '''));
+    return r
+        .map((row) => (
+              phone: row[0] as String,
+              code: row[1] as String,
+              smsSent: row[2] as bool,
+              createdAt: row[3] as DateTime,
+              expiresAt: row[4] as DateTime,
+              attempts: row[5] as int,
+            ))
+        .toList();
   }
 
   Future<({String codeHash, DateTime expiresAt, int attempts})?> get(

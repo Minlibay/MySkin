@@ -6,6 +6,7 @@ const NAV = [
   { to: '/', label: 'Дашборд', icon: '◆' },
   { to: '/users', label: 'Юзеры', icon: '◌' },
   { to: '/products', label: 'Каталог', icon: '◇' },
+  { to: '/codes', label: 'Коды', icon: '⎘' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

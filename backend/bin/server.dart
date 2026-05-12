@@ -47,6 +47,7 @@ void main(List<String> args) async {
     scans: scans,
     shelf: shelf,
     products: products,
+    otps: otps,
   );
   final me = MeHandlers(
     sessions: sessions,

@@ -139,6 +139,19 @@ export const api = {
   productPhotoUrl(id: string) {
     return `${this.baseUrl}/products/${id}/photo`;
   },
+
+  pendingCodes() {
+    return this.request<{ items: PendingCode[] }>('/admin/pending-codes');
+  },
+};
+
+export type PendingCode = {
+  phone: string;
+  code: string;
+  sms_sent: boolean;
+  attempts: number;
+  created_at: string;
+  expires_at: string;
 };
 
 export class ApiError extends Error {
