@@ -465,12 +465,14 @@ class AiHandlers {
     required this.giga,
     required this.products,
     required this.profiles,
+    required this.scans,
     required this.appSettings,
   });
   final SessionRepository sessions;
   final GigaChatClient giga;
   final ProductRepository products;
   final ProfileRepository profiles;
+  final ScanRepository scans;
   final AppSettingsRepository appSettings;
 
   Router router() => Router()
@@ -550,11 +552,41 @@ class AiHandlers {
               'match_score': e.score,
             })
         .toList();
-    final enrichedSystem =
-        '$linaChatSystemPrompt\n\nДоступный каталог (топ-${top.length} '
-        'по соответствию профилю пользователя):\n${jsonEncode(catalogHint)}\n\n'
-        'Когда уместно, упоминай эти продукты по бренду и названию. '
-        'Не выдумывай продукты, которых нет в списке.';
+    final recentScans = await scans.listForUser(user.id, limit: 1);
+    final scanHint = recentScans.isEmpty
+        ? null
+        : {
+            'score': recentScans.first.score,
+            'hydration': recentScans.first.hydration,
+            'sebum': recentScans.first.sebum,
+            'tone': recentScans.first.tone,
+            'pores': recentScans.first.pores,
+            'zones': recentScans.first.zones,
+            'insight': recentScans.first.insight,
+            'created_at':
+                recentScans.first.createdAt.toUtc().toIso8601String(),
+          };
+
+    final enrichedSystem = [
+      linaChatSystemPrompt,
+      '',
+      'Профиль пользователя (используй для персонализации ответов, '
+          'учитывай тип кожи, чувствительность, цели и бюджет; '
+          'обращайся по имени, если оно указано):',
+      jsonEncode(profile),
+      if (scanHint != null) ...[
+        '',
+        'Последний скан кожи пользователя (метрики 0-100, бери в расчёт):',
+        jsonEncode(scanHint),
+      ],
+      '',
+      'Доступный каталог (топ-${top.length} '
+          'по соответствию профилю пользователя):',
+      jsonEncode(catalogHint),
+      '',
+      'Когда уместно, упоминай эти продукты по бренду и названию. '
+          'Не выдумывай продукты, которых нет в списке.',
+    ].join('\n');
 
     try {
       final chatModel = await appSettings.get('gigachat_chat_model') ??

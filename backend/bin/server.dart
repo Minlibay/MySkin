@@ -85,6 +85,7 @@ void main(List<String> args) async {
           giga: giga,
           products: products,
           profiles: profiles,
+          scans: scans,
           appSettings: appSettings,
         )
       : null;
