@@ -115,6 +115,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     if (lastResult != null) ...[
+                      // ───────── СЕГОДНЯ ─────────
+                      const EyebrowText(
+                        'Сегодня',
+                        color: AppColors.roseDeep,
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
                       _TodayHeroCard(result: lastResult),
                       const SizedBox(height: AppSpacing.sm + 2),
                       _LinaNudge(
@@ -125,7 +131,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       ),
                       const SizedBox(height: AppSpacing.xl),
                       _SectionRow(
-                        title: 'Сегодня · ритуал',
+                        title: 'Ритуал',
                         actionLabel: 'Открыть',
                         onTap: widget.onOpenRoutine,
                       ),
@@ -135,7 +141,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         today: today,
                         onTap: widget.onOpenRoutine,
                       ),
-                      const SizedBox(height: AppSpacing.xl),
+                      const SizedBox(height: AppSpacing.sm + 2),
+                      _StreakCard(streak: today?.streak ?? 0),
+                      const SizedBox(height: AppSpacing.xxl),
+                      const _ZoneDivider(),
+                      const SizedBox(height: AppSpacing.lg),
+                      // ───────── ПОДОБРАТЬ И УЗНАТЬ ─────────
+                      const EyebrowText(
+                        'Подобрать и узнать',
+                        color: AppColors.roseDeep,
+                      ),
+                      const SizedBox(height: AppSpacing.sm),
                       _SectionRow(
                         title: 'Подобрано тебе',
                         actionLabel: 'Каталог',
@@ -147,8 +163,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         onOpen: widget.onOpenProduct,
                         onOpenCatalog: widget.onOpenCatalog,
                       ),
-                      const SizedBox(height: AppSpacing.sm + 2),
-                      _StreakCard(streak: today?.streak ?? 0),
                       const SizedBox(height: AppSpacing.xl),
                       _SectionRow(title: 'Обновить уход'),
                       const SizedBox(height: AppSpacing.sm),
@@ -874,6 +888,32 @@ class _LinaNudge extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Quiet horizontal rule used to break the home feed into two visual zones —
+/// what matters today vs. what to explore next. Fades to transparent at the
+/// edges so it never looks like a hard structural seam.
+class _ZoneDivider extends StatelessWidget {
+  const _ZoneDivider();
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 1,
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            colors: [
+              AppColors.dividerStrong.withOpacity(0),
+              AppColors.dividerStrong,
+              AppColors.dividerStrong.withOpacity(0),
+            ],
+            stops: const [0, 0.5, 1],
           ),
         ),
       ),
