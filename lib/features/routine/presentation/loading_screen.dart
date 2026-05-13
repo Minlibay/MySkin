@@ -48,26 +48,35 @@ class _AILoadingScreenState extends State<AILoadingScreen> {
       body: SafeArea(
         child: Padding(
           padding: const EdgeInsets.all(AppSpacing.lg),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
+          child: Stack(
+            alignment: Alignment.center,
             children: [
-              const Spacer(),
-              const BreathingLoader(size: 120),
-              const SizedBox(height: AppSpacing.xl),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 400),
-                child: Text(
-                  _messages[_index],
-                  key: ValueKey(_index),
-                  style: AppTypography.h2,
-                  textAlign: TextAlign.center,
+              Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    const BreathingLoader(size: 120),
+                    const SizedBox(height: AppSpacing.xl),
+                    AnimatedSwitcher(
+                      duration: const Duration(milliseconds: 400),
+                      child: Text(
+                        _messages[_index],
+                        key: ValueKey(_index),
+                        style: AppTypography.h2,
+                        textAlign: TextAlign.center,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const Spacer(),
               if (widget.onCancel != null)
-                TextButton(
-                  onPressed: widget.onCancel,
-                  child: const Text('Отмена'),
+                Positioned(
+                  bottom: 0,
+                  child: TextButton(
+                    onPressed: widget.onCancel,
+                    child: const Text('Отмена'),
+                  ),
                 ),
             ],
           ),

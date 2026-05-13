@@ -197,13 +197,16 @@ class _LoadingPane extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        const BreathingLoader(),
-        const SizedBox(height: AppSpacing.lg),
-        Text(label, style: AppTypography.body),
-      ],
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          const BreathingLoader(),
+          const SizedBox(height: AppSpacing.lg),
+          Text(label, style: AppTypography.body, textAlign: TextAlign.center),
+        ],
+      ),
     );
   }
 }
