@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/telemetry/telemetry.dart';
 import 'core/theme/app_theme.dart';
 import 'features/ai/domain/models.dart';
 import 'features/derm2/presentation/derm_state_machine_controller.dart' show aiServiceProvider;
@@ -215,6 +216,12 @@ class _AppShellState extends ConsumerState<_AppShell> {
     try {
       await ref.read(backendApiProvider).putProfile(profile);
     } catch (_) {/* best-effort */}
+    Telemetry.event('onboarding_complete', data: {
+      'has_name': profile.name != null,
+      'gender': profile.gender,
+      'skin_type': profile.skinType,
+      'concerns_count': profile.concerns.length,
+    });
     // Brand-new user: ask for notification permission once and schedule
     // the default morning+evening ritual reminders.
     final granted =

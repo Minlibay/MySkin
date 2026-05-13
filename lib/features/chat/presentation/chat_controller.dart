@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/telemetry/telemetry.dart';
 import '../../api/backend_api.dart';
 import '../../catalog/domain/product.dart';
 import '../domain/chat_message.dart';
@@ -88,6 +89,10 @@ class ChatController extends StateNotifier<ChatState> {
       sending: true,
       clearError: true,
     );
+
+    Telemetry.event('lina_message_sent', data: {
+      'history_length': state.messages.length,
+    });
 
     try {
       final reply = await _api.chat(

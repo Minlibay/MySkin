@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image_picker/image_picker.dart';
+import '../../../core/telemetry/telemetry.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
@@ -94,8 +95,11 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         enableLandmarks: true,
         enableContours: true,
         enableTracking: true,
-        performanceMode: FaceDetectorMode.fast,
-        minFaceSize: 0.25,
+        // Accurate mode places eye/nose/mouth landmarks far more precisely
+        // than fast mode at the cost of ~30-50ms/frame — fine because we
+        // throttle to every 3rd frame anyway.
+        performanceMode: FaceDetectorMode.accurate,
+        minFaceSize: 0.2,
       ),
     );
     _initFuture = _initCamera();
@@ -277,12 +281,21 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
               .compareTo(a.boundingBox.width * a.boundingBox.height));
       final f = faces.first;
       final rotated = _rotatedImageSize(image, desc);
+      final leftEyeContour = f.contours[FaceContourType.leftEye]?.points;
+      final rightEyeContour = f.contours[FaceContourType.rightEye]?.points;
+      // Eye centroid from the 16-point contour beats the single-landmark
+      // approximation by a wide margin: the landmark sits near the brow
+      // sometimes, the centroid lands on the pupil consistently.
+      final leftEyePos = _centroid(leftEyeContour) ??
+          f.landmarks[FaceLandmarkType.leftEye]?.position;
+      final rightEyePos = _centroid(rightEyeContour) ??
+          f.landmarks[FaceLandmarkType.rightEye]?.position;
       final detected = _DetectedFace(
         bounds: f.boundingBox,
         imageSize: rotated,
         mirror: desc.lensDirection == CameraLensDirection.front,
-        leftEye: f.landmarks[FaceLandmarkType.leftEye]?.position,
-        rightEye: f.landmarks[FaceLandmarkType.rightEye]?.position,
+        leftEye: leftEyePos,
+        rightEye: rightEyePos,
         noseBase: f.landmarks[FaceLandmarkType.noseBase]?.position,
         mouthLeft: f.landmarks[FaceLandmarkType.leftMouth]?.position,
         mouthRight: f.landmarks[FaceLandmarkType.rightMouth]?.position,
@@ -290,17 +303,86 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         leftCheek: f.landmarks[FaceLandmarkType.leftCheek]?.position,
         rightCheek: f.landmarks[FaceLandmarkType.rightCheek]?.position,
         faceContour: f.contours[FaceContourType.face]?.points,
-        leftEyeContour: f.contours[FaceContourType.leftEye]?.points,
-        rightEyeContour: f.contours[FaceContourType.rightEye]?.points,
+        leftEyeContour: leftEyeContour,
+        rightEyeContour: rightEyeContour,
         upperLipTop: f.contours[FaceContourType.upperLipTop]?.points,
         lowerLipBottom: f.contours[FaceContourType.lowerLipBottom]?.points,
         noseBridge: f.contours[FaceContourType.noseBridge]?.points,
       );
       _faceSeenAt = DateTime.now();
-      setState(() => _face = detected);
+      // Blend with the previous frame to suppress per-frame jitter on the
+      // landmarks — the painter still snaps to a new face on big jumps.
+      final smoothed = _blendFaces(_face, detected, alpha: 0.55);
+      setState(() => _face = smoothed);
     } catch (e) {
       debugPrint('Face detect error: $e');
     }
+  }
+
+  math.Point<int>? _centroid(List<math.Point<int>>? pts) {
+    if (pts == null || pts.isEmpty) return null;
+    var sx = 0, sy = 0;
+    for (final p in pts) {
+      sx += p.x;
+      sy += p.y;
+    }
+    return math.Point(sx ~/ pts.length, sy ~/ pts.length);
+  }
+
+  /// Per-landmark EMA: blends previous smoothed face with the fresh
+  /// detection. Falls back to the new face when no prior frame, when
+  /// image geometry changed, or when the face moved far enough that
+  /// blending would visibly drag behind (>20% of face width).
+  _DetectedFace _blendFaces(
+      _DetectedFace? prev, _DetectedFace next, {required double alpha}) {
+    if (prev == null ||
+        prev.imageSize != next.imageSize ||
+        prev.mirror != next.mirror) {
+      return next;
+    }
+    final dx = (prev.bounds.center.dx - next.bounds.center.dx).abs();
+    final dy = (prev.bounds.center.dy - next.bounds.center.dy).abs();
+    final jumpThreshold = next.bounds.width * 0.2;
+    if (dx > jumpThreshold || dy > jumpThreshold) return next;
+
+    math.Point<int>? lp(math.Point<int>? a, math.Point<int>? b) {
+      if (a == null) return b;
+      if (b == null) return a;
+      return math.Point(
+        (a.x * alpha + b.x * (1 - alpha)).round(),
+        (a.y * alpha + b.y * (1 - alpha)).round(),
+      );
+    }
+
+    Rect lb(Rect a, Rect b) => Rect.fromLTRB(
+          a.left * alpha + b.left * (1 - alpha),
+          a.top * alpha + b.top * (1 - alpha),
+          a.right * alpha + b.right * (1 - alpha),
+          a.bottom * alpha + b.bottom * (1 - alpha),
+        );
+
+    return _DetectedFace(
+      bounds: lb(prev.bounds, next.bounds),
+      imageSize: next.imageSize,
+      mirror: next.mirror,
+      leftEye: lp(prev.leftEye, next.leftEye),
+      rightEye: lp(prev.rightEye, next.rightEye),
+      noseBase: lp(prev.noseBase, next.noseBase),
+      mouthLeft: lp(prev.mouthLeft, next.mouthLeft),
+      mouthRight: lp(prev.mouthRight, next.mouthRight),
+      mouthBottom: lp(prev.mouthBottom, next.mouthBottom),
+      leftCheek: lp(prev.leftCheek, next.leftCheek),
+      rightCheek: lp(prev.rightCheek, next.rightCheek),
+      // Contours move with the face; snapping to the new ones is fine —
+      // smoothing them point-by-point is expensive and contours are
+      // already low-frequency relative to the landmark dots.
+      faceContour: next.faceContour,
+      leftEyeContour: next.leftEyeContour,
+      rightEyeContour: next.rightEyeContour,
+      upperLipTop: next.upperLipTop,
+      lowerLipBottom: next.lowerLipBottom,
+      noseBridge: next.noseBridge,
+    );
   }
 
   Size _rotatedImageSize(CameraImage image, CameraDescription desc) {
@@ -421,6 +503,10 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
           photoBase64: b64,
           mime: mime,
         );
+    Telemetry.event('scan_uploaded', data: {
+      'photo_kb': (bytes.length / 1024).round(),
+      'score': result.score,
+    });
     if (!mounted) return;
     widget.onResult(result);
   }
