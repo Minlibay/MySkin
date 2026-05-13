@@ -1,18 +1,27 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'app_colors.dart';
 
 /// Glow / soft luxury typography:
 /// - Cormorant Garamond — serif for headlines and italic accents
 /// - Inter — clean sans for UI body
 /// - JetBrains Mono — uppercase eyebrow labels with letter-spacing
+///
+/// Fonts are **bundled** in the app (see pubspec.yaml `fonts:` section), not
+/// fetched from Google Fonts at runtime. This is what guarantees the type
+/// looks identical on iOS and Android from the first frame — no flash, no
+/// network dependency, no platform-specific fallback shifting kerning.
 class AppTypography {
   AppTypography._();
+
+  static const String _serif = 'CormorantGaramond';
+  static const String _sans = 'Inter';
+  static const String _mono = 'JetBrainsMono';
 
   // ===== Serif (Cormorant Garamond) =====
 
   /// 36px serif — used for hero titles in onboarding/scan/result.
-  static final TextStyle display = GoogleFonts.cormorantGaramond(
+  static const TextStyle display = TextStyle(
+    fontFamily: _serif,
     fontSize: 36,
     fontWeight: FontWeight.w500,
     height: 1.05,
@@ -21,7 +30,8 @@ class AppTypography {
   );
 
   /// 32px serif — large premium accent.
-  static final TextStyle serifLg = GoogleFonts.cormorantGaramond(
+  static const TextStyle serifLg = TextStyle(
+    fontFamily: _serif,
     fontSize: 32,
     fontWeight: FontWeight.w500,
     height: 1.1,
@@ -30,7 +40,8 @@ class AppTypography {
   );
 
   /// 28px serif H1.
-  static final TextStyle h1 = GoogleFonts.cormorantGaramond(
+  static const TextStyle h1 = TextStyle(
+    fontFamily: _serif,
     fontSize: 28,
     fontWeight: FontWeight.w500,
     height: 1.15,
@@ -39,7 +50,8 @@ class AppTypography {
   );
 
   /// 22px serif H2.
-  static final TextStyle h2 = GoogleFonts.cormorantGaramond(
+  static const TextStyle h2 = TextStyle(
+    fontFamily: _serif,
     fontSize: 22,
     fontWeight: FontWeight.w500,
     height: 1.2,
@@ -48,7 +60,8 @@ class AppTypography {
   );
 
   /// 18px serif H3.
-  static final TextStyle h3 = GoogleFonts.cormorantGaramond(
+  static const TextStyle h3 = TextStyle(
+    fontFamily: _serif,
     fontSize: 18,
     fontWeight: FontWeight.w500,
     height: 1.25,
@@ -57,7 +70,8 @@ class AppTypography {
 
   /// Italic accent in roseDeep. Use inside Text.rich or with the [serifItalic] helper.
   static TextStyle serifItalic({double fontSize = 28, Color? color}) =>
-      GoogleFonts.cormorantGaramond(
+      TextStyle(
+        fontFamily: _serif,
         fontSize: fontSize,
         fontWeight: FontWeight.w400,
         fontStyle: FontStyle.italic,
@@ -68,49 +82,56 @@ class AppTypography {
 
   // ===== Sans (Inter) =====
 
-  static final TextStyle body = GoogleFonts.inter(
+  static const TextStyle body = TextStyle(
+    fontFamily: _sans,
     fontSize: 16,
     fontWeight: FontWeight.w400,
     height: 1.45,
     color: AppColors.textPrimary,
   );
 
-  static final TextStyle bodyMedium = GoogleFonts.inter(
+  static const TextStyle bodyMedium = TextStyle(
+    fontFamily: _sans,
     fontSize: 16,
     fontWeight: FontWeight.w500,
     height: 1.4,
     color: AppColors.textPrimary,
   );
 
-  static final TextStyle bodySm = GoogleFonts.inter(
+  static const TextStyle bodySm = TextStyle(
+    fontFamily: _sans,
     fontSize: 14,
     fontWeight: FontWeight.w400,
     height: 1.45,
     color: AppColors.textPrimary,
   );
 
-  static final TextStyle bodySecondary = GoogleFonts.inter(
+  static const TextStyle bodySecondary = TextStyle(
+    fontFamily: _sans,
     fontSize: 16,
     fontWeight: FontWeight.w400,
     height: 1.45,
     color: AppColors.textSecondary,
   );
 
-  static final TextStyle caption = GoogleFonts.inter(
+  static const TextStyle caption = TextStyle(
+    fontFamily: _sans,
     fontSize: 13,
     fontWeight: FontWeight.w400,
     height: 1.4,
     color: AppColors.textSecondary,
   );
 
-  static final TextStyle micro = GoogleFonts.inter(
+  static const TextStyle micro = TextStyle(
+    fontFamily: _sans,
     fontSize: 11,
     fontWeight: FontWeight.w500,
     height: 1.3,
     color: AppColors.textSecondary,
   );
 
-  static final TextStyle button = GoogleFonts.inter(
+  static const TextStyle button = TextStyle(
+    fontFamily: _sans,
     fontSize: 16,
     fontWeight: FontWeight.w500,
     letterSpacing: 0.1,
@@ -121,7 +142,8 @@ class AppTypography {
 
   /// 10px UPPERCASE letter-spaced — section eyebrows.
   /// Use with `text.toUpperCase()` since style alone doesn't capitalise.
-  static TextStyle eyebrow({Color? color}) => GoogleFonts.jetBrainsMono(
+  static TextStyle eyebrow({Color? color}) => TextStyle(
+        fontFamily: _mono,
         fontSize: 10,
         fontWeight: FontWeight.w500,
         letterSpacing: 1.6,
