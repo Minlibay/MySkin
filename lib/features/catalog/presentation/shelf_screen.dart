@@ -4,6 +4,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/eyebrow_text.dart';
+import '../../../core/widgets/feedback_state.dart';
 import '../../../core/widgets/glow_background.dart';
 import '../../api/backend_api.dart';
 import '../domain/product.dart';
@@ -110,9 +111,15 @@ class _ShelfScreenState extends ConsumerState<ShelfScreen> {
                     future: _future,
                     builder: (_, snap) {
                       if (snap.connectionState != ConnectionState.done) {
-                        return const Center(
-                            child: CircularProgressIndicator(
-                                color: AppColors.primaryAccent));
+                        return FeedbackState.loading();
+                      }
+                      if (snap.hasError) {
+                        return FeedbackState.error(
+                          onRetry: () => setState(() {
+                            _future =
+                                ref.read(backendApiProvider).getShelf();
+                          }),
+                        );
                       }
                       final all = snap.data ?? const [];
                       if (all.isEmpty) {

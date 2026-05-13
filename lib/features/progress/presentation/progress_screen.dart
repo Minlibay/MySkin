@@ -5,6 +5,7 @@ import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/eyebrow_text.dart';
+import '../../../core/widgets/feedback_state.dart';
 import '../../../core/widgets/glow_background.dart';
 import '../../api/backend_api.dart';
 import '../../scan/presentation/scan_result_screen.dart';
@@ -65,22 +66,10 @@ class _ProgressScreenState extends ConsumerState<ProgressScreen> {
                     future: _future,
                     builder: (_, snap) {
                       if (snap.connectionState != ConnectionState.done) {
-                        return const Center(
-                          child: CircularProgressIndicator(
-                              color: AppColors.primaryAccent),
-                        );
+                        return FeedbackState.loading();
                       }
                       if (snap.hasError) {
-                        return Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(AppSpacing.lg),
-                            child: Text(
-                              'Не удалось загрузить.\n${snap.error}',
-                              style: AppTypography.bodySecondary,
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                        );
+                        return FeedbackState.error(onRetry: _reload);
                       }
                       final data = snap.data!;
                       if (data.points.isEmpty) {

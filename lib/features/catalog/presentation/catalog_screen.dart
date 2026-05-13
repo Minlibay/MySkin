@@ -5,6 +5,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_chip.dart';
 import '../../../core/widgets/eyebrow_text.dart';
+import '../../../core/widgets/feedback_state.dart';
 import '../../../core/widgets/glow_background.dart';
 import '../../api/backend_api.dart';
 import '../domain/product.dart';
@@ -74,27 +75,18 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                     future: _future,
                     builder: (_, snap) {
                       if (snap.connectionState != ConnectionState.done) {
-                        return const Center(
-                            child: CircularProgressIndicator(
-                                color: AppColors.primaryAccent));
+                        return FeedbackState.loading();
                       }
                       if (snap.hasError) {
-                        return Center(
-                          child: Padding(
-                            padding: const EdgeInsets.all(AppSpacing.lg),
-                            child: Text(
-                              'Не удалось загрузить каталог.\n${snap.error}',
-                              style: AppTypography.bodySecondary,
-                              textAlign: TextAlign.center,
-                            ),
-                          ),
-                        );
+                        return FeedbackState.error(onRetry: _refresh);
                       }
                       final items = snap.data ?? const [];
                       if (items.isEmpty) {
-                        return Center(
-                          child: Text('Ничего не нашли',
-                              style: AppTypography.bodySecondary),
+                        return FeedbackState.empty(
+                          icon: Icons.filter_alt_off_rounded,
+                          title: 'Ничего не нашли',
+                          body:
+                              'По выбранным фильтрам пока ничего нет. Попробуй другую категорию.',
                         );
                       }
                       return GridView.builder(

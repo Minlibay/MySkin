@@ -5,6 +5,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/eyebrow_text.dart';
+import '../../../core/widgets/feedback_state.dart';
 import '../../../core/widgets/glow_background.dart';
 import '../../../core/widgets/metric_ring.dart';
 import '../../../core/widgets/pill.dart';
@@ -69,15 +70,15 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
               future: _future,
               builder: (_, snap) {
                 if (snap.connectionState != ConnectionState.done) {
-                  return const Center(
-                      child: CircularProgressIndicator(
-                          color: AppColors.primaryAccent));
+                  return FeedbackState.loading();
                 }
                 if (snap.hasError) {
-                  return Center(
-                    child: Text('Не удалось загрузить.\n${snap.error}',
-                        style: AppTypography.bodySecondary,
-                        textAlign: TextAlign.center),
+                  return FeedbackState.error(
+                    onRetry: () => setState(() {
+                      _future = ref
+                          .read(backendApiProvider)
+                          .getProduct(widget.slug);
+                    }),
                   );
                 }
                 final p = snap.data!;
