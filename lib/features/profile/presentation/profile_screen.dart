@@ -10,6 +10,7 @@ import '../../../core/widgets/glow_background.dart';
 import '../../ai/domain/models.dart';
 import '../../api/backend_api.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../notifications/data/local_notifications.dart';
 import '../domain/user_settings.dart';
 
 class ProfileScreen extends ConsumerStatefulWidget {
@@ -62,6 +63,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   Future<void> _save(UserSettings updated) async {
+    final wasMorning = _settings.notifications.morning;
+    final wasEvening = _settings.notifications.evening;
     setState(() => _settings = updated);
     try {
       await ref.read(backendApiProvider).updateSettings(updated);
@@ -70,7 +73,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Не удалось сохранить: $e')),
       );
+      return;
     }
+    // If the user just enabled a reminder, ask the OS for notification
+    // permission before scheduling — otherwise zonedSchedule silently no-ops.
+    final justEnabled = (updated.notifications.morning && !wasMorning) ||
+        (updated.notifications.evening && !wasEvening);
+    if (justEnabled) {
+      await LocalNotificationsService.instance.requestPermission();
+    }
+    // ignore: unawaited_futures
+    LocalNotificationsService.instance.reschedule(updated.notifications);
   }
 
   Future<void> _updateProfile(SkinProfile next) async {

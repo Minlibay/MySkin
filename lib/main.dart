@@ -9,6 +9,7 @@ import 'features/auth/data/http_auth_service.dart';
 import 'features/auth/domain/auth_service.dart';
 import 'features/auth/presentation/auth_controller.dart';
 import 'features/derm2/presentation/derm_state_machine_controller.dart';
+import 'features/notifications/data/local_notifications.dart';
 
 const bool kUseMockAI =
     bool.fromEnvironment('USE_MOCK_AI', defaultValue: false);
@@ -22,8 +23,11 @@ const String kBackendUrl = String.fromEnvironment(
   defaultValue: 'https://api.xn--80allhkb1j.xn--p1ai',
 );
 
-void main() {
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Fire-and-forget — plugin init does not block UI render.
+  // Schedule lives across app launches in OS, so we only init the bridge here.
+  LocalNotificationsService.instance.init();
 
   final AuthService authService = kUseMockAuth
       ? MockAuthService()

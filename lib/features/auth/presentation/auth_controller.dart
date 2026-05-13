@@ -1,4 +1,5 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../notifications/data/local_notifications.dart';
 import '../data/auth_storage.dart';
 import '../domain/auth_service.dart';
 
@@ -138,6 +139,10 @@ class AuthController extends StateNotifier<AuthState> {
     final token = state.token;
     if (token != null) await _service.logout(token);
     await _storage.clear();
+    // Drop any pending ritual reminders so the next signed-out user / fresh
+    // login starts with a clean schedule.
+    // ignore: unawaited_futures
+    LocalNotificationsService.instance.cancelAll();
     state = const AuthState(status: AuthStatus.unauthenticated);
   }
 }

@@ -15,8 +15,10 @@ import 'features/catalog/presentation/product_detail_screen.dart';
 import 'features/catalog/presentation/shelf_screen.dart';
 import 'features/derm2/presentation/derm2_screen.dart';
 import 'features/home/presentation/home_screen.dart';
+import 'features/notifications/data/local_notifications.dart';
 import 'features/notifications/presentation/notifications_screen.dart';
 import 'features/onboarding/presentation/onboarding_screen.dart';
+import 'features/profile/domain/user_settings.dart';
 import 'features/profile/presentation/profile_screen.dart';
 import 'features/progress/presentation/progress_screen.dart';
 import 'features/ritual/domain/today.dart';
@@ -174,10 +176,12 @@ class _AppShellState extends ConsumerState<_AppShell> {
         api.getProfile(),
         api.listRoutines(),
         api.getToday(),
+        api.getSettings(),
       ]);
       final profile = results[0] as SkinProfile?;
       final routines = results[1] as List<RoutineRecord>;
       final today = results[2] as Today;
+      final settings = results[3] as UserSettings;
       if (!mounted) return;
       setState(() {
         if (profile != null) _profile = profile;
@@ -185,6 +189,10 @@ class _AppShellState extends ConsumerState<_AppShell> {
         _today = today;
         _view = profile != null ? _Shell.home : _Shell.onboarding;
       });
+      // Schedule local ritual reminders based on the user's stored settings.
+      // No-op (silently) if OS-level notification permission was never granted.
+      // ignore: unawaited_futures
+      LocalNotificationsService.instance.reschedule(settings.notifications);
     } catch (_) {
       if (!mounted) return;
       setState(() => _view = _Shell.bootstrapError);
@@ -207,6 +215,15 @@ class _AppShellState extends ConsumerState<_AppShell> {
     try {
       await ref.read(backendApiProvider).putProfile(profile);
     } catch (_) {/* best-effort */}
+    // Brand-new user: ask for notification permission once and schedule
+    // the default morning+evening ritual reminders.
+    final granted =
+        await LocalNotificationsService.instance.requestPermission();
+    if (granted) {
+      // ignore: unawaited_futures
+      LocalNotificationsService.instance
+          .reschedule(const NotificationSettings());
+    }
   }
 
   Future<void> _runStandard() async {
