@@ -126,7 +126,7 @@ class _CodeInputScreenState extends ConsumerState<CodeInputScreen> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text('Введи код', style: AppTypography.h1),
-              const SizedBox(height: AppSpacing.xxs),
+              const SizedBox(height: AppSpacing.xs),
               Text(
                 'Отправили на ${widget.phone}',
                 style: AppTypography.bodySecondary,

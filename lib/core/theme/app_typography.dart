@@ -19,13 +19,17 @@ class AppTypography {
 
   // ===== Serif (Cormorant Garamond) =====
 
+  // Letter-spacing convention across the serif scale: about -1% of font size.
+  // The previous -2% was tuned for an unloaded Google Fonts fallback and
+  // visibly squashed Cyrillic glyphs in Cormorant Garamond at large sizes.
+
   /// 36px serif — used for hero titles in onboarding/scan/result.
   static const TextStyle display = TextStyle(
     fontFamily: _serif,
     fontSize: 36,
     fontWeight: FontWeight.w500,
-    height: 1.05,
-    letterSpacing: -0.72,
+    height: 1.1,
+    letterSpacing: -0.36,
     color: AppColors.textPrimary,
   );
 
@@ -34,8 +38,8 @@ class AppTypography {
     fontFamily: _serif,
     fontSize: 32,
     fontWeight: FontWeight.w500,
-    height: 1.1,
-    letterSpacing: -0.64,
+    height: 1.12,
+    letterSpacing: -0.32,
     color: AppColors.textPrimary,
   );
 
@@ -44,8 +48,8 @@ class AppTypography {
     fontFamily: _serif,
     fontSize: 28,
     fontWeight: FontWeight.w500,
-    height: 1.15,
-    letterSpacing: -0.56,
+    height: 1.2,
+    letterSpacing: -0.28,
     color: AppColors.textPrimary,
   );
 
@@ -54,8 +58,8 @@ class AppTypography {
     fontFamily: _serif,
     fontSize: 22,
     fontWeight: FontWeight.w500,
-    height: 1.2,
-    letterSpacing: -0.22,
+    height: 1.25,
+    letterSpacing: -0.11,
     color: AppColors.textPrimary,
   );
 

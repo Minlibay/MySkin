@@ -55,19 +55,24 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
             children: [
               const SizedBox(height: AppSpacing.xxl),
               const EyebrowText('Моя кожа', color: AppColors.roseDeep),
-              const SizedBox(height: AppSpacing.md),
+              const SizedBox(height: AppSpacing.sm),
               Text.rich(
                 TextSpan(
+                  style: AppTypography.display,
                   children: [
-                    TextSpan(text: 'Привет, ', style: AppTypography.display),
+                    const TextSpan(text: 'Привет, '),
                     TextSpan(
                       text: 'красавица',
-                      style: AppTypography.serifItalic(fontSize: 36),
+                      style: AppTypography.serifItalic(fontSize: 36).copyWith(
+                        // Match parent's letter-spacing so the two halves
+                        // share a single optical rhythm at the boundary.
+                        letterSpacing: -0.36,
+                      ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(height: AppSpacing.xs),
+              const SizedBox(height: AppSpacing.md),
               Text(
                 'Введи номер — пришлём код для входа.',
                 style: AppTypography.bodySecondary.copyWith(fontSize: 15),
