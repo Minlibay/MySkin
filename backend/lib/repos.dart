@@ -1563,7 +1563,7 @@ class ProfileRepository {
   Future<Map<String, dynamic>?> get(String userId) async {
     final r = await db.execute(
       Sql.named('''
-        SELECT name, skin_type, pores, concerns, acne_type, sensitivity,
+        SELECT name, gender, skin_type, pores, concerns, acne_type, sensitivity,
                sensitivity_reaction, budget, extras, updated_at
         FROM skin_profiles WHERE user_id = @u
       '''),
@@ -1573,26 +1573,28 @@ class ProfileRepository {
     final row = r.first;
     return {
       'name': row[0],
-      'skin_type': row[1],
-      'pores': row[2],
-      'concerns': row[3],
-      'acne_type': row[4],
-      'sensitivity': row[5],
-      'sensitivity_reaction': row[6],
-      'budget': row[7],
-      'extras': row[8],
-      'updated_at': (row[9] as DateTime).toUtc().toIso8601String(),
+      'gender': row[1],
+      'skin_type': row[2],
+      'pores': row[3],
+      'concerns': row[4],
+      'acne_type': row[5],
+      'sensitivity': row[6],
+      'sensitivity_reaction': row[7],
+      'budget': row[8],
+      'extras': row[9],
+      'updated_at': (row[10] as DateTime).toUtc().toIso8601String(),
     };
   }
 
   Future<void> upsert(String userId, Map<String, dynamic> profile) async {
     await db.execute(
       Sql.named('''
-        INSERT INTO skin_profiles (user_id, name, skin_type, pores, concerns,
+        INSERT INTO skin_profiles (user_id, name, gender, skin_type, pores, concerns,
             acne_type, sensitivity, sensitivity_reaction, budget, extras, updated_at)
-        VALUES (@u, @n, @st, @p, @c::jsonb, @at, @s, @sr, @b, @e::jsonb, now())
+        VALUES (@u, @n, @g, @st, @p, @c::jsonb, @at, @s, @sr, @b, @e::jsonb, now())
         ON CONFLICT (user_id) DO UPDATE SET
           name = EXCLUDED.name,
+          gender = EXCLUDED.gender,
           skin_type = EXCLUDED.skin_type,
           pores = EXCLUDED.pores,
           concerns = EXCLUDED.concerns,
@@ -1606,6 +1608,7 @@ class ProfileRepository {
       parameters: {
         'u': userId,
         'n': profile['name'],
+        'g': profile['gender'],
         'st': profile['skin_type'],
         'p': profile['pores'],
         'c': jsonEncode(profile['concerns'] ?? const []),

@@ -153,7 +153,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       _SectionRow(title: 'Обновить уход'),
                       const SizedBox(height: AppSpacing.sm),
                     ] else ...[
-                      const _EmptyHero(),
+                      _EmptyHero(isMale: profile.isMale),
                       const SizedBox(height: AppSpacing.xl),
                       _SectionRow(title: 'Подобрать уход'),
                       const SizedBox(height: AppSpacing.sm),
@@ -1070,10 +1070,16 @@ class _StreakCard extends StatelessWidget {
 }
 
 class _EmptyHero extends StatelessWidget {
-  const _EmptyHero();
+  const _EmptyHero({this.isMale = false});
+
+  final bool isMale;
 
   @override
   Widget build(BuildContext context) {
+    // "Готов(а)" — gender-aware. Default (unknown gender) reads as feminine
+    // because that's the historical default; once the user picks during
+    // onboarding it switches to "Готов" for men.
+    final ready = isMale ? 'Готов подобрать ' : 'Готова подобрать ';
     return Container(
       padding: const EdgeInsets.all(22),
       decoration: BoxDecoration(
@@ -1094,7 +1100,7 @@ class _EmptyHero extends StatelessWidget {
           Text.rich(
             TextSpan(
               children: [
-                TextSpan(text: 'Готова подобрать ', style: AppTypography.h1),
+                TextSpan(text: ready, style: AppTypography.h1),
                 TextSpan(
                     text: 'первый',
                     style: AppTypography.serifItalic(fontSize: 28)),

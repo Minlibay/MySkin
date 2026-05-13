@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
@@ -8,6 +9,7 @@ import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../core/widgets/eyebrow_text.dart';
 import '../../../core/widgets/glow_background.dart';
+import '../../legal/presentation/legal_viewer_screen.dart';
 import 'auth_controller.dart';
 import 'phone_formatter.dart';
 
@@ -60,12 +62,10 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
                 TextSpan(
                   style: AppTypography.display,
                   children: [
-                    const TextSpan(text: 'Привет, '),
+                    const TextSpan(text: 'Бережный уход '),
                     TextSpan(
-                      text: 'красавица',
+                      text: 'каждый день',
                       style: AppTypography.serifItalic(fontSize: 36).copyWith(
-                        // Match parent's letter-spacing so the two halves
-                        // share a single optical rhythm at the boundary.
                         letterSpacing: -0.36,
                       ),
                     ),
@@ -108,6 +108,7 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
               ],
               const SizedBox(height: AppSpacing.lg),
               Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   SizedBox(
                     width: 22,
@@ -122,12 +123,7 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
                     ),
                   ),
                   const SizedBox(width: AppSpacing.sm),
-                  Expanded(
-                    child: Text(
-                      'Согласна с условиями и политикой конфиденциальности',
-                      style: AppTypography.caption,
-                    ),
-                  ),
+                  Expanded(child: _LegalConsentText(onOpenLegal: _openLegal)),
                 ],
               ),
               const Spacer(),
@@ -147,6 +143,18 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
     );
   }
 
+  void _openLegal(String docKey, String title) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => LegalViewerScreen(
+          docKey: docKey,
+          title: title,
+          onBack: () => Navigator.of(context).pop(),
+        ),
+      ),
+    );
+  }
+
   String _errorText(String code) => switch (code) {
         'invalid_phone' => 'Проверь номер',
         'too_many_requests' => 'Подожди немного перед повторной отправкой',
@@ -154,4 +162,71 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
         'network_error' => 'Нет связи с сервером',
         _ => 'Что-то пошло не так',
       };
+}
+
+/// Checkbox label with three clickable legal-doc links.
+/// Wraps onto multiple lines, tapping any underlined fragment opens the
+/// document in a LegalViewerScreen.
+class _LegalConsentText extends StatefulWidget {
+  const _LegalConsentText({required this.onOpenLegal});
+  final void Function(String key, String title) onOpenLegal;
+
+  @override
+  State<_LegalConsentText> createState() => _LegalConsentTextState();
+}
+
+class _LegalConsentTextState extends State<_LegalConsentText> {
+  final _recognizers = <TapGestureRecognizer>[];
+
+  @override
+  void dispose() {
+    for (final r in _recognizers) {
+      r.dispose();
+    }
+    super.dispose();
+  }
+
+  TapGestureRecognizer _tap(String key, String title) {
+    final r = TapGestureRecognizer()
+      ..onTap = () => widget.onOpenLegal(key, title);
+    _recognizers.add(r);
+    return r;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final linkStyle = AppTypography.caption.copyWith(
+      color: AppColors.roseDeep,
+      decoration: TextDecoration.underline,
+      decorationColor: AppColors.roseDeep,
+    );
+    return Text.rich(
+      TextSpan(
+        style: AppTypography.caption,
+        children: [
+          const TextSpan(text: 'Продолжая, принимаю '),
+          TextSpan(
+            text: 'Пользовательское соглашение',
+            style: linkStyle,
+            recognizer: _tap('legal_terms', 'Пользовательское соглашение'),
+          ),
+          const TextSpan(text: ', '),
+          TextSpan(
+            text: 'Политику конфиденциальности',
+            style: linkStyle,
+            recognizer:
+                _tap('legal_privacy', 'Политика конфиденциальности'),
+          ),
+          const TextSpan(text: ' и '),
+          TextSpan(
+            text: 'Согласие на обработку персональных данных',
+            style: linkStyle,
+            recognizer: _tap(
+                'legal_consent', 'Согласие на обработку персональных данных'),
+          ),
+          const TextSpan(text: '.'),
+        ],
+      ),
+    );
+  }
 }

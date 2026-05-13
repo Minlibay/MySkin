@@ -8,6 +8,7 @@ const NAV = [
   { to: '/products', label: 'Каталог', icon: '◇' },
   { to: '/codes', label: 'Коды', icon: '⎘' },
   { to: '/settings', label: 'GigaChat', icon: '✦' },
+  { to: '/legal', label: 'Документы', icon: '§' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {

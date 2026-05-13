@@ -154,6 +154,23 @@ export const api = {
       body: JSON.stringify(input),
     });
   },
+
+  getLegal() {
+    return this.request<LegalDocs>('/admin/settings/legal');
+  },
+
+  setLegal(input: { terms?: string; privacy?: string; consent?: string }) {
+    return this.request<{ ok: boolean }>('/admin/settings/legal', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+};
+
+export type LegalDocs = {
+  terms: string;
+  privacy: string;
+  consent: string;
 };
 
 export type GigaSettings = {

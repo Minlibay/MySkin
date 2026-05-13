@@ -3,6 +3,7 @@ import { useAuth } from './auth';
 import Layout from './components/Layout';
 import Codes from './pages/Codes';
 import Dashboard from './pages/Dashboard';
+import Legal from './pages/Legal';
 import Login from './pages/Login';
 import Products from './pages/Products';
 import Settings from './pages/Settings';
@@ -30,6 +31,7 @@ export default function App() {
         <Route path="/products" element={<Products />} />
         <Route path="/codes" element={<Codes />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/legal" element={<Legal />} />
         <Route path="/login" element={<Navigate to="/" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

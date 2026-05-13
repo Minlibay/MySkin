@@ -221,7 +221,9 @@ class AdminHandlers {
     ..post('/admin/products/<id>/photo', _withAdmin(_uploadProductPhoto))
     ..get('/admin/pending-codes', _withAdmin(_pendingCodes))
     ..get('/admin/settings/gigachat', _withAdmin(_getGigaSettings))
-    ..put('/admin/settings/gigachat', _withAdmin(_setGigaSettings));
+    ..put('/admin/settings/gigachat', _withAdmin(_setGigaSettings))
+    ..get('/admin/settings/legal', _withAdmin(_getLegal))
+    ..put('/admin/settings/legal', _withAdmin(_setLegal));
 
   Handler _withAdmin(Handler inner) => (Request req) async {
         final token = _bearer(req);
@@ -310,6 +312,31 @@ class AdminHandlers {
     }
     if (vision != null && vision.isNotEmpty) {
       await appSettings.set('gigachat_vision_model', vision);
+    }
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _getLegal(Request req) async {
+    final m = await appSettings.getMany(
+        const ['legal_terms', 'legal_privacy', 'legal_consent']);
+    return jsonResponse(200, {
+      'terms': m['legal_terms'] ?? '',
+      'privacy': m['legal_privacy'] ?? '',
+      'consent': m['legal_consent'] ?? '',
+    });
+  }
+
+  Future<Response> _setLegal(Request req) async {
+    final body =
+        jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final mapping = {
+      'legal_terms': body['terms'] as String?,
+      'legal_privacy': body['privacy'] as String?,
+      'legal_consent': body['consent'] as String?,
+    };
+    for (final entry in mapping.entries) {
+      final v = entry.value;
+      if (v != null) await appSettings.set(entry.key, v);
     }
     return jsonResponse(200, {'ok': true});
   }
@@ -1252,6 +1279,32 @@ class RateLimiter {
     if (list.length >= maxPerHour) return const Duration(hours: 1);
     list.add(now);
     return null;
+  }
+}
+
+/// Public read of legal documents (privacy policy, terms, consent).
+/// Content is stored in app_settings under fixed keys; admin can edit it from
+/// the admin panel without redeploying. No auth — anybody can read the legal
+/// documents of an app they're considering signing up to.
+class LegalHandlers {
+  LegalHandlers({required this.appSettings});
+
+  final AppSettingsRepository appSettings;
+
+  static const _allowed = {'legal_terms', 'legal_privacy', 'legal_consent'};
+
+  Router router() => Router()..get('/legal/<key>', _get);
+
+  Future<Response> _get(Request req) async {
+    final key = req.params['key']!;
+    if (!_allowed.contains(key)) {
+      return jsonResponse(404, {'error': 'unknown_legal_key'});
+    }
+    final value = await appSettings.get(key);
+    return jsonResponse(200, {
+      'key': key,
+      'markdown': value ?? '',
+    });
   }
 }
 

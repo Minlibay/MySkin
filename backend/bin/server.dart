@@ -86,6 +86,8 @@ void main(List<String> args) async {
     notifications: notifications,
   );
 
+  final legalHandlers = LegalHandlers(appSettings: appSettings);
+
   final ai = giga != null
       ? AiHandlers(
           sessions: sessions,
@@ -104,7 +106,8 @@ void main(List<String> args) async {
     ..mount('/', me.router().call)
     ..mount('/', catalog.router().call)
     ..mount('/', scanHandlers.router().call)
-    ..mount('/', notificationHandlers.router().call);
+    ..mount('/', notificationHandlers.router().call)
+    ..mount('/', legalHandlers.router().call);
   if (ai != null) root.mount('/', ai.router().call);
 
   final allowedOrigins = (env['CORS_ALLOWED_ORIGINS'] ?? '*')

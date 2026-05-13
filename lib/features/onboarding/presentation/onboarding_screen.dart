@@ -209,14 +209,15 @@ class _StepView extends StatelessWidget {
 
   int? _stepNumberFor(OnboardingStepId id) => switch (id) {
         OnboardingStepId.name => 1,
-        OnboardingStepId.skinType => 2,
-        OnboardingStepId.skinTypeHelp => 2,
-        OnboardingStepId.pores => 3,
-        OnboardingStepId.concerns => 3,
-        OnboardingStepId.acneType => 4,
-        OnboardingStepId.sensitivity => 4,
-        OnboardingStepId.sensitivityReaction => 5,
-        OnboardingStepId.budget => 6,
+        OnboardingStepId.gender => 2,
+        OnboardingStepId.skinType => 3,
+        OnboardingStepId.skinTypeHelp => 3,
+        OnboardingStepId.pores => 4,
+        OnboardingStepId.concerns => 4,
+        OnboardingStepId.acneType => 5,
+        OnboardingStepId.sensitivity => 5,
+        OnboardingStepId.sensitivityReaction => 6,
+        OnboardingStepId.budget => 7,
         OnboardingStepId.done => null,
       };
 

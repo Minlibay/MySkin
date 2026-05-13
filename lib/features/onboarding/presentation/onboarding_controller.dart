@@ -96,6 +96,8 @@ class OnboardingController extends StateNotifier<OnboardingState> {
       SkinProfile profile, OnboardingStepId step, List<String> values) {
     final v = values.first;
     switch (step) {
+      case OnboardingStepId.gender:
+        return profile.copyWith(gender: v);
       case OnboardingStepId.skinType:
         return profile.copyWith(skinType: v);
       case OnboardingStepId.skinTypeHelp:

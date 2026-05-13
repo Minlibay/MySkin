@@ -3,6 +3,7 @@ import 'dart:convert';
 class SkinProfile {
   const SkinProfile({
     this.name,
+    this.gender,
     this.skinType,
     this.pores,
     this.concerns = const [],
@@ -14,6 +15,11 @@ class SkinProfile {
   });
 
   final String? name;
+
+  /// 'female' | 'male' | null. Drives gendered phrasing throughout the app.
+  /// Null is treated as unknown — phrasing falls back to gender-neutral.
+  final String? gender;
+
   final String? skinType;
   final String? pores;
   final List<String> concerns;
@@ -23,8 +29,12 @@ class SkinProfile {
   final String? budget;
   final Map<String, String> extras;
 
+  bool get isMale => gender == 'male';
+  bool get isFemale => gender == 'female';
+
   SkinProfile copyWith({
     String? name,
+    String? gender,
     String? skinType,
     String? pores,
     List<String>? concerns,
@@ -36,6 +46,7 @@ class SkinProfile {
   }) {
     return SkinProfile(
       name: name ?? this.name,
+      gender: gender ?? this.gender,
       skinType: skinType ?? this.skinType,
       pores: pores ?? this.pores,
       concerns: concerns ?? this.concerns,
@@ -49,6 +60,7 @@ class SkinProfile {
 
   Map<String, dynamic> toJson() => {
         if (name != null) 'name': name,
+        if (gender != null) 'gender': gender,
         if (skinType != null) 'skin_type': skinType,
         if (pores != null) 'pores': pores,
         if (concerns.isNotEmpty) 'concerns': concerns,

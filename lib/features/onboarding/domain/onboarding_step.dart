@@ -2,6 +2,7 @@ import '../../ai/domain/models.dart';
 
 enum OnboardingStepId {
   name,
+  gender,
   skinType,
   skinTypeHelp,
   pores,
@@ -55,6 +56,16 @@ class OnboardingFlow {
     subtitle: 'Будем обращаться по имени',
     isTextInput: true,
     placeholder: 'Имя',
+  );
+
+  static const genderStep = OnboardingStep(
+    id: OnboardingStepId.gender,
+    title: 'Чтобы правильно обращаться',
+    subtitle: 'Влияет только на формулировки в приложении',
+    options: [
+      StepOption(id: 'female', title: 'Я девушка', emoji: '🌸'),
+      StepOption(id: 'male', title: 'Я парень', emoji: '🌿'),
+    ],
   );
 
   static const skinTypeStep = OnboardingStep(
@@ -153,6 +164,8 @@ class OnboardingFlow {
   static OnboardingStepId next(SkinProfile profile, OnboardingStepId current) {
     switch (current) {
       case OnboardingStepId.name:
+        return OnboardingStepId.gender;
+      case OnboardingStepId.gender:
         return OnboardingStepId.skinType;
       case OnboardingStepId.skinType:
         if (profile.skinType == 'unknown') {
@@ -195,6 +208,8 @@ class OnboardingFlow {
     switch (id) {
       case OnboardingStepId.name:
         return nameStep;
+      case OnboardingStepId.gender:
+        return genderStep;
       case OnboardingStepId.skinType:
         return skinTypeStep;
       case OnboardingStepId.skinTypeHelp:

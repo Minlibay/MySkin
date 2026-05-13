@@ -35,6 +35,7 @@ class BackendApi {
       final j = r.data as Map<String, dynamic>;
       return SkinProfile(
         name: j['name'] as String?,
+        gender: j['gender'] as String?,
         skinType: j['skin_type'] as String?,
         pores: j['pores'] as String?,
         concerns: ((j['concerns'] as List?) ?? const []).cast<String>(),
@@ -278,6 +279,17 @@ class BackendApi {
   Map<String, String> imageAuthHeaders() {
     final t = tokenProvider();
     return {if (t != null) 'authorization': 'Bearer $t'};
+  }
+
+  // ===== Legal documents =====
+
+  Future<String> getLegal(String key) async {
+    try {
+      final r = await _dio.get('$baseUrl/legal/$key');
+      return (r.data as Map)['markdown'] as String? ?? '';
+    } on DioException {
+      return '';
+    }
   }
 
   // ===== Notifications =====
