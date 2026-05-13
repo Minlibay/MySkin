@@ -67,21 +67,15 @@ workflows:
           set -ex
           keychain initialize
 
-          echo "--- existing IOS_DISTRIBUTION certificates ---"
-          app-store-connect list-certificates --type IOS_DISTRIBUTION --json || true
-          echo "--- existing DISTRIBUTION certificates ---"
-          app-store-connect list-certificates --type DISTRIBUTION --json || true
+          # Sanity check: with revoke done, this should print [].
+          echo "--- existing distribution certificates ---"
+          app-store-connect certificates list --certificate-type IOS_DISTRIBUTION --json || true
 
-          # Generate a fresh private key so fetch-signing-files always has a key
-          # to associate with the certificate, regardless of whether one already
-          # exists in the Apple account.
-          PRIVATE_KEY=/tmp/cm_private_key.pem
-          openssl genrsa -out "$PRIVATE_KEY" 2048
-
+          # No --certificate-key-path: with no existing cert in the team and
+          # --create, the CLI generates a fresh cert + private key on its own.
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --platform IOS \
             --type IOS_APP_STORE \
-            --certificate-key-path "$PRIVATE_KEY" \
             --create
 
           keychain add-certificates
