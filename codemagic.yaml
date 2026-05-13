@@ -64,6 +64,7 @@ workflows:
       - *pod_install
       - name: Set up code signing (keychain + fetch/create profile + register cert)
         script: |
+          set -ex
           keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --platform IOS \
@@ -71,6 +72,13 @@ workflows:
             --create
           keychain add-certificates
           xcode-project use-profiles
+          # Diagnostics — confirm cert is actually visible to xcodebuild.
+          echo "--- keychain list ---"
+          security list-keychains
+          echo "--- codesigning identities ---"
+          security find-identity -v -p codesigning
+          echo "--- provisioning profiles ---"
+          ls -la "$HOME/Library/MobileDevice/Provisioning Profiles/" || true
       - name: Bump build number from latest TestFlight build
         script: |
           LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo "0")
