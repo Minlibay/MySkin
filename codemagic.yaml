@@ -1,18 +1,3 @@
-definitions:
-  env_versions: &env_versions
-    flutter: stable
-    xcode: latest
-    cocoapods: default
-  scripts:
-    - &pub_get
-      name: Flutter pub get
-      script: flutter pub get
-    - &pod_install
-      name: Pod install
-      script: |
-        cd ios
-        pod install
-
 workflows:
   # ─────────────────────────────────────────────────────────────────────────
   # Smoke build — no signing, no upload. Run this first to confirm the
@@ -23,10 +8,16 @@ workflows:
     instance_type: mac_mini_m2
     max_build_duration: 60
     environment:
-      <<: *env_versions
+      flutter: stable
+      xcode: latest
+      cocoapods: default
     scripts:
-      - *pub_get
-      - *pod_install
+      - name: Flutter pub get
+        script: flutter pub get
+      - name: Pod install
+        script: |
+          cd ios
+          pod install
       - name: Flutter analyze
         script: flutter analyze --no-fatal-infos
         ignore_failure: true
@@ -41,9 +32,6 @@ workflows:
   # Requires in Codemagic UI (Teams → Integrations):
   #   1. App Store Connect API key integration named: appstore_api_key
   #   2. The app created in App Store Connect with bundle id ru.volovod.myskin
-  # And in this file:
-  #   3. APP_STORE_APPLE_ID below replaced with the numeric Apple ID
-  #      from App Store Connect → App Information → Apple ID.
   # ─────────────────────────────────────────────────────────────────────────
   ios-testflight:
     name: iOS · TestFlight release
@@ -52,12 +40,14 @@ workflows:
     integrations:
       app_store_connect: appstore_api_key
     environment:
-      <<: *env_versions
+      flutter: stable
+      xcode: latest
+      cocoapods: default
       vars:
         APP_STORE_APPLE_ID: "6769034673"
         BUNDLE_ID: "ru.volovod.myskin"
     scripts:
-      - name: Discover Codemagic CLI flag names (diagnostic, runs first!)
+      - name: Discover Codemagic CLI flag names (diagnostic, runs first)
         script: |
           app-store-connect --version || true
           echo "=== certificates create --help ==="
@@ -66,27 +56,3 @@ workflows:
           app-store-connect fetch-signing-files --help 2>&1 || true
           echo "=== profiles create --help ==="
           app-store-connect profiles create --help 2>&1 || true
-      - *pub_get
-      - *pod_install
-      - name: Bump build number from latest TestFlight build
-        script: |
-          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo "0")
-          export NEW_BUILD_NUMBER=$((LATEST + 1))
-          echo "BUILD_NUMBER=$NEW_BUILD_NUMBER" >> $CM_ENV
-          echo "Next build number: $NEW_BUILD_NUMBER"
-      - name: Build IPA
-        script: |
-          flutter build ipa --release \
-            --build-number=$BUILD_NUMBER \
-            --export-options-plist=/Users/builder/export_options.plist
-    artifacts:
-      - build/ios/ipa/*.ipa
-      - /tmp/xcodebuild_logs/*.log
-      - flutter_drive.log
-    publishing:
-      app_store_connect:
-        auth: integration
-        submit_to_testflight: true
-        # Uncomment + fill once you create a TestFlight group:
-        # beta_groups:
-        #   - "Internal testers"
