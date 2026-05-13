@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- App brand palette references for native theme resources. Keep these
+         in sync with AppColors in lib/core/theme/app_colors.dart. -->
+    <color name="brand_blush">#FCEEF2</color>
+</resources>
