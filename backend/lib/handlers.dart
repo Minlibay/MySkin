@@ -692,6 +692,7 @@ class ScanHandlers {
     required this.scans,
     required this.profiles,
     required this.appSettings,
+    required this.notifications,
     this.giga,
   });
 
@@ -699,6 +700,7 @@ class ScanHandlers {
   final ScanRepository scans;
   final ProfileRepository profiles;
   final AppSettingsRepository appSettings;
+  final NotificationRepository notifications;
   final GigaChatClient? giga;
 
   Router router() => Router()
@@ -774,6 +776,19 @@ class ScanHandlers {
       insight: analysis.insight,
       faceGeom: analysis.faceGeom,
     );
+    // Drop a notification into the inbox so the bell shows the unread dot.
+    // Failure here must never block the scan response.
+    try {
+      await notifications.create(
+        userId: user.id,
+        kind: 'scan_ready',
+        title: 'Анализ кожи готов',
+        body: analysis.insight,
+        payload: {'scan_id': scan.id},
+      );
+    } catch (e) {
+      stderr.writeln('notification scan_ready failed: $e');
+    }
     // Augment response with non-persisted analysis metadata.
     return jsonResponse(200, {
       ...scan.toJson(),
@@ -1237,6 +1252,54 @@ class RateLimiter {
     if (list.length >= maxPerHour) return const Duration(hours: 1);
     list.add(now);
     return null;
+  }
+}
+
+class NotificationHandlers {
+  NotificationHandlers({required this.sessions, required this.notifications});
+
+  final SessionRepository sessions;
+  final NotificationRepository notifications;
+
+  Router router() => Router()
+    ..get('/me/notifications', _withUser(_list))
+    ..get('/me/notifications/unread_count', _withUser(_unreadCount))
+    ..post('/me/notifications/read_all', _withUser(_markAllRead))
+    ..post('/me/notifications/<id>/read', _withUser(_markRead));
+
+  Handler _withUser(Future<Response> Function(Request, UserRow) inner) =>
+      (Request req) async {
+        final token = _bearer(req);
+        if (token == null) return jsonResponse(401, {'error': 'unauthorized'});
+        final user = await sessions.userForToken(token);
+        if (user == null) return jsonResponse(401, {'error': 'unauthorized'});
+        if (user.isBlocked) {
+          return jsonResponse(403, {'error': 'user_blocked'});
+        }
+        return inner(req, user);
+      };
+
+  Future<Response> _list(Request req, UserRow user) async {
+    final items = await notifications.listForUser(user.id);
+    final unread = await notifications.unreadCount(user.id);
+    return jsonResponse(200, {'items': items, 'unread_count': unread});
+  }
+
+  Future<Response> _unreadCount(Request req, UserRow user) async {
+    final n = await notifications.unreadCount(user.id);
+    return jsonResponse(200, {'unread_count': n});
+  }
+
+  Future<Response> _markRead(Request req, UserRow user) async {
+    final id = req.params['id']!;
+    final ok = await notifications.markRead(userId: user.id, id: id);
+    if (!ok) return jsonResponse(404, {'error': 'not_found_or_already_read'});
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _markAllRead(Request req, UserRow user) async {
+    final n = await notifications.markAllRead(user.id);
+    return jsonResponse(200, {'updated': n});
   }
 }
 

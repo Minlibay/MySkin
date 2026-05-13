@@ -2,6 +2,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../ai/domain/models.dart';
 import '../catalog/domain/product.dart';
+import '../notifications/domain/app_notification.dart';
 import '../profile/domain/user_settings.dart';
 import '../progress/domain/progress.dart';
 import '../ritual/domain/today.dart';
@@ -277,6 +278,40 @@ class BackendApi {
   Map<String, String> imageAuthHeaders() {
     final t = tokenProvider();
     return {if (t != null) 'authorization': 'Bearer $t'};
+  }
+
+  // ===== Notifications =====
+
+  Future<({List<AppNotification> items, int unreadCount})>
+      listNotifications() async {
+    final r = await _dio.get('$baseUrl/me/notifications', options: _auth());
+    final data = r.data as Map<String, dynamic>;
+    final items = ((data['items'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>()
+        .map(AppNotification.fromJson)
+        .toList();
+    return (
+      items: items,
+      unreadCount: (data['unread_count'] as int?) ?? 0,
+    );
+  }
+
+  Future<int> notificationsUnreadCount() async {
+    try {
+      final r = await _dio.get('$baseUrl/me/notifications/unread_count',
+          options: _auth());
+      return ((r.data as Map)['unread_count'] as int?) ?? 0;
+    } on DioException {
+      return 0;
+    }
+  }
+
+  Future<void> markNotificationRead(String id) async {
+    await _dio.post('$baseUrl/me/notifications/$id/read', options: _auth());
+  }
+
+  Future<void> markAllNotificationsRead() async {
+    await _dio.post('$baseUrl/me/notifications/read_all', options: _auth());
   }
 
   // ===== Progress =====

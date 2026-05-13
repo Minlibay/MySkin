@@ -1697,3 +1697,99 @@ class DermSessionRepository {
     return id;
   }
 }
+
+class NotificationRepository {
+  NotificationRepository(this.db);
+  final Pool db;
+
+  Future<Map<String, dynamic>> create({
+    required String userId,
+    required String kind,
+    required String title,
+    String? body,
+    Map<String, dynamic> payload = const {},
+  }) async {
+    final id = _uuid.v4();
+    final r = await db.execute(
+      Sql.named('''
+        INSERT INTO notifications (id, user_id, kind, title, body, payload)
+        VALUES (@id, @u, @k, @t, @b, @p::jsonb)
+        RETURNING id, kind, title, body, payload, read_at, created_at
+      '''),
+      parameters: {
+        'id': id,
+        'u': userId,
+        'k': kind,
+        't': title,
+        'b': body,
+        'p': jsonEncode(payload),
+      },
+    );
+    return _rowToJson(r.first);
+  }
+
+  Future<List<Map<String, dynamic>>> listForUser(
+    String userId, {
+    int limit = 50,
+  }) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT id, kind, title, body, payload, read_at, created_at
+        FROM notifications
+        WHERE user_id = @u
+        ORDER BY created_at DESC
+        LIMIT @lim
+      '''),
+      parameters: {'u': userId, 'lim': limit},
+    );
+    return r.map(_rowToJson).toList();
+  }
+
+  Future<int> unreadCount(String userId) async {
+    final r = await db.execute(
+      Sql.named(
+          'SELECT count(*) FROM notifications WHERE user_id = @u AND read_at IS NULL'),
+      parameters: {'u': userId},
+    );
+    return (r.first[0] as int);
+  }
+
+  /// Returns true if the notification existed and was owned by [userId].
+  Future<bool> markRead({required String userId, required String id}) async {
+    final r = await db.execute(
+      Sql.named('''
+        UPDATE notifications SET read_at = now()
+        WHERE id = @id AND user_id = @u AND read_at IS NULL
+        RETURNING id
+      '''),
+      parameters: {'id': id, 'u': userId},
+    );
+    return r.isNotEmpty;
+  }
+
+  Future<int> markAllRead(String userId) async {
+    final r = await db.execute(
+      Sql.named('''
+        UPDATE notifications SET read_at = now()
+        WHERE user_id = @u AND read_at IS NULL
+      '''),
+      parameters: {'u': userId},
+    );
+    return r.affectedRows;
+  }
+
+  Map<String, dynamic> _rowToJson(dynamic row) {
+    final payload = row[4];
+    return {
+      'id': row[0],
+      'kind': row[1],
+      'title': row[2],
+      'body': row[3],
+      'payload': payload is Map ? payload.cast<String, dynamic>() : const {},
+      'read_at': row[5] == null
+          ? null
+          : (row[5] as DateTime).toUtc().toIso8601String(),
+      'created_at': (row[6] as DateTime).toUtc().toIso8601String(),
+    };
+  }
+}

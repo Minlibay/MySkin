@@ -12,6 +12,7 @@ import '../../ai/domain/models.dart';
 import '../../api/backend_api.dart';
 import '../../catalog/domain/product.dart';
 import '../../catalog/presentation/product_bottle.dart';
+import '../../notifications/data/notifications_controller.dart';
 import '../../ritual/domain/today.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -29,6 +30,7 @@ class HomeScreen extends ConsumerStatefulWidget {
     this.onOpenShelf,
     this.onOpenScan,
     this.onOpenProduct,
+    this.onOpenNotifications,
   });
 
   final SkinProfile profile;
@@ -43,6 +45,7 @@ class HomeScreen extends ConsumerStatefulWidget {
   final VoidCallback? onOpenShelf;
   final VoidCallback? onOpenScan;
   final ValueChanged<Product>? onOpenProduct;
+  final VoidCallback? onOpenNotifications;
 
   @override
   ConsumerState<HomeScreen> createState() => _HomeScreenState();
@@ -55,6 +58,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void initState() {
     super.initState();
     _catalog = _loadTopMatches();
+    // Refresh unread badge on the bell each time home becomes visible.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.read(notificationsControllerProvider.notifier).refreshUnreadCount();
+    });
   }
 
   Future<List<Product>> _loadTopMatches() async {
@@ -100,6 +107,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       name: name,
                       onLogout: widget.onLogout,
                       onRetake: widget.onRetake,
+                      onOpenNotifications: widget.onOpenNotifications,
+                      notificationsUnread: ref.watch(
+                        notificationsControllerProvider
+                            .select((s) => s.unreadCount),
+                      ),
                     ),
                     const SizedBox(height: AppSpacing.lg),
                     if (lastResult != null) ...[
@@ -389,11 +401,15 @@ class _Greeting extends StatelessWidget {
     required this.name,
     this.onLogout,
     this.onRetake,
+    this.onOpenNotifications,
+    this.notificationsUnread = 0,
   });
   final String greeting;
   final String? name;
   final VoidCallback? onLogout;
   final VoidCallback? onRetake;
+  final VoidCallback? onOpenNotifications;
+  final int notificationsUnread;
 
   @override
   Widget build(BuildContext context) {
@@ -446,8 +462,8 @@ class _Greeting extends StatelessWidget {
         ),
         _CircleIconButton(
           icon: Icons.notifications_none_rounded,
-          dot: true,
-          onTap: () {},
+          dot: notificationsUnread > 0,
+          onTap: onOpenNotifications ?? () {},
         ),
         const SizedBox(width: AppSpacing.xs),
         _CircleIconButton(

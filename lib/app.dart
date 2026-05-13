@@ -15,6 +15,7 @@ import 'features/catalog/presentation/product_detail_screen.dart';
 import 'features/catalog/presentation/shelf_screen.dart';
 import 'features/derm2/presentation/derm2_screen.dart';
 import 'features/home/presentation/home_screen.dart';
+import 'features/notifications/presentation/notifications_screen.dart';
 import 'features/onboarding/presentation/onboarding_screen.dart';
 import 'features/profile/presentation/profile_screen.dart';
 import 'features/progress/presentation/progress_screen.dart';
@@ -140,6 +141,7 @@ enum _Shell {
   scanResult,
   progress,
   chat,
+  notifications,
 }
 
 class _AppShell extends ConsumerStatefulWidget {
@@ -256,6 +258,8 @@ class _AppShellState extends ConsumerState<_AppShell> {
           onOpenCatalog: () => setState(() => _view = _Shell.catalog),
           onOpenShelf: () => setState(() => _view = _Shell.profile),
           onOpenScan: () => setState(() => _view = _Shell.scan),
+          onOpenNotifications: () =>
+              setState(() => _view = _Shell.notifications),
           onOpenProduct: (Product p) => setState(() {
             _previousView = _Shell.home;
             _openProductSlug = p.slug;
@@ -349,6 +353,25 @@ class _AppShellState extends ConsumerState<_AppShell> {
         return ChatScreen(
           onBack: () => setState(() => _view = _Shell.home),
         );
+      case _Shell.notifications:
+        return NotificationsScreen(
+          onBack: () => setState(() => _view = _Shell.home),
+          onOpenScan: _openScanById,
+        );
+    }
+  }
+
+  Future<void> _openScanById(String scanId) async {
+    try {
+      final scan =
+          await ref.read(backendApiProvider).getScan(scanId);
+      if (!mounted) return;
+      setState(() {
+        _lastScan = scan;
+        _view = _Shell.scanResult;
+      });
+    } catch (_) {
+      // Silent — notification stays marked read, user just doesn't deep-link.
     }
   }
 }
