@@ -748,82 +748,133 @@ class _MetricBar extends StatelessWidget {
 
 class _LinaNudge extends StatelessWidget {
   const _LinaNudge({required this.message, this.onTap});
+
+  /// Raw message — quotes are added by this widget, callers should NOT wrap
+  /// the text in « » themselves.
   final String message;
   final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
+    // Strip wrapping quotes if a caller already added them (legacy behaviour
+    // — old code passed pre-quoted strings). Keeps render consistent.
+    var msg = message.trim();
+    if (msg.startsWith('«') && msg.endsWith('»')) {
+      msg = msg.substring(1, msg.length - 1).trim();
+    }
+
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(24),
         onTap: onTap,
-        child: Stack(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(20),
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [AppColors.roseDeep, AppColors.roseShadow],
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [AppColors.surface, AppColors.blush],
+            ),
+            border:
+                Border.all(color: AppColors.primaryAccent.withOpacity(0.22)),
+            boxShadow: const [
+              BoxShadow(
+                color: AppColors.shadow,
+                blurRadius: 18,
+                offset: Offset(0, 8),
+              ),
+            ],
+          ),
+          child: Stack(
+            children: [
+              // Decorative sparkle in the corner — purely visual flourish.
+              Positioned(
+                right: 14,
+                top: 14,
+                child: Text(
+                  '✦',
+                  style: TextStyle(
+                    fontSize: 18,
+                    color: AppColors.primaryAccent.withOpacity(0.45),
+                  ),
                 ),
               ),
-              child: Row(
-                children: [
-                  const LinaAvatar(size: 44),
-                  const SizedBox(width: 14),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+              Padding(
+                padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        const LinaAvatar(size: 44, monogram: true),
+                        const SizedBox(width: 12),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'ЛИНА · СОВЕТ',
+                              style: AppTypography.eyebrow(
+                                color: AppColors.roseDeep,
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Row(
+                              children: [
+                                Container(
+                                  width: 6,
+                                  height: 6,
+                                  decoration: const BoxDecoration(
+                                    color: AppColors.success,
+                                    shape: BoxShape.circle,
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'на связи',
+                                  style: AppTypography.caption
+                                      .copyWith(fontSize: 12),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    Text(
+                      '«$msg»',
+                      style: AppTypography.serifItalic(
+                        fontSize: 18,
+                        color: AppColors.roseDeep,
+                      ).copyWith(height: 1.35),
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    const SizedBox(height: AppSpacing.md),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
                       children: [
                         Text(
-                          'Лина · только что',
-                          style: AppTypography.eyebrow(
-                            color: Colors.white.withOpacity(0.65),
-                          ).copyWith(fontSize: 11),
+                          'Спросить о коже',
+                          style: AppTypography.bodySm.copyWith(
+                            color: AppColors.roseDeep,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                        const SizedBox(height: 4),
-                        Text(
-                          message,
-                          style: AppTypography.serifItalic(
-                            fontSize: 16,
-                            color: Colors.white,
-                          ).copyWith(height: 1.35),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
+                        const SizedBox(width: 4),
+                        const Icon(
+                          Icons.arrow_forward_rounded,
+                          size: 16,
+                          color: AppColors.roseDeep,
                         ),
                       ],
                     ),
-                  ),
-                  Icon(
-                    Icons.chevron_right_rounded,
-                    color: Colors.white.withOpacity(0.6),
-                  ),
-                ],
-              ),
-            ),
-            Positioned(
-              right: -30,
-              top: -30,
-              child: IgnorePointer(
-                child: Container(
-                  width: 120,
-                  height: 120,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    gradient: RadialGradient(
-                      colors: [
-                        AppColors.primaryAccent.withOpacity(0.4),
-                        Colors.transparent,
-                      ],
-                    ),
-                  ),
+                  ],
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );
