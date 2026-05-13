@@ -62,13 +62,15 @@ workflows:
     scripts:
       - *pub_get
       - *pod_install
-      - name: Fetch or create signing files
+      - name: Set up code signing (keychain + fetch/create profile + register cert)
         script: |
+          keychain initialize
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --platform IOS \
             --type IOS_APP_STORE \
             --create
-      - name: Set up provisioning profiles
-        script: xcode-project use-profiles
+          keychain add-certificates
+          xcode-project use-profiles
       - name: Bump build number from latest TestFlight build
         script: |
           LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo "0")
