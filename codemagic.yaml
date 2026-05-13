@@ -66,13 +66,27 @@ workflows:
         script: |
           set -ex
           keychain initialize
+
+          echo "--- existing IOS_DISTRIBUTION certificates ---"
+          app-store-connect list-certificates --type IOS_DISTRIBUTION --json || true
+          echo "--- existing DISTRIBUTION certificates ---"
+          app-store-connect list-certificates --type DISTRIBUTION --json || true
+
+          # Generate a fresh private key so fetch-signing-files always has a key
+          # to associate with the certificate, regardless of whether one already
+          # exists in the Apple account.
+          PRIVATE_KEY=/tmp/cm_private_key.pem
+          openssl genrsa -out "$PRIVATE_KEY" 2048
+
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --platform IOS \
             --type IOS_APP_STORE \
+            --certificate-key-path "$PRIVATE_KEY" \
             --create
+
           keychain add-certificates
           xcode-project use-profiles
-          # Diagnostics — confirm cert is actually visible to xcodebuild.
+
           echo "--- keychain list ---"
           security list-keychains
           echo "--- codesigning identities ---"
