@@ -8,15 +8,15 @@
 
 services:
   db:
-    ports: []                         # remove host port binding
+    ports: !reset []                  # remove host port binding (15432)
 
   backend:
-    ports: []                         # only reachable inside the docker network
+    ports: !reset []                  # only reachable inside the docker network
     environment:
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}  # must be set in .env
 
   admin:
-    ports: []
+    ports: !reset []
 
   adminer:
     profiles: ["disabled"]            # don't start in prod
