@@ -12,7 +12,7 @@
         android:maxSdkVersion="32"/>
 
     <application
-        android:label="MySkin"
+        android:label="Моя Кожа"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
         <activity
