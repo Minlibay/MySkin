@@ -494,6 +494,7 @@ class AiHandlers {
     required this.profiles,
     required this.scans,
     required this.appSettings,
+    required this.chatMessages,
   });
   final SessionRepository sessions;
   final GigaChatClient giga;
@@ -501,6 +502,7 @@ class AiHandlers {
   final ProfileRepository profiles;
   final ScanRepository scans;
   final AppSettingsRepository appSettings;
+  final ChatMessageRepository chatMessages;
 
   Router router() => Router()
     ..post('/ai/generate-routine', _withUser(_generate))
@@ -636,19 +638,39 @@ class AiHandlers {
             RegExp(r'"show_products"\s*:\s*true').hasMatch(reply);
       }
 
+      final recommended = showProducts
+          ? top
+              .where((e) => e.score >= 40)
+              .take(5)
+              .map((e) => {
+                    ...e.p.toJson(),
+                    'match_score': e.score,
+                    'match_reasons': e.reasons,
+                  })
+              .toList()
+          : const <Map<String, dynamic>>[];
+
+      // Persist both the user's last message and Лина's reply so the chat
+      // history survives app restarts. Best-effort — never blocks the response.
+      try {
+        await chatMessages.append(
+          userId: user.id,
+          role: 'user',
+          content: messages.last['content'] as String,
+        );
+        await chatMessages.append(
+          userId: user.id,
+          role: 'assistant',
+          content: reply.trim(),
+          products: recommended.isEmpty ? null : recommended,
+        );
+      } catch (e) {
+        stderr.writeln('chat persist failed: $e');
+      }
+
       return jsonResponse(200, {
         'reply': reply.trim(),
-        'recommended_products': showProducts
-            ? top
-                .where((e) => e.score >= 40)
-                .take(5)
-                .map((e) => {
-                      ...e.p.toJson(),
-                      'match_score': e.score,
-                      'match_reasons': e.reasons,
-                    })
-                .toList()
-            : const [],
+        'recommended_products': recommended,
       });
     } on GigaChatException catch (e) {
       stderr.writeln('GigaChat /chat failed: $e');
@@ -988,6 +1010,7 @@ class MeHandlers {
     required this.completions,
     required this.users,
     required this.scans,
+    required this.chatMessages,
   });
 
   final SessionRepository sessions;
@@ -997,6 +1020,7 @@ class MeHandlers {
   final RoutineCompletionRepository completions;
   final UserRepository users;
   final ScanRepository scans;
+  final ChatMessageRepository chatMessages;
 
   Router router() => Router()
     ..get('/me/profile', _withUser(_getProfile))
@@ -1011,7 +1035,9 @@ class MeHandlers {
     ..put('/me/settings', _withUser(_putSettings))
     ..get('/me/export', _withUser(_export))
     ..delete('/me/account', _withUser(_deleteAccount))
-    ..get('/me/progress', _withUser(_progress));
+    ..get('/me/progress', _withUser(_progress))
+    ..get('/me/chat', _withUser(_getChat))
+    ..delete('/me/chat', _withUser(_clearChat));
 
   Handler _withUser(Future<Response> Function(Request, UserRow) inner) =>
       (Request req) async {
@@ -1228,6 +1254,16 @@ class MeHandlers {
             inWindow.isNotEmpty ? inWindow.last.score : null,
       },
     });
+  }
+
+  Future<Response> _getChat(Request req, UserRow user) async {
+    final items = await chatMessages.listForUser(user.id);
+    return jsonResponse(200, {'items': items});
+  }
+
+  Future<Response> _clearChat(Request req, UserRow user) async {
+    await chatMessages.clear(user.id);
+    return jsonResponse(200, {'ok': true});
   }
 }
 

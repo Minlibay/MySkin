@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../api/backend_api.dart';
+import '../../catalog/domain/product.dart';
 import '../domain/chat_message.dart';
 
 class ChatState {
@@ -27,8 +28,10 @@ class ChatState {
 }
 
 class ChatController extends StateNotifier<ChatState> {
-  ChatController(this._api)
-      : super(ChatState(messages: [_greeting()]));
+  ChatController(this._api) : super(ChatState(messages: [_greeting()])) {
+    // ignore: unawaited_futures
+    _loadHistory();
+  }
 
   final BackendApi _api;
 
@@ -37,6 +40,43 @@ class ChatController extends StateNotifier<ChatState> {
         content:
             'Привет ✿ Я Лина. Спрашивай про уход, ингредиенты или просто как сегодня кожа — помогу разобраться.',
       );
+
+  /// Pulls persisted history from the backend and replaces the greeting-only
+  /// seed if anything is found. Silent on error — chat still works ephemerally.
+  Future<void> _loadHistory() async {
+    try {
+      final items = await _api.getChatHistory();
+      if (items.isEmpty || !mounted) return;
+      final restored = items
+          .map((j) {
+            final role = j['role'] == 'user'
+                ? ChatRole.user
+                : ChatRole.assistant;
+            final products = ((j['products'] as List?) ?? const [])
+                .whereType<Map<String, dynamic>>()
+                .map(Product.fromJson)
+                .toList();
+            if (role == ChatRole.assistant) {
+              return ChatMessage.parseAssistantReply(
+                j['content'] as String? ?? '',
+                products: products,
+              );
+            }
+            return ChatMessage(
+              role: ChatRole.user,
+              content: j['content'] as String? ?? '',
+              timestamp: DateTime.tryParse(j['created_at'] as String? ?? ''),
+            );
+          })
+          .toList();
+      state = state.copyWith(
+        messages: [_greeting(), ...restored],
+      );
+    } catch (_) {
+      // Silent — keep ephemeral chat working even when the history endpoint
+      // is unreachable.
+    }
+  }
 
   Future<void> send(String text) async {
     final trimmed = text.trim();
@@ -69,8 +109,11 @@ class ChatController extends StateNotifier<ChatState> {
     }
   }
 
-  void clear() {
+  Future<void> clear() async {
     state = ChatState(messages: [_greeting()]);
+    try {
+      await _api.clearChatHistory();
+    } catch (_) {/* silent */}
   }
 
   String _friendlyError(Object e) {

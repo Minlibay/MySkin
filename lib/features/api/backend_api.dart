@@ -281,6 +281,19 @@ class BackendApi {
     return {if (t != null) 'authorization': 'Bearer $t'};
   }
 
+  // ===== Chat history =====
+
+  Future<List<Map<String, dynamic>>> getChatHistory() async {
+    final r = await _dio.get('$baseUrl/me/chat', options: _auth());
+    return ((r.data as Map)['items'] as List?)
+            ?.cast<Map<String, dynamic>>() ??
+        const [];
+  }
+
+  Future<void> clearChatHistory() async {
+    await _dio.delete('$baseUrl/me/chat', options: _auth());
+  }
+
   // ===== Legal documents =====
 
   Future<String> getLegal(String key) async {

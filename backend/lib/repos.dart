@@ -1701,6 +1701,66 @@ class DermSessionRepository {
   }
 }
 
+class ChatMessageRepository {
+  ChatMessageRepository(this.db);
+  final Pool db;
+
+  Future<void> append({
+    required String userId,
+    required String role,
+    required String content,
+    List<Map<String, dynamic>>? products,
+  }) async {
+    final id = _uuid.v4();
+    await db.execute(
+      Sql.named('''
+        INSERT INTO chat_messages (id, user_id, role, content, products)
+        VALUES (@id, @u, @r, @c, @p)
+      '''),
+      parameters: {
+        'id': id,
+        'u': userId,
+        'r': role,
+        'c': content,
+        'p': products == null ? null : jsonEncode(products),
+      },
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> listForUser(
+    String userId, {
+    int limit = 200,
+  }) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT id, role, content, products, created_at
+        FROM chat_messages
+        WHERE user_id = @u
+        ORDER BY created_at
+        LIMIT @lim
+      '''),
+      parameters: {'u': userId, 'lim': limit},
+    );
+    return r.map((row) {
+      final raw = row[3];
+      return {
+        'id': row[0],
+        'role': row[1],
+        'content': row[2],
+        'products': raw is List ? raw : null,
+        'created_at': (row[4] as DateTime).toUtc().toIso8601String(),
+      };
+    }).toList();
+  }
+
+  Future<void> clear(String userId) async {
+    await db.execute(
+      Sql.named('DELETE FROM chat_messages WHERE user_id = @u'),
+      parameters: {'u': userId},
+    );
+  }
+}
+
 class NotificationRepository {
   NotificationRepository(this.db);
   final Pool db;

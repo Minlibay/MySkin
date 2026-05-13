@@ -34,6 +34,7 @@ void main(List<String> args) async {
   final scans = ScanRepository(pool);
   final appSettings = AppSettingsRepository(pool);
   final notifications = NotificationRepository(pool);
+  final chatMessages = ChatMessageRepository(pool);
 
   final auth = AuthHandlers(
     users: users,
@@ -60,6 +61,7 @@ void main(List<String> args) async {
     completions: completions,
     users: users,
     scans: scans,
+    chatMessages: chatMessages,
   );
   final catalog = CatalogHandlers(
     sessions: sessions,
@@ -96,6 +98,7 @@ void main(List<String> args) async {
           profiles: profiles,
           scans: scans,
           appSettings: appSettings,
+          chatMessages: chatMessages,
         )
       : null;
 
