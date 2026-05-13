@@ -53,36 +53,19 @@ workflows:
       app_store_connect: appstore_api_key
     environment:
       <<: *env_versions
-      # NOTE: intentionally NO `ios_signing` block. With ios_signing set,
-      # Codemagic auto-runs its signing flow before our scripts and fails
-      # when no profile exists yet. We sign explicitly below with --create.
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: ru.volovod.myskin
       vars:
         APP_STORE_APPLE_ID: "6769034673"
         BUNDLE_ID: "ru.volovod.myskin"
     scripts:
       - *pub_get
       - *pod_install
-      - name: Set up code signing (keychain + fetch/create profile + register cert)
+      - name: Use profiles fetched by Codemagic auto-signing
         script: |
           set -ex
-          keychain initialize
-
-          # Sanity check: with revoke done, this should print [].
-          echo "--- existing distribution certificates ---"
-          app-store-connect certificates list --certificate-type IOS_DISTRIBUTION --json || true
-
-          # No --certificate-key-path: with no existing cert in the team and
-          # --create, the CLI generates a fresh cert + private key on its own.
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --platform IOS \
-            --type IOS_APP_STORE \
-            --create
-
-          keychain add-certificates
           xcode-project use-profiles
-
-          echo "--- keychain list ---"
-          security list-keychains
           echo "--- codesigning identities ---"
           security find-identity -v -p codesigning
           echo "--- provisioning profiles ---"
