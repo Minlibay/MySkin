@@ -53,32 +53,21 @@ workflows:
       app_store_connect: appstore_api_key
     environment:
       <<: *env_versions
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: ru.volovod.myskin
       vars:
         APP_STORE_APPLE_ID: "6769034673"
         BUNDLE_ID: "ru.volovod.myskin"
     scripts:
-      - *pub_get
-      - *pod_install
-      - name: Discover Codemagic CLI flag names (diagnostic)
+      - name: Discover Codemagic CLI flag names (diagnostic, runs first!)
         script: |
           app-store-connect --version || true
           echo "=== certificates create --help ==="
-          app-store-connect certificates create --help 2>&1 | head -100 || true
+          app-store-connect certificates create --help 2>&1 || true
           echo "=== fetch-signing-files --help ==="
-          app-store-connect fetch-signing-files --help 2>&1 | head -100 || true
-          echo "=== profiles list --help ==="
-          app-store-connect profiles list --help 2>&1 | head -40 || true
-      - name: Use profiles fetched by Codemagic auto-signing
-        script: |
-          set -ex
-          xcode-project use-profiles
-          echo "--- codesigning identities ---"
-          security find-identity -v -p codesigning
-          echo "--- provisioning profiles ---"
-          ls -la "$HOME/Library/MobileDevice/Provisioning Profiles/" || true
+          app-store-connect fetch-signing-files --help 2>&1 || true
+          echo "=== profiles create --help ==="
+          app-store-connect profiles create --help 2>&1 || true
+      - *pub_get
+      - *pod_install
       - name: Bump build number from latest TestFlight build
         script: |
           LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo "0")
