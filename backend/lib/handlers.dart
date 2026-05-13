@@ -812,6 +812,22 @@ class ScanHandlers {
         stderr.writeln('Vision scan failed, using local analysis: $e');
       }
     }
+    // Prefer the client's ML Kit bbox (precise face detector) over the
+    // backend's skin-colour heuristic, which often blooms to cover the whole
+    // photo on well-lit selfies. Validate before accepting.
+    Map<String, dynamic>? faceGeom = analysis.faceGeom;
+    final clientBbox = body['face_bbox'];
+    if (clientBbox is List && clientBbox.length == 4) {
+      final v = clientBbox.map((e) => (e as num).toDouble()).toList();
+      final ok = v.every((e) => e >= 0 && e <= 1) &&
+          v[2] > v[0] &&
+          v[3] > v[1] &&
+          (v[2] - v[0]) < 0.95 &&
+          (v[3] - v[1]) < 0.95;
+      if (ok) {
+        faceGeom = {'bbox': v};
+      }
+    }
     final scan = await scans.create(
       userId: user.id,
       photo: bytes,
@@ -823,7 +839,7 @@ class ScanHandlers {
       pores: analysis.pores,
       zones: analysis.zones,
       insight: analysis.insight,
-      faceGeom: analysis.faceGeom,
+      faceGeom: faceGeom,
     );
     // Drop a notification into the inbox so the bell shows the unread dot.
     // Failure here must never block the scan response.

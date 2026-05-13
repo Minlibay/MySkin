@@ -422,6 +422,10 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       return _pickFromGallery();
     }
     if (_busy) return;
+    // Snapshot the most recent ML Kit face *before* we stop the stream — the
+    // detector goes silent once streaming stops, and we want the bbox that
+    // was visible to the user when they tapped the shutter.
+    final faceBbox = _normalizedFaceBbox();
     setState(() {
       _busy = true;
       _error = null;
@@ -430,7 +434,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       await _stopStream();
       final pic = await cam.takePicture();
       final bytes = await File(pic.path).readAsBytes();
-      await _uploadAndFinish(bytes, mime: 'image/jpeg');
+      await _uploadAndFinish(bytes, mime: 'image/jpeg', faceBbox: faceBbox);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -460,7 +464,8 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         return;
       }
       final bytes = await picked.readAsBytes();
-      await _uploadAndFinish(bytes, mime: picked.mimeType ?? 'image/jpeg');
+      await _uploadAndFinish(bytes,
+          mime: picked.mimeType ?? 'image/jpeg', faceBbox: null);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -471,18 +476,41 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   }
 
   Future<void> _uploadAndFinish(List<int> bytes,
-      {required String mime}) async {
+      {required String mime, List<double>? faceBbox}) async {
     final b64 = base64Encode(bytes);
     final result = await ref.read(backendApiProvider).uploadScan(
           photoBase64: b64,
           mime: mime,
+          faceBbox: faceBbox,
         );
     Telemetry.event('scan_uploaded', data: {
       'photo_kb': (bytes.length / 1024).round(),
       'score': result.score,
+      'had_face_bbox': faceBbox != null,
     });
     if (!mounted) return;
     widget.onResult(result);
+  }
+
+  /// Convert the current ML Kit detection to a normalised [x0, y0, x1, y1]
+  /// bbox in the photo coordinate space (assumes still photo and stream share
+  /// the same FOV, which is true for both iOS and Android front cameras).
+  /// Returns null if no face was visible at capture time.
+  List<double>? _normalizedFaceBbox() {
+    final f = _face;
+    if (f == null) return null;
+    final w = f.imageSize.width;
+    final h = f.imageSize.height;
+    if (w <= 0 || h <= 0) return null;
+    final b = f.bounds;
+    // ML Kit bounds are in raw stream coords (non-mirrored). The saved photo
+    // is also non-mirrored, so the ratio carries over directly.
+    return [
+      (b.left / w).clamp(0.0, 1.0),
+      (b.top / h).clamp(0.0, 1.0),
+      (b.right / w).clamp(0.0, 1.0),
+      (b.bottom / h).clamp(0.0, 1.0),
+    ];
   }
 
   @override

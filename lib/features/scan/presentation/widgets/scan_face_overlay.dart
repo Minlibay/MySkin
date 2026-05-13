@@ -63,13 +63,25 @@ class FaceMeshPainter extends CustomPainter {
   final double previewAspect;
   final bool locked;
 
-  /// On-screen rect occupied by the camera preview, matching the layout in
-  /// [ScanCameraBackdrop]: width = screen, height = screen * aspectRatio,
-  /// vertically centred, overflow clipped.
+  /// On-screen rect occupied by the camera preview. ScanCameraBackdrop wraps
+  /// the preview in `FittedBox(fit: cover, child: SizedBox(width=W,
+  /// height=W*aspect))` — so the actual rendered rect is the cover-scaled
+  /// version of that SizedBox, not the SizedBox itself. The old code mapped
+  /// landmarks onto the un-scaled SizedBox, which on tall phones is far
+  /// narrower and shorter than the visible preview — face overlay drifted to
+  /// the edge and shrank.
   Rect _previewRect(Size canvas) {
-    final h = canvas.width * previewAspect;
-    final top = (canvas.height - h) / 2;
-    return Rect.fromLTWH(0, top, canvas.width, h);
+    final cw = canvas.width;
+    final ch = canvas.width * previewAspect;
+    final s = math.max(canvas.width / cw, canvas.height / ch);
+    final w = cw * s;
+    final h = ch * s;
+    return Rect.fromLTWH(
+      (canvas.width - w) / 2,
+      (canvas.height - h) / 2,
+      w,
+      h,
+    );
   }
 
   Offset _map(num x, num y, Size imgSize, bool mirror, Rect rect) {
