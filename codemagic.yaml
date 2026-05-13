@@ -47,12 +47,57 @@ workflows:
         APP_STORE_APPLE_ID: "6769034673"
         BUNDLE_ID: "ru.volovod.myskin"
     scripts:
-      - name: Discover Codemagic CLI flag names (diagnostic, runs first)
+      - name: Flutter pub get
+        script: flutter pub get
+      - name: Pod install
         script: |
-          app-store-connect --version || true
-          echo "=== certificates create --help ==="
-          app-store-connect certificates create --help 2>&1 || true
-          echo "=== fetch-signing-files --help ==="
-          app-store-connect fetch-signing-files --help 2>&1 || true
-          echo "=== profiles create --help ==="
-          app-store-connect profiles create --help 2>&1 || true
+          cd ios
+          pod install
+      - name: Set up code signing (create cert + profile, register in keychain)
+        script: |
+          set -ex
+          keychain initialize
+
+          # Generate a fresh private key for the new distribution certificate.
+          # The CLI uses this to build the CSR and save the resulting .p12.
+          PRIVATE_KEY=/tmp/cm_distribution.key
+          openssl genrsa -out "$PRIVATE_KEY" 2048
+
+          # Create cert + provisioning profile via API in one shot.
+          # @file:<path> tells the CLI to read the private key from disk.
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --platform IOS \
+            --type IOS_APP_STORE \
+            --certificate-key "@file:$PRIVATE_KEY" \
+            --create
+
+          # Import the saved p12 (in /Users/builder/Library/Developer/Xcode/UserData/Certificates)
+          # into the temporary keychain so xcodebuild can sign with it.
+          keychain add-certificates
+
+          # Wire the fetched provisioning profile into the Xcode project.
+          xcode-project use-profiles
+
+          echo "--- codesigning identities ---"
+          security find-identity -v -p codesigning
+          echo "--- provisioning profiles ---"
+          ls -la "/Users/builder/Library/Developer/Xcode/UserData/Provisioning Profiles/" || true
+      - name: Bump build number from latest TestFlight build
+        script: |
+          LATEST=$(app-store-connect get-latest-testflight-build-number "$APP_STORE_APPLE_ID" 2>/dev/null || echo "0")
+          export NEW_BUILD_NUMBER=$((LATEST + 1))
+          echo "BUILD_NUMBER=$NEW_BUILD_NUMBER" >> $CM_ENV
+          echo "Next build number: $NEW_BUILD_NUMBER"
+      - name: Build IPA
+        script: |
+          flutter build ipa --release \
+            --build-number=$BUILD_NUMBER \
+            --export-options-plist=/Users/builder/export_options.plist
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+      - flutter_drive.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true
