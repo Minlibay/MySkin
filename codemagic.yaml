@@ -40,7 +40,7 @@ workflows:
   # Signed build that uploads the IPA to TestFlight.
   # Requires in Codemagic UI (Teams → Integrations):
   #   1. App Store Connect API key integration named: appstore_api_key
-  #   2. The app created in App Store Connect with bundle id ru.myskin.myskin
+  #   2. The app created in App Store Connect with bundle id ru.volovod.myskin
   # And in this file:
   #   3. APP_STORE_APPLE_ID below replaced with the numeric Apple ID
   #      from App Store Connect → App Information → Apple ID.
@@ -55,10 +55,10 @@ workflows:
       <<: *env_versions
       ios_signing:
         distribution_type: app_store
-        bundle_identifier: ru.myskin.myskin
+        bundle_identifier: ru.volovod.myskin
       vars:
         APP_STORE_APPLE_ID: "0000000000" # TODO: replace with numeric Apple ID
-        BUNDLE_ID: "ru.myskin.myskin"
+        BUNDLE_ID: "ru.volovod.myskin"
     scripts:
       - *pub_get
       - *pod_install

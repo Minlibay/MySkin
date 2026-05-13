@@ -1,4 +1,4 @@
-package ru.myskin.myskin
+package ru.volovod.myskin
 
 import io.flutter.embedding.android.FlutterActivity
 
