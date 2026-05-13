@@ -53,9 +53,9 @@ workflows:
       app_store_connect: appstore_api_key
     environment:
       <<: *env_versions
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: ru.volovod.myskin
+      # NOTE: intentionally NO `ios_signing` block. With ios_signing set,
+      # Codemagic auto-runs its signing flow before our scripts and fails
+      # when no profile exists yet. We sign explicitly below with --create.
       vars:
         APP_STORE_APPLE_ID: "6769034673"
         BUNDLE_ID: "ru.volovod.myskin"
