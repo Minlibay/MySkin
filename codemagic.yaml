@@ -62,6 +62,11 @@ workflows:
     scripts:
       - *pub_get
       - *pod_install
+      - name: Fetch or create signing files
+        script: |
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
       - name: Set up provisioning profiles
         script: xcode-project use-profiles
       - name: Bump build number from latest TestFlight build
