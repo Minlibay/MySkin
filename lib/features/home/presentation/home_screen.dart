@@ -116,11 +116,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     const SizedBox(height: AppSpacing.lg),
                     if (lastResult != null) ...[
                       // ───────── СЕГОДНЯ ─────────
-                      const EyebrowText(
-                        'Сегодня',
-                        color: AppColors.roseDeep,
-                      ),
-                      const SizedBox(height: AppSpacing.sm),
+                      // Zone label intentionally absent here — the TodayHero
+                      // card already carries 'Сегодня · <дата>' as its own
+                      // eyebrow, and printing 'Сегодня' twice in a row felt
+                      // redundant on a tight scroll.
                       _TodayHeroCard(result: lastResult),
                       const SizedBox(height: AppSpacing.sm + 2),
                       _LinaNudge(
