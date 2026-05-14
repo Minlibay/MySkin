@@ -12,6 +12,13 @@ import {
 export type ProductFormResult = {
   input: ProductInput;
   photo: { dataUrl: string; mime: string } | null;
+  /// Optional additional slots 2-4. Only slots that changed are present.
+  extraPhotos: {
+    slot: number;
+    dataUrl: string | null;
+    mime: string;
+    /// True when user uploaded/replaced. Null dataUrl means user removed.
+  }[];
 };
 
 export default function ProductForm({
@@ -54,6 +61,20 @@ export default function ProductForm({
   );
   const [photoMime, setPhotoMime] = useState<string>('image/jpeg');
   const [photoChanged, setPhotoChanged] = useState(false);
+  // Slots 2-4. Each entry tracks its own dataUrl + mime + dirty flag so we
+  // only PATCH/DELETE on the server for slots the user actually touched.
+  const initialSlots = initial?.photo_slots ?? (initial?.has_photo ? [1] : []);
+  const [extraSlots, setExtraSlots] = useState<
+    { dataUrl: string | null; mime: string; changed: boolean }[]
+  >(() => {
+    return [2, 3, 4].map((s) => ({
+      dataUrl: initialSlots.includes(s)
+        ? api.productPhotoUrl(initial!.id, s)
+        : null,
+      mime: 'image/jpeg',
+      changed: false,
+    }));
+  });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [pendingStatus, setPendingStatus] = useState<
@@ -116,6 +137,15 @@ export default function ProductForm({
               mime: photoMime,
             }
           : null;
+      const extraPhotos = extraSlots
+        .map((s, i) => ({
+          slot: i + 2,
+          dataUrl: s.dataUrl,
+          mime: s.mime,
+          changed: s.changed,
+        }))
+        .filter((s) => s.changed)
+        .map(({ slot, dataUrl, mime }) => ({ slot, dataUrl, mime }));
       await onSave({
         input: {
           slug: slug.trim(),
@@ -134,6 +164,7 @@ export default function ProductForm({
           status,
         },
         photo,
+        extraPhotos,
       });
     } catch (e) {
       setErr(String(e));
@@ -180,6 +211,41 @@ export default function ProductForm({
               setPhotoChanged(true);
             }}
             accent={accentColor}
+          />
+          <ExtraPhotosRow
+            slots={extraSlots}
+            accent={accentColor}
+            onPick={(idx, file) => {
+              if (file.size > 6 * 1024 * 1024) {
+                setErr('Фото слишком большое (>6MB)');
+                return;
+              }
+              const r = new FileReader();
+              r.onload = () => {
+                setExtraSlots((s) =>
+                  s.map((row, i) =>
+                    i === idx
+                      ? {
+                          dataUrl: r.result as string,
+                          mime: file.type || 'image/jpeg',
+                          changed: true,
+                        }
+                      : row
+                  )
+                );
+                setErr(null);
+              };
+              r.readAsDataURL(file);
+            }}
+            onRemove={(idx) =>
+              setExtraSlots((s) =>
+                s.map((row, i) =>
+                  i === idx
+                    ? { dataUrl: null, mime: 'image/jpeg', changed: true }
+                    : row
+                )
+              )
+            }
           />
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -443,6 +509,71 @@ function PhotoBlock({
             </button>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function ExtraPhotosRow({
+  slots,
+  accent,
+  onPick,
+  onRemove,
+}: {
+  slots: { dataUrl: string | null; mime: string; changed: boolean }[];
+  accent: string;
+  onPick: (idx: number, file: File) => void;
+  onRemove: (idx: number) => void;
+}) {
+  return (
+    <div>
+      <div className="eyebrow mb-2">Дополнительные фото (слоты 2–4)</div>
+      <div className="flex gap-3 flex-wrap">
+        {slots.map((s, i) => (
+          <div key={i} className="flex flex-col items-center gap-2">
+            <label
+              className="w-20 h-24 rounded-xl overflow-hidden flex items-center justify-center cursor-pointer"
+              style={{
+                background: s.dataUrl
+                  ? '#f0f0f0'
+                  : `linear-gradient(180deg, white, ${accent}33)`,
+                border: '1px dashed rgba(0,0,0,0.15)',
+              }}
+            >
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) onPick(i, file);
+                  e.currentTarget.value = '';
+                }}
+              />
+              {s.dataUrl ? (
+                <img
+                  src={s.dataUrl}
+                  alt=""
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <span className="text-ink2 text-2xl">＋</span>
+              )}
+            </label>
+            <div className="flex gap-1 text-xs">
+              <span className="text-ink2">слот {i + 2}</span>
+              {s.dataUrl && (
+                <button
+                  type="button"
+                  className="text-warning hover:underline"
+                  onClick={() => onRemove(i)}
+                >
+                  убрать
+                </button>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

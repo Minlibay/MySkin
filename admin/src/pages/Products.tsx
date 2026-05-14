@@ -38,9 +38,24 @@ export default function Products() {
     await api.productUploadPhoto(id, b64, photo.mime);
   }
 
+  async function syncExtraPhotos(
+    id: string,
+    extras: ProductFormResult['extraPhotos']
+  ) {
+    for (const e of extras) {
+      if (e.dataUrl == null) {
+        await api.productDeletePhotoSlot(id, e.slot);
+      } else {
+        const b64 = e.dataUrl.split(',')[1] ?? '';
+        if (b64) await api.productUploadPhotoSlot(id, e.slot, b64, e.mime);
+      }
+    }
+  }
+
   async function onCreate(r: ProductFormResult) {
     const created = await api.productCreate(r.input);
     await uploadPhotoIfAny(created.id, r.photo);
+    await syncExtraPhotos(created.id, r.extraPhotos);
     setItems((arr) => [
       { ...created, has_photo: !!r.photo || created.has_photo },
       ...arr,
@@ -52,6 +67,7 @@ export default function Products() {
     if (!editing) return;
     const updated = await api.productUpdate(editing.id, r.input);
     if (r.photo) await uploadPhotoIfAny(updated.id, r.photo);
+    await syncExtraPhotos(updated.id, r.extraPhotos);
     setItems((arr) =>
       arr.map((p) =>
         p.id === updated.id

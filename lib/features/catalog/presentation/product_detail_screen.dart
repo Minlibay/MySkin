@@ -295,12 +295,30 @@ class _RoundButton extends StatelessWidget {
   }
 }
 
-class _PhotoBlock extends StatelessWidget {
+class _PhotoBlock extends ConsumerStatefulWidget {
   const _PhotoBlock({required this.product});
   final Product product;
 
   @override
+  ConsumerState<_PhotoBlock> createState() => _PhotoBlockState();
+}
+
+class _PhotoBlockState extends ConsumerState<_PhotoBlock> {
+  late final PageController _ctrl = PageController();
+  int _index = 0;
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final api = ref.read(backendApiProvider);
+    final slots = widget.product.photoSlots;
+    final hasPhotos = slots.isNotEmpty;
+    final dotCount = hasPhotos ? slots.length : 1;
     return Container(
       height: 280,
       clipBehavior: Clip.antiAlias,
@@ -336,38 +354,82 @@ class _PhotoBlock extends StatelessWidget {
               ),
             ),
           ),
-          Center(
-            child: Hero(
-              tag: 'bottle-${product.slug}',
-              child: ProductBottle(
-                product: product,
-                width: 120,
-                height: 200,
-                label: product.kindLabel,
+          if (!hasPhotos)
+            Center(
+              child: Hero(
+                tag: 'bottle-${widget.product.slug}',
+                child: ProductBottle(
+                  product: widget.product,
+                  width: 120,
+                  height: 200,
+                  label: widget.product.kindLabel,
+                ),
+              ),
+            )
+          else
+            PageView.builder(
+              controller: _ctrl,
+              itemCount: slots.length,
+              onPageChanged: (i) => setState(() => _index = i),
+              itemBuilder: (_, i) => Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(20),
+                  child: i == 0
+                      ? Hero(
+                          tag: 'bottle-${widget.product.slug}',
+                          child: _NetworkPhoto(
+                            url: api.productPhotoUrl(
+                                widget.product.id,
+                                slot: slots[i]),
+                          ),
+                        )
+                      : _NetworkPhoto(
+                          url: api.productPhotoUrl(widget.product.id,
+                              slot: slots[i]),
+                        ),
+                ),
               ),
             ),
-          ),
-          Positioned(
-            left: 16,
-            bottom: 16,
-            child: Row(
-              children: List.generate(4, (i) {
-                final on = i == 0;
-                return Container(
-                  margin: const EdgeInsets.only(right: 6),
-                  width: 6,
-                  height: 6,
-                  decoration: BoxDecoration(
-                    shape: BoxShape.circle,
-                    color: on
-                        ? AppColors.roseDeep
-                        : AppColors.textPrimary.withOpacity(0.2),
-                  ),
-                );
-              }),
+          if (dotCount > 1)
+            Positioned(
+              left: 16,
+              bottom: 16,
+              child: Row(
+                children: List.generate(dotCount, (i) {
+                  final on = i == _index;
+                  return AnimatedContainer(
+                    duration: const Duration(milliseconds: 180),
+                    margin: const EdgeInsets.only(right: 6),
+                    width: on ? 16 : 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(3),
+                      color: on
+                          ? AppColors.roseDeep
+                          : AppColors.textPrimary.withOpacity(0.2),
+                    ),
+                  );
+                }),
+              ),
             ),
-          ),
         ],
+      ),
+    );
+  }
+}
+
+class _NetworkPhoto extends StatelessWidget {
+  const _NetworkPhoto({required this.url});
+  final String url;
+
+  @override
+  Widget build(BuildContext context) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: Image.network(
+        url,
+        fit: BoxFit.contain,
+        errorBuilder: (_, __, ___) => const SizedBox.shrink(),
       ),
     );
   }

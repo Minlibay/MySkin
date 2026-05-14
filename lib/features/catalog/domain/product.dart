@@ -23,6 +23,7 @@ class Product {
     this.hasPhoto = false,
     this.status = 'published',
     this.isFavorite = false,
+    this.photoSlots = const [],
   });
 
   final String id;
@@ -56,6 +57,11 @@ class Product {
   /// True if the current user has bookmarked this product. Only meaningful on
   /// product-detail responses — list endpoints don't currently surface it.
   final bool isFavorite;
+
+  /// Slot numbers (1..4) where the admin has uploaded photos. Empty list
+  /// means the product has no photos yet; one slot means single classic
+  /// photo. Only present on /catalog/<slug> detail responses.
+  final List<int> photoSlots;
 
   factory Product.fromJson(Map<String, dynamic> j) {
     Color parseColor(String hex) {
@@ -98,6 +104,8 @@ class Product {
           ? j['status'] as String
           : 'published',
       isFavorite: j['is_favorite'] as bool? ?? false,
+      photoSlots:
+          ((j['photo_slots'] as List?) ?? const []).map((e) => (e as num).toInt()).toList(),
     );
   }
 

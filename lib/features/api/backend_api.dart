@@ -277,7 +277,10 @@ class BackendApi {
     }
   }
 
-  String productPhotoUrl(String id) => '$baseUrl/products/$id/photo';
+  String productPhotoUrl(String id, {int? slot}) =>
+      slot == null
+          ? '$baseUrl/products/$id/photo'
+          : '$baseUrl/products/$id/photo/$slot';
 
   Future<ScanResult> getScan(String id) async {
     final r = await _dio.get('$baseUrl/me/scans/$id', options: _auth());

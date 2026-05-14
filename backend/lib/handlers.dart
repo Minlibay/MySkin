@@ -219,6 +219,10 @@ class AdminHandlers {
     ..patch('/admin/products/<id>', _withAdmin(_updateProduct))
     ..delete('/admin/products/<id>', _withAdmin(_deleteProduct))
     ..post('/admin/products/<id>/photo', _withAdmin(_uploadProductPhoto))
+    ..post('/admin/products/<id>/photo/<slot>',
+        _withAdmin(_uploadProductPhotoSlot))
+    ..delete('/admin/products/<id>/photo/<slot>',
+        _withAdmin(_deleteProductPhotoSlot))
     ..get('/admin/pending-codes', _withAdmin(_pendingCodes))
     ..get('/admin/settings/gigachat', _withAdmin(_getGigaSettings))
     ..put('/admin/settings/gigachat', _withAdmin(_setGigaSettings))
@@ -403,8 +407,12 @@ class AdminHandlers {
       limit: int.tryParse(qp['limit'] ?? '') ?? 200,
       offset: int.tryParse(qp['offset'] ?? '') ?? 0,
     );
-    return jsonResponse(
-        200, {'items': items.map((p) => p.toJson()).toList()});
+    final enriched = <Map<String, dynamic>>[];
+    for (final p in items) {
+      final slots = await products.photoSlots(p.id);
+      enriched.add({...p.toJson(), 'photo_slots': slots});
+    }
+    return jsonResponse(200, {'items': enriched});
   }
 
   Future<Response> _createProduct(Request req) async {
@@ -447,6 +455,19 @@ class AdminHandlers {
   }
 
   Future<Response> _uploadProductPhoto(Request req) async {
+    return _setProductPhotoSlot(req, slot: 1);
+  }
+
+  Future<Response> _uploadProductPhotoSlot(Request req) async {
+    final slot = int.tryParse(req.params['slot'] ?? '');
+    if (slot == null || slot < 1 || slot > 4) {
+      return jsonResponse(400, {'error': 'invalid_slot'});
+    }
+    return _setProductPhotoSlot(req, slot: slot);
+  }
+
+  Future<Response> _setProductPhotoSlot(Request req,
+      {required int slot}) async {
     final id = req.params['id']!;
     final body =
         jsonDecode(await req.readAsString()) as Map<String, dynamic>;
@@ -466,7 +487,17 @@ class AdminHandlers {
     }
     final existing = await products.findById(id);
     if (existing == null) return jsonResponse(404, {'error': 'not_found'});
-    await products.setPhoto(id: id, bytes: bytes, mime: mime);
+    await products.setPhoto(id: id, bytes: bytes, mime: mime, slot: slot);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _deleteProductPhotoSlot(Request req) async {
+    final id = req.params['id']!;
+    final slot = int.tryParse(req.params['slot'] ?? '');
+    if (slot == null || slot < 1 || slot > 4) {
+      return jsonResponse(400, {'error': 'invalid_slot'});
+    }
+    await products.removePhoto(id: id, slot: slot);
     return jsonResponse(200, {'ok': true});
   }
 
@@ -919,6 +950,7 @@ class CatalogHandlers {
     ..get('/catalog', _withUser(_list))
     ..get('/catalog/<slug>', _withUser(_detail))
     ..get('/products/<id>/photo', _photo) // public for mobile + admin previews
+    ..get('/products/<id>/photo/<slot>', _photoSlot)
     ..get('/me/shelf', _withUser(_shelf))
     ..put('/me/shelf/<productId>', _withUser(_addToShelf))
     ..delete('/me/shelf/<productId>', _withUser(_removeFromShelf))
@@ -978,6 +1010,21 @@ class CatalogHandlers {
     );
   }
 
+  Future<Response> _photoSlot(Request req) async {
+    final id = req.params['id']!;
+    final slot = int.tryParse(req.params['slot'] ?? '') ?? 1;
+    if (slot < 1 || slot > 4) return jsonResponse(404, {'error': 'no_photo'});
+    final p = await products.getPhoto(id, slot: slot);
+    if (p == null) return jsonResponse(404, {'error': 'no_photo'});
+    return Response.ok(
+      p.bytes,
+      headers: {
+        'content-type': p.mime,
+        'cache-control': 'public, max-age=86400',
+      },
+    );
+  }
+
   Future<Response> _detail(Request req, UserRow user) async {
     final slug = req.params['slug']!;
     final p = await products.findBySlug(slug, publishedOnly: true);
@@ -986,11 +1033,13 @@ class CatalogHandlers {
     final m = computeMatch(profile: profile, product: p);
     final isFav =
         await favorites.contains(userId: user.id, productId: p.id);
+    final slots = await products.photoSlots(p.id);
     return jsonResponse(200, {
       ...p.toJson(),
       'match_score': m.score,
       'match_reasons': m.reasons,
       'is_favorite': isFav,
+      'photo_slots': slots,
     });
   }
 

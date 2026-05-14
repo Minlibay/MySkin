@@ -126,6 +126,28 @@ export const api = {
     });
   },
 
+  productUploadPhotoSlot(
+    id: string,
+    slot: number,
+    photoB64: string,
+    mime: string
+  ) {
+    return this.request<{ ok: boolean }>(
+      `/admin/products/${id}/photo/${slot}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ photo_b64: photoB64, mime }),
+      }
+    );
+  },
+
+  productDeletePhotoSlot(id: string, slot: number) {
+    return this.request<{ ok: boolean }>(
+      `/admin/products/${id}/photo/${slot}`,
+      { method: 'DELETE' }
+    );
+  },
+
   productUploadPhoto(id: string, photoB64: string, mime: string) {
     return this.request<{ ok: boolean }>(
       `/admin/products/${id}/photo`,
@@ -136,8 +158,10 @@ export const api = {
     );
   },
 
-  productPhotoUrl(id: string) {
-    return `${this.baseUrl}/products/${id}/photo`;
+  productPhotoUrl(id: string, slot?: number) {
+    return slot == null
+      ? `${this.baseUrl}/products/${id}/photo`
+      : `${this.baseUrl}/products/${id}/photo/${slot}`;
   },
 
   pendingCodes() {
@@ -273,6 +297,7 @@ export type AdminProduct = {
   routine_phase: string;
   status: 'draft' | 'published';
   has_photo: boolean;
+  photo_slots?: number[];
 };
 
 export type ProductInput = {

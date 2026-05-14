@@ -664,29 +664,102 @@ class ProductRepository {
     return r.isEmpty ? null : ProductRow.fromRow(r.first);
   }
 
-  Future<({List<int> bytes, String mime})?> getPhoto(String id) async {
+  Future<({List<int> bytes, String mime})?> getPhoto(String id,
+      {int slot = 1}) async {
     final r = await db.execute(
-      Sql.named('SELECT photo, photo_mime FROM products WHERE id = @id'),
-      parameters: {'id': id},
+      Sql.named('''
+        SELECT bytes, mime FROM product_photos
+        WHERE product_id = @id AND slot = @s
+      '''),
+      parameters: {'id': id, 's': slot},
     );
-    if (r.isEmpty || r.first[0] == null) return null;
-    return (
-      bytes: r.first[0] as List<int>,
-      mime: (r.first[1] as String?) ?? 'image/jpeg',
-    );
+    if (r.isNotEmpty && r.first[0] != null) {
+      return (
+        bytes: r.first[0] as List<int>,
+        mime: (r.first[1] as String?) ?? 'image/jpeg',
+      );
+    }
+    // Back-compat: fall back to the legacy products.photo blob if the new
+    // table doesn't have slot 1 yet (migration mid-rollout / older row).
+    if (slot == 1) {
+      final r2 = await db.execute(
+        Sql.named('SELECT photo, photo_mime FROM products WHERE id = @id'),
+        parameters: {'id': id},
+      );
+      if (r2.isEmpty || r2.first[0] == null) return null;
+      return (
+        bytes: r2.first[0] as List<int>,
+        mime: (r2.first[1] as String?) ?? 'image/jpeg',
+      );
+    }
+    return null;
   }
 
-  Future<void> setPhoto(
-      {required String id, required List<int> bytes, required String mime}) async {
+  Future<void> setPhoto({
+    required String id,
+    required List<int> bytes,
+    required String mime,
+    int slot = 1,
+  }) async {
+    final b = TypedValue(Type.byteArray, Uint8List.fromList(bytes));
     await db.execute(
-      Sql.named(
-          'UPDATE products SET photo = @b, photo_mime = @m WHERE id = @id'),
-      parameters: {
-        'id': id,
-        'b': TypedValue(Type.byteArray, Uint8List.fromList(bytes)),
-        'm': mime,
-      },
+      Sql.named('''
+        INSERT INTO product_photos (product_id, slot, bytes, mime)
+        VALUES (@id, @s, @b, @m)
+        ON CONFLICT (product_id, slot) DO UPDATE SET
+          bytes = EXCLUDED.bytes,
+          mime = EXCLUDED.mime,
+          uploaded_at = now()
+      '''),
+      parameters: {'id': id, 's': slot, 'b': b, 'm': mime},
     );
+    // Mirror slot 1 into the legacy column for one release so older code
+    // that still reads products.photo doesn't see an empty image.
+    if (slot == 1) {
+      await db.execute(
+        Sql.named(
+            'UPDATE products SET photo = @b, photo_mime = @m WHERE id = @id'),
+        parameters: {'id': id, 'b': b, 'm': mime},
+      );
+    }
+  }
+
+  Future<void> removePhoto({required String id, required int slot}) async {
+    await db.execute(
+      Sql.named('''
+        DELETE FROM product_photos
+        WHERE product_id = @id AND slot = @s
+      '''),
+      parameters: {'id': id, 's': slot},
+    );
+    if (slot == 1) {
+      await db.execute(
+        Sql.named('UPDATE products SET photo = NULL, photo_mime = NULL '
+            'WHERE id = @id'),
+        parameters: {'id': id},
+      );
+    }
+  }
+
+  Future<List<int>> photoSlots(String id) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT slot FROM product_photos
+        WHERE product_id = @id ORDER BY slot
+      '''),
+      parameters: {'id': id},
+    );
+    final slots = r.map((row) => (row[0] as int)).toList();
+    if (slots.isEmpty) {
+      // Legacy single-photo case.
+      final r2 = await db.execute(
+        Sql.named(
+            'SELECT 1 FROM products WHERE id = @id AND photo IS NOT NULL'),
+        parameters: {'id': id},
+      );
+      if (r2.isNotEmpty) return [1];
+    }
+    return slots;
   }
 
   Future<void> delete(String id) async {
