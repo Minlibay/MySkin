@@ -18,6 +18,12 @@
 	<string>Нужен доступ к микрофону, чтобы можно было голосом задавать вопросы Лине.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>Нужен доступ к распознаванию речи, чтобы перевести голосовое сообщение в текст.</string>
+	<!-- Export compliance: app uses only the OS's standard HTTPS/TLS stack;
+	     no proprietary or additional crypto. Equivalent to answering
+	     'None of the above' on every upload, but now App Store Connect
+	     won't ask. -->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
