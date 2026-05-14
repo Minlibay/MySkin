@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
@@ -10,8 +11,9 @@ import '../domain/chat_message.dart';
 import 'chat_controller.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key, required this.onBack});
+  const ChatScreen({super.key, required this.onBack, this.onOpenScan});
   final VoidCallback onBack;
+  final VoidCallback? onOpenScan;
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -21,13 +23,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _input = TextEditingController();
   final _scroll = ScrollController();
   final _focus = FocusNode();
+  final _speech = stt.SpeechToText();
+  bool _speechReady = false;
   bool _listening = false;
+  // Text already in the input when dictation started — keeps the user's
+  // typed prefix while we append recognised words after a space.
+  String _speechBase = '';
 
   @override
   void dispose() {
     _input.dispose();
     _scroll.dispose();
     _focus.dispose();
+    _speech.stop();
     super.dispose();
   }
 
@@ -77,21 +85,21 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            ListTile(
-              leading: const Icon(Icons.center_focus_strong_rounded,
-                  color: AppColors.roseDeep),
-              title: Text('Сделать скан кожи', style: AppTypography.body),
-              subtitle: Text(
-                'Лина увидит метрики и зоны',
-                style: AppTypography.caption.copyWith(fontSize: 12),
+            if (widget.onOpenScan != null)
+              ListTile(
+                leading: const Icon(Icons.center_focus_strong_rounded,
+                    color: AppColors.roseDeep),
+                title:
+                    Text('Сделать скан кожи', style: AppTypography.body),
+                subtitle: Text(
+                  'Селфи → метрики и карта зон',
+                  style: AppTypography.caption.copyWith(fontSize: 12),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  widget.onOpenScan!();
+                },
               ),
-              onTap: () {
-                Navigator.pop(ctx);
-                ref
-                    .read(chatControllerProvider.notifier)
-                    .send('Хочу показать кожу — сделать скан.');
-              },
-            ),
             ListTile(
               leading:
                   const Icon(Icons.science_outlined, color: AppColors.roseDeep),
@@ -125,18 +133,60 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
-  void _toggleMic() {
-    // Speech recognition is a separate native dep that breaks on web. For now
-    // surface a hint and let the user know it's coming.
-    setState(() => _listening = !_listening);
-    Future.delayed(const Duration(seconds: 1), () {
-      if (!mounted) return;
-      setState(() => _listening = false);
-    });
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Голосовой ввод подключим в native-сборке.'),
-        duration: Duration(seconds: 2),
+  Future<void> _toggleMic() async {
+    if (_listening) {
+      await _speech.stop();
+      if (mounted) setState(() => _listening = false);
+      return;
+    }
+    if (!_speechReady) {
+      _speechReady = await _speech.initialize(
+        onStatus: (status) {
+          if (!mounted) return;
+          // 'notListening' / 'done' arrive when speech engine stops on its
+          // own (silence timeout). Reflect that in our UI state.
+          if (status == 'notListening' || status == 'done') {
+            setState(() => _listening = false);
+          }
+        },
+        onError: (e) {
+          if (!mounted) return;
+          setState(() => _listening = false);
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Не удалось включить микрофон: ${e.errorMsg}')),
+          );
+        },
+      );
+      if (!_speechReady) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Разреши доступ к микрофону в настройках.'),
+          ),
+        );
+        return;
+      }
+    }
+    _speechBase = _input.text;
+    setState(() => _listening = true);
+    await _speech.listen(
+      localeId: 'ru_RU',
+      onResult: (r) {
+        if (!mounted) return;
+        final recognised = r.recognizedWords;
+        final combined = _speechBase.isEmpty
+            ? recognised
+            : '${_speechBase.trimRight()} $recognised';
+        _input.value = TextEditingValue(
+          text: combined,
+          selection: TextSelection.collapsed(offset: combined.length),
+        );
+      },
+      listenOptions: stt.SpeechListenOptions(
+        // Partial results so the text fills in as the user speaks, not only
+        // at the end of utterance.
+        partialResults: true,
+        cancelOnError: true,
       ),
     );
   }

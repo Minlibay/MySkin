@@ -14,6 +14,10 @@
 	<string>Нужен доступ к галерее, чтобы выбрать фото кожи для анализа.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Нужен доступ к галерее, чтобы сохранять фото из приложения.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Нужен доступ к микрофону, чтобы можно было голосом задавать вопросы Лине.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Нужен доступ к распознаванию речи, чтобы перевести голосовое сообщение в текст.</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>

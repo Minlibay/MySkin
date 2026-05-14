@@ -23,6 +23,7 @@ dependencies:
   timezone: ^0.9.4
   flutter_timezone: ^3.0.1
   sentry_flutter: ^8.10.1
+  speech_to_text: ^7.0.0
 
 dev_dependencies:
   flutter_test:

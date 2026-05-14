@@ -16,6 +16,15 @@
     <!-- Re-schedule daily ritual reminders after a device reboot. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
 
+    <!-- Voice dictation in Лина-диалог (mic capture). -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO"/>
+    <!-- Allow speech_to_text to find the on-device speech recogniser. -->
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService"/>
+        </intent>
+    </queries>
+
     <application
         android:label="Моя Кожа"
         android:name="${applicationName}"
