@@ -281,23 +281,38 @@ class _StepTitle extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final words = title.split(RegExp(r'(\s+)'));
+    // Dart's String.split() drops the delimiter even when it's a capturing
+    // group — so the previous `title.split(RegExp(r'(\s+)'))` glued every
+    // word together visually. Walk the string manually instead so the
+    // whitespace runs survive between word spans.
     final spans = <TextSpan>[];
-    for (final w in words) {
-      if (w.trim().isEmpty) {
-        spans.add(TextSpan(text: w, style: AppTypography.display));
-        continue;
+    final pattern = RegExp(r'\s+');
+    var cursor = 0;
+    for (final m in pattern.allMatches(title)) {
+      if (m.start > cursor) {
+        spans.add(_styledWord(title.substring(cursor, m.start)));
       }
-      final lower = w.toLowerCase().replaceAll(RegExp(r'[^а-яё]'), '');
-      if (_accents.contains(lower)) {
-        spans.add(TextSpan(
-            text: w,
-            style: AppTypography.serifItalic(fontSize: 36)));
-      } else {
-        spans.add(TextSpan(text: w, style: AppTypography.display));
-      }
+      spans.add(TextSpan(
+        text: title.substring(m.start, m.end),
+        style: AppTypography.display,
+      ));
+      cursor = m.end;
+    }
+    if (cursor < title.length) {
+      spans.add(_styledWord(title.substring(cursor)));
     }
     return Text.rich(TextSpan(children: spans));
+  }
+
+  TextSpan _styledWord(String w) {
+    final lower = w.toLowerCase().replaceAll(RegExp(r'[^а-яё]'), '');
+    if (_accents.contains(lower)) {
+      return TextSpan(
+        text: w,
+        style: AppTypography.serifItalic(fontSize: 36),
+      );
+    }
+    return TextSpan(text: w, style: AppTypography.display);
   }
 }
 
