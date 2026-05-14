@@ -160,8 +160,6 @@ class _StepView extends StatelessWidget {
         return profile.sensitivity;
       case OnboardingStepId.sensitivityReaction:
         return profile.sensitivityReaction;
-      case OnboardingStepId.budget:
-        return profile.budget;
       default:
         return null;
     }
@@ -178,6 +176,7 @@ class _StepView extends StatelessWidget {
         children: [
           if (stepNum != null)
             EyebrowText('Шаг $stepNum · из 06', color: AppColors.roseDeep),
+          // total = 6 steps after budget removal — counter renumbered below
           if (stepNum != null) const SizedBox(height: 10),
           _StepTitle(title: step.title),
           if (step.subtitle != null) ...[
@@ -217,7 +216,6 @@ class _StepView extends StatelessWidget {
         OnboardingStepId.acneType => 5,
         OnboardingStepId.sensitivity => 5,
         OnboardingStepId.sensitivityReaction => 6,
-        OnboardingStepId.budget => 7,
         OnboardingStepId.done => null,
       };
 

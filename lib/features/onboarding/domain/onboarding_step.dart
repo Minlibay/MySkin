@@ -10,7 +10,6 @@ enum OnboardingStepId {
   acneType,
   sensitivity,
   sensitivityReaction,
-  budget,
   done,
 }
 
@@ -149,16 +148,10 @@ class OnboardingFlow {
     ],
   );
 
-  static const budgetStep = OnboardingStep(
-    id: OnboardingStepId.budget,
-    title: 'Какой бюджет на уход?',
-    subtitle: 'В месяц на все средства',
-    options: [
-      StepOption(id: 'low', title: 'До 3 000 ₽', emoji: '💰'),
-      StepOption(id: 'mid', title: '3 000 – 10 000 ₽', emoji: '💎'),
-      StepOption(id: 'high', title: '10 000+ ₽', emoji: '👑'),
-    ],
-  );
+  // The previous budgetStep ('Какой бюджет на уход?') was dropped — the answer
+  // never improved recommendations enough to justify the friction at the end
+  // of onboarding. SkinProfile.budget stays on the model and in the DB as a
+  // nullable field so existing rows aren't migrated.
 
   /// Computes the next step from current profile + previously asked id.
   static OnboardingStepId next(SkinProfile profile, OnboardingStepId current) {
@@ -187,10 +180,8 @@ class OnboardingFlow {
         if (profile.sensitivity == 'yes') {
           return OnboardingStepId.sensitivityReaction;
         }
-        return OnboardingStepId.budget;
+        return OnboardingStepId.done;
       case OnboardingStepId.sensitivityReaction:
-        return OnboardingStepId.budget;
-      case OnboardingStepId.budget:
         return OnboardingStepId.done;
       case OnboardingStepId.done:
         return OnboardingStepId.done;
@@ -223,11 +214,8 @@ class OnboardingFlow {
       case OnboardingStepId.sensitivity:
         return sensitivityStep;
       case OnboardingStepId.sensitivityReaction:
-        return sensitivityReactionStep;
-      case OnboardingStepId.budget:
-        return budgetStep;
       case OnboardingStepId.done:
-        return budgetStep;
+        return sensitivityReactionStep;
     }
   }
 }

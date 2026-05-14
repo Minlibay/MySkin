@@ -110,8 +110,6 @@ class OnboardingController extends StateNotifier<OnboardingState> {
         return profile.copyWith(sensitivity: v);
       case OnboardingStepId.sensitivityReaction:
         return profile.copyWith(sensitivityReaction: v);
-      case OnboardingStepId.budget:
-        return profile.copyWith(budget: v);
       case OnboardingStepId.name:
       case OnboardingStepId.concerns:
       case OnboardingStepId.done:

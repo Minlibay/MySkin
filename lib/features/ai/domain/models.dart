@@ -72,8 +72,11 @@ class SkinProfile {
         if (extras.isNotEmpty) 'extras': extras,
       };
 
+  /// Budget was once required here, but the onboarding step that captured it
+  /// has been removed — gating the rest of the app on a question we no longer
+  /// ask would lock out every newly onboarded user.
   bool get hasMinimumData =>
-      skinType != null && concerns.isNotEmpty && budget != null;
+      skinType != null && concerns.isNotEmpty;
 }
 
 class RoutineStep {
