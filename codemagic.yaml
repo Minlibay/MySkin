@@ -58,24 +58,36 @@ workflows:
           set -ex
           keychain initialize
 
-          # Generate a fresh private key for the new distribution certificate.
-          # The CLI uses this to build the CSR and save the resulting .p12.
           PRIVATE_KEY=/tmp/cm_distribution.key
           openssl genrsa -out "$PRIVATE_KEY" 2048
 
-          # Create cert + provisioning profile via API in one shot.
-          # @file:<path> tells the CLI to read the private key from disk.
+          # Revoke every existing distribution certificate before trying to
+          # create a new one. Past failed Codemagic runs leave orphaned certs
+          # on Apple's side whose private key we don't have on this build
+          # machine; they only count against the 2-cert-per-team limit and
+          # block fetch-signing-files --create with HTTP 409. Doing it here
+          # makes the pipeline self-healing — no manual revoke step in the
+          # Apple Developer Portal each time the build fails halfway.
+          for type in IOS_DISTRIBUTION DISTRIBUTION; do
+            echo "--- Listing existing $type certs ---"
+            JSON=$(app-store-connect list-certificates --type "$type" --json 2>/dev/null || echo "[]")
+            ids=$(printf '%s' "$JSON" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("\n".join(c.get("id","") for c in (d if isinstance(d,list) else [])))' 2>/dev/null || true)
+            for id in $ids; do
+              [ -n "$id" ] || continue
+              echo "Revoking stale $type certificate $id"
+              app-store-connect certificates delete "$id" 2>/dev/null \
+                || app-store-connect delete-certificate "$id" 2>/dev/null \
+                || true
+            done
+          done
+
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --platform IOS \
             --type IOS_APP_STORE \
             --certificate-key "@file:$PRIVATE_KEY" \
             --create
 
-          # Import the saved p12 (in /Users/builder/Library/Developer/Xcode/UserData/Certificates)
-          # into the temporary keychain so xcodebuild can sign with it.
           keychain add-certificates
-
-          # Wire the fetched provisioning profile into the Xcode project.
           xcode-project use-profiles
 
           echo "--- codesigning identities ---"
