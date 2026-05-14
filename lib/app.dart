@@ -12,6 +12,7 @@ import 'features/auth/presentation/splash_screen.dart';
 import 'features/catalog/domain/product.dart';
 import 'features/chat/presentation/chat_screen.dart';
 import 'features/catalog/presentation/catalog_screen.dart';
+import 'features/catalog/presentation/favorites_screen.dart';
 import 'features/catalog/presentation/product_detail_screen.dart';
 import 'features/catalog/presentation/shelf_screen.dart';
 import 'features/derm2/presentation/derm2_screen.dart';
@@ -149,6 +150,7 @@ enum _Shell {
   chat,
   notifications,
   quickCheckIn,
+  favorites,
 }
 
 class _AppShell extends ConsumerStatefulWidget {
@@ -374,6 +376,7 @@ class _AppShellState extends ConsumerState<_AppShell> {
           onOpenShelf: () => setState(() => _view = _Shell.shelf),
           onOpenProgress: () => setState(() => _view = _Shell.progress),
           onProfileUpdated: (p) => setState(() => _profile = p),
+          onOpenFavorites: () => setState(() => _view = _Shell.favorites),
           onOpenRoutineHistory: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (ctx) => RoutineHistoryScreen(
@@ -419,6 +422,15 @@ class _AppShellState extends ConsumerState<_AppShell> {
             // ignore: unawaited_futures
             _runStandard(checkIn: answers);
           },
+        );
+      case _Shell.favorites:
+        return FavoritesScreen(
+          onBack: () => setState(() => _view = _Shell.profile),
+          onOpen: (p) => setState(() {
+            _previousView = _Shell.favorites;
+            _openProductSlug = p.slug;
+            _view = _Shell.productDetail;
+          }),
         );
     }
   }

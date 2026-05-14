@@ -264,53 +264,78 @@ class _ChipRow extends StatelessWidget {
   }
 }
 
-class _ProductCard extends StatelessWidget {
+class _ProductCard extends ConsumerStatefulWidget {
   const _ProductCard({required this.product, required this.onTap});
   final Product product;
   final VoidCallback onTap;
 
   @override
+  ConsumerState<_ProductCard> createState() => _ProductCardState();
+}
+
+class _ProductCardState extends ConsumerState<_ProductCard> {
+  late bool _fav = widget.product.isFavorite;
+
+  Future<void> _toggleFav() async {
+    final next = !_fav;
+    setState(() => _fav = next);
+    final api = ref.read(backendApiProvider);
+    try {
+      if (next) {
+        await api.addFavorite(widget.product.id);
+      } else {
+        await api.removeFavorite(widget.product.id);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _fav = !next);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: AppColors.surface,
+    final product = widget.product;
+    return Stack(
+      children: [
+        Material(
+          color: Colors.transparent,
+          child: InkWell(
             borderRadius: BorderRadius.circular(20),
-            border: Border.all(color: AppColors.divider),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (product.matchScore != null)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: AppColors.primary,
-                    borderRadius: BorderRadius.circular(99),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.auto_awesome,
-                          size: 11, color: AppColors.roseDeep),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${product.matchScore}% совпадение',
-                        style: AppTypography.caption.copyWith(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
-                          color: AppColors.roseDeep,
-                        ),
+            onTap: widget.onTap,
+            child: Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: AppColors.divider),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (product.matchScore != null)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
+                      decoration: BoxDecoration(
+                        color: AppColors.primary,
+                        borderRadius: BorderRadius.circular(99),
                       ),
-                    ],
-                  ),
-                ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.auto_awesome,
+                              size: 11, color: AppColors.roseDeep),
+                          const SizedBox(width: 4),
+                          Text(
+                            '${product.matchScore}% совпадение',
+                            style: AppTypography.caption.copyWith(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w500,
+                              color: AppColors.roseDeep,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
               const SizedBox(height: 10),
               Center(
                 child: ProductBottle(
@@ -343,6 +368,33 @@ class _ProductCard extends StatelessWidget {
           ),
         ),
       ),
+    ),
+        Positioned(
+          right: 6,
+          top: 6,
+          child: Material(
+            color: Colors.white.withOpacity(0.85),
+            shape: const CircleBorder(),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: _toggleFav,
+              child: SizedBox(
+                width: 32,
+                height: 32,
+                child: Icon(
+                  _fav
+                      ? Icons.favorite_rounded
+                      : Icons.favorite_border_rounded,
+                  size: 16,
+                  color: _fav
+                      ? AppColors.roseDeep
+                      : AppColors.textSecondary,
+                ),
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

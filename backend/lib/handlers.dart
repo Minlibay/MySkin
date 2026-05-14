@@ -922,6 +922,7 @@ class CatalogHandlers {
     ..get('/me/shelf', _withUser(_shelf))
     ..put('/me/shelf/<productId>', _withUser(_addToShelf))
     ..delete('/me/shelf/<productId>', _withUser(_removeFromShelf))
+    ..get('/me/favorites', _withUser(_listFavorites))
     ..put('/me/favorites/<productId>', _withUser(_addFavorite))
     ..delete('/me/favorites/<productId>', _withUser(_removeFavorite));
 
@@ -948,6 +949,9 @@ class CatalogHandlers {
       offset: int.tryParse(qp['offset'] ?? '') ?? 0,
     );
     final profile = await profiles.get(user.id) ?? <String, dynamic>{};
+    // Single fetch of all favourite ids → O(1) membership check per row, no
+    // n+1 query as we walk the catalog list.
+    final favIds = (await favorites.listIds(user.id)).toSet();
     return jsonResponse(200, {
       'items': items.map((p) {
         final m = computeMatch(profile: profile, product: p);
@@ -955,6 +959,7 @@ class CatalogHandlers {
           ...p.toJson(),
           'match_score': m.score,
           'match_reasons': m.reasons,
+          'is_favorite': favIds.contains(p.id),
         };
       }).toList(),
     });
@@ -1026,6 +1031,25 @@ class CatalogHandlers {
     final productId = req.params['productId']!;
     await shelf.remove(userId: user.id, productId: productId);
     return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _listFavorites(Request req, UserRow user) async {
+    final ids = await favorites.listIds(user.id);
+    if (ids.isEmpty) return jsonResponse(200, {'items': const []});
+    final profile = await profiles.get(user.id) ?? <String, dynamic>{};
+    final items = <Map<String, dynamic>>[];
+    for (final id in ids) {
+      final p = await products.findById(id);
+      if (p == null) continue;
+      final m = computeMatch(profile: profile, product: p);
+      items.add({
+        ...p.toJson(),
+        'match_score': m.score,
+        'match_reasons': m.reasons,
+        'is_favorite': true,
+      });
+    }
+    return jsonResponse(200, {'items': items});
   }
 
   Future<Response> _addFavorite(Request req, UserRow user) async {

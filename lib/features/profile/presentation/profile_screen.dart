@@ -30,6 +30,7 @@ class ProfileScreen extends ConsumerStatefulWidget {
     required this.onOpenProgress,
     required this.onProfileUpdated,
     this.onOpenRoutineHistory,
+    this.onOpenFavorites,
     this.skinScore,
     this.streak,
   });
@@ -41,6 +42,7 @@ class ProfileScreen extends ConsumerStatefulWidget {
   final VoidCallback onOpenProgress;
   final ValueChanged<SkinProfile> onProfileUpdated;
   final VoidCallback? onOpenRoutineHistory;
+  final VoidCallback? onOpenFavorites;
 
   /// Latest skin index from the most recent scan/routine — drives the centre
   /// stat. Null while bootstrap hasn't loaded a result yet.
@@ -688,6 +690,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                         icon: Icons.history_rounded,
                         label: 'История уходов',
                         onTap: widget.onOpenRoutineHistory,
+                      ),
+                    if (widget.onOpenFavorites != null)
+                      _Row(
+                        icon: Icons.favorite_outline_rounded,
+                        label: 'Избранное',
+                        onTap: widget.onOpenFavorites,
                       ),
                   ],
                 ),

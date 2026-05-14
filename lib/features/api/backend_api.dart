@@ -167,6 +167,13 @@ class BackendApi {
     await _dio.delete('$baseUrl/me/favorites/$productId', options: _auth());
   }
 
+  Future<List<Product>> listFavorites() async {
+    final r = await _dio.get('$baseUrl/me/favorites', options: _auth());
+    final items =
+        ((r.data as Map)['items'] as List).cast<Map<String, dynamic>>();
+    return items.map(Product.fromJson).toList();
+  }
+
   // ===== Daily ritual =====
 
   Future<Today> getToday() async {
