@@ -590,11 +590,11 @@ class _TodayHeroCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final score = result.skinScore ?? 70;
-    final summary = result.skinSummary ?? 'Подобран уход под твою кожу.';
+    final summary = result.skinSummary;
     return Stack(
       children: [
         Container(
-          padding: const EdgeInsets.all(22),
+          padding: const EdgeInsets.all(24),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(28),
             border:
@@ -617,60 +617,68 @@ class _TodayHeroCard extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               EyebrowText(_dateLabel(), color: AppColors.roseDeep),
-              const SizedBox(height: 10),
-              Text(
-                summary,
-                style: AppTypography.h1.copyWith(fontSize: 26),
-                maxLines: 3,
-                overflow: TextOverflow.ellipsis,
-              ),
-              const SizedBox(height: 18),
-              Container(
-                padding: const EdgeInsets.only(top: 16),
-                decoration: BoxDecoration(
-                  border: Border(
-                    top: BorderSide(
-                      color: AppColors.primaryAccent.withOpacity(0.18),
-                    ),
+              const SizedBox(height: AppSpacing.md),
+              // Hero row: large score ring as visual anchor + a short mood
+              // label. The big number inside the ring already says "78",
+              // so this column is intentionally compact text only.
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  MetricRing(
+                    value: score,
+                    size: 84,
+                    stroke: 6,
+                    color: AppColors.roseDeep,
+                    suffix: null,
                   ),
-                ),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.center,
-                  children: [
-                    MetricRing(
-                      value: score,
-                      size: 56,
-                      stroke: 5,
-                      color: AppColors.roseDeep,
-                      suffix: null,
-                    ),
-                    const SizedBox(width: AppSpacing.md),
-                    Expanded(
-                      child: Column(
-                        children: [
-                          _MetricBar(
-                            label: 'Индекс',
-                            value: score,
+                  const SizedBox(width: AppSpacing.md),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Индекс кожи',
+                          style: AppTypography.caption
+                              .copyWith(color: AppColors.textSecondary),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          _moodLabel(score),
+                          style: AppTypography.h2.copyWith(
+                            fontSize: 22,
                             color: AppColors.roseDeep,
                           ),
-                          const SizedBox(height: 8),
-                          _MetricBar(
-                            label: 'Увлажнение',
-                            value: 78,
-                            color: AppColors.info,
-                          ),
-                          const SizedBox(height: 8),
-                          _MetricBar(
-                            label: 'Тон',
-                            value: 67,
-                            color: AppColors.primaryAccent,
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
+              const SizedBox(height: AppSpacing.lg),
+              // Quiet hairline.
+              Container(height: 1, color: AppColors.divider),
+              const SizedBox(height: AppSpacing.md),
+              const _MetricBar(
+                label: 'Увлажнение',
+                value: 78,
+                color: AppColors.info,
+              ),
+              const SizedBox(height: 10),
+              const _MetricBar(
+                label: 'Тон',
+                value: 67,
+                color: AppColors.primaryAccent,
+              ),
+              if (summary != null && summary.trim().isNotEmpty) ...[
+                const SizedBox(height: AppSpacing.md),
+                Text(
+                  '«${summary.trim()}»',
+                  style: AppTypography.serifItalic(
+                    fontSize: 15,
+                    color: AppColors.roseDeep,
+                  ).copyWith(height: 1.4),
+                ),
+              ],
             ],
           ),
         ),
@@ -695,6 +703,14 @@ class _TodayHeroCard extends StatelessWidget {
         ),
       ],
     );
+  }
+
+  String _moodLabel(int score) {
+    if (score >= 85) return 'Сияет';
+    if (score >= 70) return 'Хорошо';
+    if (score >= 55) return 'Стабильно';
+    if (score >= 40) return 'Нужна поддержка';
+    return 'Просит внимания';
   }
 
   String _dateLabel() {
@@ -822,35 +838,14 @@ class _LinaNudge extends StatelessWidget {
                       children: [
                         const LinaAvatar(size: 44, monogram: true),
                         const SizedBox(width: 12),
-                        Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'ЛИНА · СОВЕТ',
-                              style: AppTypography.eyebrow(
-                                color: AppColors.roseDeep,
-                              ),
-                            ),
-                            const SizedBox(height: 4),
-                            Row(
-                              children: [
-                                Container(
-                                  width: 6,
-                                  height: 6,
-                                  decoration: const BoxDecoration(
-                                    color: AppColors.success,
-                                    shape: BoxShape.circle,
-                                  ),
-                                ),
-                                const SizedBox(width: 6),
-                                Text(
-                                  'на связи',
-                                  style: AppTypography.caption
-                                      .copyWith(fontSize: 12),
-                                ),
-                              ],
-                            ),
-                          ],
+                        // Single online signal — the green dot on the avatar
+                        // itself. The 'на связи' pill underneath duplicated
+                        // it; one indicator reads cleaner.
+                        Text(
+                          'ЛИНА · СОВЕТ',
+                          style: AppTypography.eyebrow(
+                            color: AppColors.roseDeep,
+                          ),
                         ),
                       ],
                     ),

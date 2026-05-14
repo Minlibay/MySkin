@@ -45,18 +45,12 @@ class LinaAvatar extends StatelessWidget {
               ],
             ),
             child: monogram
-                ? Padding(
-                    // Optical bottom-right nudge — Cormorant italic «Л» reads
-                    // off-centre without it because of the leftward stem and
-                    // the upward right serif.
-                    padding: EdgeInsets.only(left: size * 0.06),
-                    child: Text(
-                      'Л',
-                      style: AppTypography.serifItalic(
-                        fontSize: size * 0.55,
-                        color: Colors.white,
-                      ).copyWith(height: 1, letterSpacing: 0),
-                    ),
+                ? Text(
+                    'Л',
+                    style: AppTypography.serifItalic(
+                      fontSize: size * 0.55,
+                      color: Colors.white,
+                    ).copyWith(height: 1, letterSpacing: 0),
                   )
                 : null,
           ),
