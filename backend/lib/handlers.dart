@@ -906,12 +906,14 @@ class CatalogHandlers {
     required this.products,
     required this.shelf,
     required this.profiles,
+    required this.favorites,
   });
 
   final SessionRepository sessions;
   final ProductRepository products;
   final UserProductRepository shelf;
   final ProfileRepository profiles;
+  final UserFavoriteRepository favorites;
 
   Router router() => Router()
     ..get('/catalog', _withUser(_list))
@@ -919,7 +921,9 @@ class CatalogHandlers {
     ..get('/products/<id>/photo', _photo) // public for mobile + admin previews
     ..get('/me/shelf', _withUser(_shelf))
     ..put('/me/shelf/<productId>', _withUser(_addToShelf))
-    ..delete('/me/shelf/<productId>', _withUser(_removeFromShelf));
+    ..delete('/me/shelf/<productId>', _withUser(_removeFromShelf))
+    ..put('/me/favorites/<productId>', _withUser(_addFavorite))
+    ..delete('/me/favorites/<productId>', _withUser(_removeFavorite));
 
   Handler _withUser(Future<Response> Function(Request, UserRow) inner) =>
       (Request req) async {
@@ -975,10 +979,13 @@ class CatalogHandlers {
     if (p == null) return jsonResponse(404, {'error': 'not_found'});
     final profile = await profiles.get(user.id) ?? <String, dynamic>{};
     final m = computeMatch(profile: profile, product: p);
+    final isFav =
+        await favorites.contains(userId: user.id, productId: p.id);
     return jsonResponse(200, {
       ...p.toJson(),
       'match_score': m.score,
       'match_reasons': m.reasons,
+      'is_favorite': isFav,
     });
   }
 
@@ -1018,6 +1025,20 @@ class CatalogHandlers {
   Future<Response> _removeFromShelf(Request req, UserRow user) async {
     final productId = req.params['productId']!;
     await shelf.remove(userId: user.id, productId: productId);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _addFavorite(Request req, UserRow user) async {
+    final productId = req.params['productId']!;
+    final p = await products.findById(productId);
+    if (p == null) return jsonResponse(404, {'error': 'not_found'});
+    await favorites.add(userId: user.id, productId: productId);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _removeFavorite(Request req, UserRow user) async {
+    final productId = req.params['productId']!;
+    await favorites.remove(userId: user.id, productId: productId);
     return jsonResponse(200, {'ok': true});
   }
 }
@@ -1145,6 +1166,18 @@ class MeHandlers {
     final done = await completions.completedFor(userId: user.id, day: dayUtc);
     final streak = await completions.streak(user.id);
 
+    // Tip surface: prefer the freshest scan insight (it's already a Лина-toned
+    // line written about *today's* skin). Falls back to null — client has its
+    // own static fallback.
+    String? tip;
+    try {
+      final recentScans = await scans.listForUser(user.id, limit: 1);
+      if (recentScans.isNotEmpty) {
+        final raw = recentScans.first.insight.trim();
+        if (raw.isNotEmpty) tip = raw;
+      }
+    } catch (_) {/* silent */}
+
     return jsonResponse(200, {
       'date': dayUtc.toIso8601String(),
       'streak': streak,
@@ -1152,6 +1185,7 @@ class MeHandlers {
       'routine_id': latest?['id'],
       'morning': _stepsWithDone(latest, 'morning', done),
       'evening': _stepsWithDone(latest, 'evening', done),
+      if (tip != null) 'tip': tip,
     });
   }
 

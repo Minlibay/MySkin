@@ -39,12 +39,18 @@ class Today {
     required this.hasRoutine,
     required this.morning,
     required this.evening,
+    this.tip,
   });
 
   final int streak;
   final bool hasRoutine;
   final List<TodayStep> morning;
   final List<TodayStep> evening;
+
+  /// Optional Лина tip surfaced by the backend (currently the latest scan's
+  /// `insight`). Null when there's no scan yet — the UI then falls back to
+  /// its own rotating advice.
+  final String? tip;
 
   int get morningDone => morning.where((s) => s.done).length;
   int get eveningDone => evening.where((s) => s.done).length;
@@ -68,6 +74,7 @@ class Today {
       hasRoutine: j['has_routine'] as bool? ?? false,
       morning: parse(j['morning']),
       evening: parse(j['evening']),
+      tip: j['tip'] as String?,
     );
   }
 
@@ -81,6 +88,7 @@ class Today {
             s.index == index ? s.copyWith(done: !s.done) : s
         ],
         evening: evening,
+        tip: tip,
       );
     }
     return Today(
@@ -91,6 +99,7 @@ class Today {
         for (final s in evening)
           s.index == index ? s.copyWith(done: !s.done) : s
       ],
+      tip: tip,
     );
   }
 }

@@ -29,13 +29,36 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
   late Future<Product> _future;
   bool _addingToShelf = false;
   bool _onShelf = false;
-  bool _favourite = false;
+  bool? _favourite; // null until the loaded product seeds the initial state
   bool _expandedInci = false;
 
   @override
   void initState() {
     super.initState();
-    _future = ref.read(backendApiProvider).getProduct(widget.slug);
+    _future = ref.read(backendApiProvider).getProduct(widget.slug).then((p) {
+      // Seed favourite state from the server response once.
+      if (mounted) setState(() => _favourite ??= p.isFavorite);
+      return p;
+    });
+  }
+
+  Future<void> _toggleFavourite(Product p) async {
+    final next = !(_favourite ?? p.isFavorite);
+    setState(() => _favourite = next);
+    final api = ref.read(backendApiProvider);
+    try {
+      if (next) {
+        await api.addFavorite(p.id);
+      } else {
+        await api.removeFavorite(p.id);
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _favourite = !next);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не получилось сохранить: $e')),
+      );
+    }
   }
 
   Future<void> _addToShelf(Product p) async {
@@ -90,9 +113,8 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                       : () => _addToShelf(p),
                   addingToShelf: _addingToShelf,
                   onShelf: _onShelf,
-                  favourite: _favourite,
-                  onToggleFavourite: () =>
-                      setState(() => _favourite = !_favourite),
+                  favourite: _favourite ?? p.isFavorite,
+                  onToggleFavourite: () => _toggleFavourite(p),
                   expandedInci: _expandedInci,
                   onToggleInci: () =>
                       setState(() => _expandedInci = !_expandedInci),

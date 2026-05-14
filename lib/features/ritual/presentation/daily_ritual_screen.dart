@@ -191,7 +191,7 @@ class _Body extends StatelessWidget {
             const SizedBox(height: AppSpacing.md),
             if (today.streak > 0) _StreakBadge(streak: today.streak),
             if (today.streak > 0) const SizedBox(height: AppSpacing.md),
-            _LinaNote(isMorning: _isMorning),
+            _LinaNote(isMorning: _isMorning, tip: today.tip),
             if (onScan != null) ...[
               const SizedBox(height: AppSpacing.md),
               _ScanCta(onTap: onScan!),
@@ -660,8 +660,12 @@ class _OrderBadge extends StatelessWidget {
 }
 
 class _LinaNote extends StatelessWidget {
-  const _LinaNote({required this.isMorning});
+  const _LinaNote({required this.isMorning, this.tip});
   final bool isMorning;
+
+  /// Server-supplied tip (latest scan insight). Wins over the static fallback
+  /// list when present.
+  final String? tip;
 
   static const _morningTips = [
     'Подожди 90 секунд между сывороткой и кремом — иначе активы не успеют проникнуть.',
@@ -676,8 +680,14 @@ class _LinaNote extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tips = isMorning ? _morningTips : _eveningTips;
-    final tip = tips[DateTime.now().day % tips.length];
+    final fromServer = tip?.trim();
+    final String text;
+    if (fromServer != null && fromServer.isNotEmpty) {
+      text = fromServer;
+    } else {
+      final tips = isMorning ? _morningTips : _eveningTips;
+      text = tips[DateTime.now().day % tips.length];
+    }
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -701,7 +711,7 @@ class _LinaNote extends StatelessWidget {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  '«$tip»',
+                  '«$text»',
                   style: AppTypography.serifItalic(
                     fontSize: 15,
                     color: AppColors.textPrimary,

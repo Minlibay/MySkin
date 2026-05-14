@@ -159,6 +159,14 @@ class BackendApi {
     await _dio.delete('$baseUrl/me/shelf/$productId', options: _auth());
   }
 
+  Future<void> addFavorite(String productId) async {
+    await _dio.put('$baseUrl/me/favorites/$productId', options: _auth());
+  }
+
+  Future<void> removeFavorite(String productId) async {
+    await _dio.delete('$baseUrl/me/favorites/$productId', options: _auth());
+  }
+
   // ===== Daily ritual =====
 
   Future<Today> getToday() async {

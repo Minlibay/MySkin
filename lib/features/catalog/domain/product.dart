@@ -22,6 +22,7 @@ class Product {
     this.shelfStatus,
     this.hasPhoto = false,
     this.status = 'published',
+    this.isFavorite = false,
   });
 
   final String id;
@@ -51,6 +52,10 @@ class Product {
 
   /// 'draft' | 'published'. Mobile only sees published, but kept here for completeness.
   final String status;
+
+  /// True if the current user has bookmarked this product. Only meaningful on
+  /// product-detail responses — list endpoints don't currently surface it.
+  final bool isFavorite;
 
   factory Product.fromJson(Map<String, dynamic> j) {
     Color parseColor(String hex) {
@@ -92,6 +97,7 @@ class Product {
                   .contains(j['status'] as String?)
           ? j['status'] as String
           : 'published',
+      isFavorite: j['is_favorite'] as bool? ?? false,
     );
   }
 

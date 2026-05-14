@@ -30,6 +30,7 @@ void main(List<String> args) async {
   final dermSessions = DermSessionRepository(pool);
   final products = ProductRepository(pool);
   final shelf = UserProductRepository(pool);
+  final favorites = UserFavoriteRepository(pool);
   final completions = RoutineCompletionRepository(pool);
   final scans = ScanRepository(pool);
   final appSettings = AppSettingsRepository(pool);
@@ -68,6 +69,7 @@ void main(List<String> args) async {
     products: products,
     shelf: shelf,
     profiles: profiles,
+    favorites: favorites,
   );
   final gigaKey = env['GIGACHAT_AUTH_KEY'];
   final giga = (gigaKey != null && gigaKey.isNotEmpty)

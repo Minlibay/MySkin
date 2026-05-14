@@ -866,6 +866,56 @@ class UserProductRepository {
   }
 }
 
+class UserFavoriteRepository {
+  UserFavoriteRepository(this.db);
+  final Pool db;
+
+  Future<void> add(
+      {required String userId, required String productId}) async {
+    await db.execute(
+      Sql.named('''
+        INSERT INTO user_favorites (user_id, product_id)
+        VALUES (@u, @p)
+        ON CONFLICT (user_id, product_id) DO NOTHING
+      '''),
+      parameters: {'u': userId, 'p': productId},
+    );
+  }
+
+  Future<void> remove(
+      {required String userId, required String productId}) async {
+    await db.execute(
+      Sql.named(
+          'DELETE FROM user_favorites WHERE user_id = @u AND product_id = @p'),
+      parameters: {'u': userId, 'p': productId},
+    );
+  }
+
+  Future<bool> contains(
+      {required String userId, required String productId}) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT 1 FROM user_favorites
+        WHERE user_id = @u AND product_id = @p
+        LIMIT 1
+      '''),
+      parameters: {'u': userId, 'p': productId},
+    );
+    return r.isNotEmpty;
+  }
+
+  Future<List<String>> listIds(String userId) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT product_id FROM user_favorites
+        WHERE user_id = @u ORDER BY added_at DESC
+      '''),
+      parameters: {'u': userId},
+    );
+    return r.map((row) => row[0] as String).toList();
+  }
+}
+
 class ScanRow {
   ScanRow({
     required this.id,

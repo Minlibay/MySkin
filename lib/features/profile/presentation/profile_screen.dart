@@ -119,6 +119,152 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
+  Future<void> _editSkinType() async {
+    const options = [
+      ('dry', 'Сухая', '🌵'),
+      ('oily', 'Жирная', '🫧'),
+      ('combo', 'Комбинированная', '🪞'),
+      ('normal', 'Нормальная', '🌸'),
+      ('sensitive', 'Чувствительная', '⚠️'),
+    ];
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.dividerStrong,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
+              child: Text('Тип кожи', style: AppTypography.h2),
+            ),
+            for (final o in options)
+              ListTile(
+                leading: Text(o.$3, style: const TextStyle(fontSize: 22)),
+                title: Text(o.$2, style: AppTypography.body),
+                trailing: _profile.skinType == o.$1
+                    ? const Icon(Icons.check_rounded,
+                        color: AppColors.roseDeep)
+                    : null,
+                onTap: () => Navigator.pop(ctx, o.$1),
+              ),
+            const SizedBox(height: 12),
+          ],
+        ),
+      ),
+    );
+    if (picked == null || picked == _profile.skinType) return;
+    await _updateProfile(_profile.copyWith(skinType: picked));
+  }
+
+  Future<void> _editConcerns() async {
+    const all = [
+      ('acne', 'Акне / прыщи'),
+      ('pih', 'Пост-акне, пятна'),
+      ('aging', 'Морщины, упругость'),
+      ('dullness', 'Тусклый цвет'),
+      ('redness', 'Покраснения'),
+      ('dehydration', 'Обезвоженность'),
+    ];
+    final result = await showModalBottomSheet<List<String>>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      isScrollControlled: true,
+      builder: (ctx) {
+        final selected = {..._profile.concerns};
+        return StatefulBuilder(builder: (ctx, setSheet) {
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  AppSpacing.lg, 8, AppSpacing.lg, AppSpacing.lg),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Center(
+                    child: Container(
+                      width: 36,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: AppColors.dividerStrong,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text('Цели и приоритеты', style: AppTypography.h2),
+                  const SizedBox(height: 4),
+                  Text(
+                    'Можно выбрать несколько',
+                    style:
+                        AppTypography.caption.copyWith(fontSize: 13),
+                  ),
+                  const SizedBox(height: AppSpacing.md),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: [
+                      for (final c in all)
+                        _ConcernChip(
+                          label: c.$2,
+                          active: selected.contains(c.$1),
+                          onTap: () => setSheet(() {
+                            if (selected.contains(c.$1)) {
+                              selected.remove(c.$1);
+                            } else {
+                              selected.add(c.$1);
+                            }
+                          }),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: AppSpacing.lg),
+                  SizedBox(
+                    width: double.infinity,
+                    child: Material(
+                      color: AppColors.roseDeep,
+                      borderRadius: BorderRadius.circular(99),
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(99),
+                        onTap: () =>
+                            Navigator.pop(ctx, selected.toList()),
+                        child: Container(
+                          height: 48,
+                          alignment: Alignment.center,
+                          child: Text('Сохранить',
+                              style: AppTypography.button),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        });
+      },
+    );
+    if (result == null) return;
+    await _updateProfile(_profile.copyWith(concerns: result));
+  }
+
   Future<void> _editName() async {
     final ctrl = TextEditingController(text: _profile.name ?? '');
     final newName = await showDialog<String?>(
@@ -506,6 +652,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       icon: Icons.spa_outlined,
                       label: 'Тип кожи',
                       detail: _skinTypeLabel(_profile.skinType) ?? '—',
+                      onTap: _editSkinType,
                     ),
                     _Row(
                       icon: Icons.flag_outlined,
@@ -513,6 +660,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                       detail: _profile.concerns.isEmpty
                           ? '—'
                           : _profile.concerns.length.toString(),
+                      onTap: _editConcerns,
                     ),
                     _Row(
                       icon: Icons.notifications_outlined,
@@ -886,6 +1034,46 @@ class _Row extends StatelessWidget {
                 const Icon(Icons.chevron_right_rounded,
                     size: 18, color: AppColors.textSecondary),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ConcernChip extends StatelessWidget {
+  const _ConcernChip({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: active ? AppColors.roseDeep : AppColors.surface,
+      borderRadius: BorderRadius.circular(99),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(99),
+        onTap: onTap,
+        child: Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(99),
+            border: Border.all(
+              color: active ? AppColors.roseDeep : AppColors.dividerStrong,
+            ),
+          ),
+          child: Text(
+            label,
+            style: AppTypography.bodySm.copyWith(
+              fontWeight: FontWeight.w500,
+              color: active ? Colors.white : AppColors.textPrimary,
+            ),
           ),
         ),
       ),
