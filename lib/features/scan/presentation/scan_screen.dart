@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:app_settings/app_settings.dart';
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -666,7 +667,17 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                             ),
                           ),
                           const SizedBox(width: 12),
-                          ShutterButton(busy: _busy, onTap: _capture),
+                          if (_cameraError != null &&
+                              _cameraError!
+                                  .toLowerCase()
+                                  .contains('нет доступа'))
+                            _SettingsCta(
+                              onTap: () =>
+                                  AppSettings.openAppSettings(),
+                            )
+                          else
+                            ShutterButton(
+                                busy: _busy, onTap: _capture),
                         ],
                       ),
                     ),
@@ -676,6 +687,43 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Replacement for the shutter button when camera permission was denied.
+/// Opens the OS app-settings so the user can grant access without leaving
+/// the app for a third-party flow.
+class _SettingsCta extends StatelessWidget {
+  const _SettingsCta({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.white,
+      shape: const StadiumBorder(),
+      child: InkWell(
+        customBorder: const StadiumBorder(),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(Icons.settings_outlined, size: 18, color: AppColors.roseDeep),
+              const SizedBox(width: 6),
+              Text(
+                'Настройки',
+                style: AppTypography.bodyMedium.copyWith(
+                  fontSize: 14,
+                  color: AppColors.roseDeep,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

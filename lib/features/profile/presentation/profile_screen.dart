@@ -12,7 +12,9 @@ import '../../../core/widgets/glow_background.dart';
 import '../../ai/domain/models.dart';
 import '../../api/backend_api.dart';
 import '../../auth/presentation/auth_controller.dart';
+import '../../legal/presentation/legal_viewer_screen.dart';
 import '../../notifications/data/local_notifications.dart';
+import '../../tutorial/presentation/welcome_tutorial_screen.dart';
 import '../domain/user_settings.dart';
 
 /// Profile / settings hub. Re-built from the handoff design — avatar block
@@ -463,11 +465,55 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               },
             ),
             ListTile(
+              leading: const Icon(Icons.school_outlined,
+                  color: AppColors.textPrimary),
+              title: Text('Показать туториал', style: AppTypography.body),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (ctx2) => WelcomeTutorialScreen(
+                      onFinish: () => Navigator.of(ctx2).pop(),
+                    ),
+                  ),
+                );
+              },
+            ),
+            ListTile(
               leading: const Icon(Icons.menu_book_rounded,
                   color: AppColors.textPrimary),
               title: Text('Политика конфиденциальности',
                   style: AppTypography.body),
-              onTap: () => Navigator.pop(ctx),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (ctx2) => LegalViewerScreen(
+                      docKey: 'legal_privacy',
+                      title: 'Политика конфиденциальности',
+                      onBack: () => Navigator.of(ctx2).pop(),
+                    ),
+                  ),
+                );
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.gavel_rounded,
+                  color: AppColors.textPrimary),
+              title: Text('Пользовательское соглашение',
+                  style: AppTypography.body),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (ctx2) => LegalViewerScreen(
+                      docKey: 'legal_terms',
+                      title: 'Пользовательское соглашение',
+                      onBack: () => Navigator.of(ctx2).pop(),
+                    ),
+                  ),
+                );
+              },
             ),
             const SizedBox(height: 8),
           ],

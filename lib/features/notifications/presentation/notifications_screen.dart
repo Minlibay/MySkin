@@ -14,10 +14,12 @@ class NotificationsScreen extends ConsumerStatefulWidget {
     super.key,
     required this.onBack,
     this.onOpenScan,
+    this.onOpenRitual,
   });
 
   final VoidCallback onBack;
   final void Function(String scanId)? onOpenScan;
+  final VoidCallback? onOpenRitual;
 
   @override
   ConsumerState<NotificationsScreen> createState() =>
@@ -111,6 +113,9 @@ class _NotificationsScreenState extends ConsumerState<NotificationsScreen> {
       case 'scan_ready':
         final id = n.payload['scan_id'] as String?;
         if (id != null && widget.onOpenScan != null) widget.onOpenScan!(id);
+      case 'ritual_morning':
+      case 'ritual_evening':
+        widget.onOpenRitual?.call();
     }
   }
 }

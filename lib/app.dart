@@ -410,6 +410,7 @@ class _AppShellState extends ConsumerState<_AppShell> {
         return NotificationsScreen(
           onBack: () => setState(() => _view = _Shell.home),
           onOpenScan: _openScanById,
+          onOpenRitual: () => setState(() => _view = _Shell.ritual),
         );
       case _Shell.quickCheckIn:
         return QuickCheckInScreen(

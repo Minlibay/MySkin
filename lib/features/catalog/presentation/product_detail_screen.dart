@@ -258,11 +258,8 @@ class _Header extends StatelessWidget {
           color: favourite ? AppColors.roseDeep : AppColors.textPrimary,
           onTap: onToggleFavourite,
         ),
-        const SizedBox(width: 8),
-        _RoundButton(
-          icon: Icons.bookmark_border_rounded,
-          onTap: () {},
-        ),
+        // Bookmark button removed — it duplicated the heart-favourite affordance
+        // and had no real handler. One save mechanism is enough.
       ],
     );
   }
