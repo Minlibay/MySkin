@@ -1,14 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
-import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/eyebrow_text.dart';
 import '../../../core/widgets/feedback_state.dart';
 import '../../../core/widgets/glow_background.dart';
-import '../../../core/widgets/metric_ring.dart';
-import '../../../core/widgets/pill.dart';
 import '../../api/backend_api.dart';
 import '../domain/product.dart';
 import 'product_bottle.dart';
@@ -31,6 +29,8 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
   late Future<Product> _future;
   bool _addingToShelf = false;
   bool _onShelf = false;
+  bool _favourite = false;
+  bool _expandedInci = false;
 
   @override
   void initState() {
@@ -90,6 +90,12 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                       : () => _addToShelf(p),
                   addingToShelf: _addingToShelf,
                   onShelf: _onShelf,
+                  favourite: _favourite,
+                  onToggleFavourite: () =>
+                      setState(() => _favourite = !_favourite),
+                  expandedInci: _expandedInci,
+                  onToggleInci: () =>
+                      setState(() => _expandedInci = !_expandedInci),
                 );
               },
             ),
@@ -107,6 +113,10 @@ class _Body extends StatelessWidget {
     required this.onAdd,
     required this.addingToShelf,
     required this.onShelf,
+    required this.favourite,
+    required this.onToggleFavourite,
+    required this.expandedInci,
+    required this.onToggleInci,
   });
 
   final Product product;
@@ -114,255 +124,685 @@ class _Body extends StatelessWidget {
   final VoidCallback? onAdd;
   final bool addingToShelf;
   final bool onShelf;
+  final bool favourite;
+  final VoidCallback onToggleFavourite;
+  final bool expandedInci;
+  final VoidCallback onToggleInci;
 
   @override
   Widget build(BuildContext context) {
-    return Column(
+    return Stack(
       children: [
-        Padding(
+        ListView(
           padding: const EdgeInsets.fromLTRB(
-              AppSpacing.lg, AppSpacing.md, AppSpacing.lg, 0),
-          child: Row(
-            children: [
-              SizedBox(
-                width: 40,
-                height: 40,
-                child: Material(
-                  color: Colors.white.withOpacity(0.7),
-                  shape: const CircleBorder(
-                      side: BorderSide(color: AppColors.divider)),
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: onBack,
-                    child: const Icon(Icons.arrow_back_ios_new, size: 16),
-                  ),
-                ),
+              AppSpacing.lg, AppSpacing.md, AppSpacing.lg, 120),
+          children: [
+            _Header(
+              onBack: onBack,
+              favourite: favourite,
+              onToggleFavourite: onToggleFavourite,
+            ),
+            const SizedBox(height: AppSpacing.md),
+            _PhotoBlock(product: product),
+            const SizedBox(height: AppSpacing.lg),
+            EyebrowText(product.brand,
+                color: AppColors.textSecondary),
+            const SizedBox(height: 6),
+            Text(product.name,
+                style: AppTypography.h1.copyWith(fontSize: 28, height: 1.1)),
+            const SizedBox(height: 4),
+            Text(product.kindLabel, style: AppTypography.caption),
+            if (product.matchScore != null) ...[
+              const SizedBox(height: AppSpacing.md),
+              _MatchHero(
+                score: product.matchScore!,
+                reasons: product.matchReasons,
               ),
-              const Spacer(),
             ],
-          ),
-        ),
-        Expanded(
-          child: ListView(
-            padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg, AppSpacing.md, AppSpacing.lg, 110),
-            children: [
-              Center(
-                child: Hero(
-                  tag: 'bottle-${product.slug}',
-                  child: ProductBottle(
-                    product: product,
-                    width: 100,
-                    height: 160,
-                    label: product.kindLabel,
-                  ),
-                ),
-              ),
+            if (product.matchReasons.isNotEmpty) ...[
               const SizedBox(height: AppSpacing.lg),
-              Center(
-                child: EyebrowText(product.brand,
-                    color: AppColors.textSecondary),
+              EyebrowText('Почему подходит'),
+              const SizedBox(height: 10),
+              for (final r in product.matchReasons) ...[
+                _FitRow(text: r, warn: false),
+                const SizedBox(height: 8),
+              ],
+              if (product.isActive)
+                _FitRow(
+                  text:
+                      'Активный ингредиент — Лина учтёт сочетания и SPF.',
+                  warn: true,
+                ),
+            ],
+            if (product.ingredients.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.lg),
+              EyebrowText('Состав · INCI'),
+              const SizedBox(height: 10),
+              _InciCard(
+                ingredients: product.ingredients,
+                expanded: expandedInci,
+                onToggle: onToggleInci,
               ),
-              const SizedBox(height: 6),
-              Text(
-                product.name,
-                style: AppTypography.h1,
-                textAlign: TextAlign.center,
-              ),
+            ],
+            const SizedBox(height: AppSpacing.lg),
+            EyebrowText('Когда наносить'),
+            const SizedBox(height: 10),
+            _UsageRow(phase: product.routinePhase),
+            if (product.description.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.lg),
+              EyebrowText('О продукте'),
               const SizedBox(height: 8),
-              Center(
-                child: Text(
-                  '${product.priceRub} ₽ · ${product.kindLabel}',
-                  style: AppTypography.caption,
-                ),
-              ),
-              const SizedBox(height: AppSpacing.lg),
-              if (product.matchScore != null)
-                _MatchCard(
-                  score: product.matchScore!,
-                  reasons: product.matchReasons,
-                ),
-              const SizedBox(height: AppSpacing.md),
-              _Section(
-                title: 'О продукте',
-                child: Text(product.description, style: AppTypography.body),
-              ),
-              if (product.ingredients.isNotEmpty) ...[
-                const SizedBox(height: AppSpacing.md),
-                _Section(
-                  title: 'Активные ингредиенты',
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: product.ingredients
-                        .map((i) => Pill(
-                              label: i,
-                              variant: PillVariant.outline,
-                            ))
-                        .toList(),
-                  ),
-                ),
-              ],
-              if (product.tags.isNotEmpty) ...[
-                const SizedBox(height: AppSpacing.md),
-                _Section(
-                  title: 'Помогает с',
-                  child: Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
-                    children: product.tags
-                        .map((t) => Pill(
-                              label: _concernLabel(t),
-                              variant: PillVariant.soft,
-                            ))
-                        .toList(),
-                  ),
-                ),
-              ],
-              const SizedBox(height: AppSpacing.md),
-              _Section(
-                title: 'Когда применять',
-                child: Row(
-                  children: [
-                    Pill(
-                      label: switch (product.routinePhase) {
-                        'morning' => 'Утром',
-                        'evening' => 'Вечером',
-                        _ => 'Утром или вечером',
-                      },
-                      variant: PillVariant.dark,
-                      icon: switch (product.routinePhase) {
-                        'morning' => Icons.wb_sunny_rounded,
-                        'evening' => Icons.nightlight_round,
-                        _ => Icons.access_time_rounded,
-                      },
-                    ),
-                    const SizedBox(width: 8),
-                    if (product.isActive)
-                      const Pill(
-                        label: 'Актив',
-                        variant: PillVariant.warning,
-                      ),
-                    if (product.gentle)
-                      const Padding(
-                        padding: EdgeInsets.only(left: 8),
-                        child: Pill(
-                          label: 'Деликатно',
-                          variant: PillVariant.success,
-                        ),
-                      ),
-                  ],
-                ),
-              ),
+              Text(product.description, style: AppTypography.body),
             ],
-          ),
+          ],
         ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(
-              AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.lg),
-          child: AppButton(
-            label: onShelf ? 'На полке' : 'Добавить на полку',
-            icon: onShelf ? Icons.check_rounded : Icons.add_rounded,
-            onPressed: onAdd,
-            loading: addingToShelf,
-            variant:
-                onShelf ? AppButtonVariant.soft : AppButtonVariant.accent,
+        Positioned(
+          left: 0,
+          right: 0,
+          bottom: 0,
+          child: _StickyBar(
+            price: product.priceRub,
+            onShelf: onShelf,
+            onAdd: onAdd,
+            adding: addingToShelf,
           ),
         ),
       ],
     );
   }
-
-  static String _concernLabel(String id) => switch (id) {
-        'acne' => 'Акне',
-        'pih' => 'Постакне',
-        'aging' => 'Anti-age',
-        'dullness' => 'Тусклость',
-        'redness' => 'Покраснения',
-        'dehydration' => 'Обезвоженность',
-        _ => id,
-      };
 }
 
-class _MatchCard extends StatelessWidget {
-  const _MatchCard({required this.score, required this.reasons});
-  final int score;
-  final List<String> reasons;
+class _Header extends StatelessWidget {
+  const _Header({
+    required this.onBack,
+    required this.favourite,
+    required this.onToggleFavourite,
+  });
+
+  final VoidCallback onBack;
+  final bool favourite;
+  final VoidCallback onToggleFavourite;
 
   @override
   Widget build(BuildContext context) {
-    final color = score >= 75
-        ? AppColors.success
-        : (score >= 55 ? AppColors.primaryAccent : AppColors.warning);
+    return Row(
+      children: [
+        _RoundButton(icon: Icons.arrow_back_ios_new, onTap: onBack),
+        const Spacer(),
+        _RoundButton(
+          icon: favourite
+              ? Icons.favorite_rounded
+              : Icons.favorite_border_rounded,
+          color: favourite ? AppColors.roseDeep : AppColors.textPrimary,
+          onTap: onToggleFavourite,
+        ),
+        const SizedBox(width: 8),
+        _RoundButton(
+          icon: Icons.bookmark_border_rounded,
+          onTap: () {},
+        ),
+      ],
+    );
+  }
+}
 
+class _RoundButton extends StatelessWidget {
+  const _RoundButton({
+    required this.icon,
+    required this.onTap,
+    this.color,
+  });
+  final IconData icon;
+  final VoidCallback onTap;
+  final Color? color;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: Material(
+        color: Colors.white.withOpacity(0.7),
+        shape: const CircleBorder(
+            side: BorderSide(color: AppColors.divider)),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Icon(icon,
+              size: 18, color: color ?? AppColors.textPrimary),
+        ),
+      ),
+    );
+  }
+}
+
+class _PhotoBlock extends StatelessWidget {
+  const _PhotoBlock({required this.product});
+  final Product product;
+
+  @override
+  Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.all(AppSpacing.md + 4),
+      height: 280,
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: AppColors.primaryAccent.withOpacity(0.18)),
+        borderRadius: BorderRadius.circular(24),
         gradient: const LinearGradient(
           begin: Alignment.topLeft,
           end: Alignment.bottomRight,
-          colors: [Colors.white, AppColors.primary],
+          colors: [AppColors.primary, Colors.white],
+          stops: [0, 0.7],
         ),
+        border:
+            Border.all(color: AppColors.primaryAccent.withOpacity(0.18)),
       ),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Stack(
         children: [
-          MetricRing(
-            value: score,
-            size: 78,
-            color: color,
-            suffix: null,
-          ),
-          const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                EyebrowText('Совпадение', color: AppColors.roseDeep),
-                const SizedBox(height: 4),
-                Text(
-                  _label(score),
-                  style: AppTypography.h3.copyWith(color: color),
+          Positioned(
+            right: -50,
+            top: -50,
+            child: IgnorePointer(
+              child: Container(
+                width: 200,
+                height: 200,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      AppColors.primaryAccent.withOpacity(0.5),
+                      Colors.transparent,
+                    ],
+                  ),
                 ),
-                const SizedBox(height: 6),
-                ...reasons.map((r) => Padding(
-                      padding: const EdgeInsets.only(top: 4),
-                      child: Text('• $r',
-                          style: AppTypography.bodySm
-                              .copyWith(fontSize: 13)),
-                    )),
-              ],
+              ),
+            ),
+          ),
+          Center(
+            child: Hero(
+              tag: 'bottle-${product.slug}',
+              child: ProductBottle(
+                product: product,
+                width: 120,
+                height: 200,
+                label: product.kindLabel,
+              ),
+            ),
+          ),
+          Positioned(
+            left: 16,
+            bottom: 16,
+            child: Row(
+              children: List.generate(4, (i) {
+                final on = i == 0;
+                return Container(
+                  margin: const EdgeInsets.only(right: 6),
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: on
+                        ? AppColors.roseDeep
+                        : AppColors.textPrimary.withOpacity(0.2),
+                  ),
+                );
+              }),
             ),
           ),
         ],
       ),
     );
   }
-
-  String _label(int s) {
-    if (s >= 80) return 'Отлично подходит';
-    if (s >= 65) return 'Хорошо подходит';
-    if (s >= 50) return 'Средне подходит';
-    return 'Можно лучше';
-  }
 }
 
-class _Section extends StatelessWidget {
-  const _Section({required this.title, required this.child});
-  final String title;
-  final Widget child;
+class _MatchHero extends StatelessWidget {
+  const _MatchHero({required this.score, required this.reasons});
+  final int score;
+  final List<String> reasons;
+
+  String _quote() {
+    if (reasons.isNotEmpty) return reasons.first;
+    if (score >= 85) return 'Точно про твою кожу — отличное попадание.';
+    if (score >= 70) return 'Хорошо ложится в твой текущий уход.';
+    if (score >= 55) return 'Подходит — но есть варианты лучше.';
+    return 'Можно лучше — Лина подскажет аналог.';
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    final progress = (score / 100).clamp(0.0, 1.0);
+    return Container(
+      padding: const EdgeInsets.all(18),
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(22),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.roseDeep, AppColors.roseShadow],
+        ),
+      ),
+      child: Stack(
+        children: [
+          Positioned(
+            right: -30,
+            top: -30,
+            child: IgnorePointer(
+              child: Container(
+                width: 140,
+                height: 140,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    colors: [
+                      AppColors.primaryAccent.withOpacity(0.4),
+                      Colors.transparent,
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              SizedBox(
+                width: 76,
+                height: 76,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    CustomPaint(
+                      size: const Size(76, 76),
+                      painter: _RingPainter(progress: progress),
+                    ),
+                    Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text('$score',
+                            style: AppTypography.h2.copyWith(
+                              color: Colors.white,
+                              fontSize: 22,
+                              height: 1,
+                            )),
+                        const SizedBox(height: 2),
+                        Text('%',
+                            style: TextStyle(
+                              fontSize: 9,
+                              color: Colors.white.withOpacity(0.6),
+                              letterSpacing: 0.6,
+                              fontWeight: FontWeight.w500,
+                            )),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'СОВПАДЕНИЕ С ТВОЕЙ КОЖЕЙ',
+                      style: TextStyle(
+                        color: Colors.white.withOpacity(0.65),
+                        fontSize: 10,
+                        fontFamily: 'JetBrainsMono',
+                        letterSpacing: 0.6,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      '«${_quote()}»',
+                      style: AppTypography.serifItalic(
+                        fontSize: 17,
+                        color: Colors.white,
+                      ).copyWith(height: 1.35),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _RingPainter extends CustomPainter {
+  _RingPainter({required this.progress});
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    final r = (size.width / 2) - 3;
+    final track = Paint()
+      ..color = Colors.white.withOpacity(0.15)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6;
+    canvas.drawCircle(c, r, track);
+    final stroke = Paint()
+      ..color = AppColors.primaryAccent
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(
+      Rect.fromCircle(center: c, radius: r),
+      -3.141592 / 2,
+      progress * 2 * 3.141592,
+      false,
+      stroke,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _RingPainter old) =>
+      old.progress != progress;
+}
+
+class _FitRow extends StatelessWidget {
+  const _FitRow({required this.text, required this.warn});
+  final String text;
+  final bool warn;
+
+  @override
+  Widget build(BuildContext context) {
+    final accent = warn ? AppColors.roseDeep : AppColors.success;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: accent.withOpacity(warn ? 0.10 : 0.08),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: accent.withOpacity(warn ? 0.25 : 0.20)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 20,
+            height: 20,
+            margin: const EdgeInsets.only(top: 1),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: accent,
+            ),
+            child: Icon(
+              warn
+                  ? Icons.priority_high_rounded
+                  : Icons.check_rounded,
+              size: 14,
+              color: Colors.white,
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Text(
+              text,
+              style: AppTypography.bodySm.copyWith(
+                fontSize: 14,
+                fontWeight: FontWeight.w500,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _InciCard extends StatelessWidget {
+  const _InciCard({
+    required this.ingredients,
+    required this.expanded,
+    required this.onToggle,
+  });
+  final List<String> ingredients;
+  final bool expanded;
+  final VoidCallback onToggle;
+
+  @override
+  Widget build(BuildContext context) {
+    final preview = ingredients.take(3).toList();
+    final tail = ingredients.skip(3).toList();
+    final hasTail = tail.isNotEmpty;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text.rich(
+            TextSpan(
+              style: AppTypography.bodySm.copyWith(
+                  fontSize: 12,
+                  color: AppColors.textSecondary,
+                  height: 1.55),
+              children: [
+                TextSpan(
+                  text: preview.join(', '),
+                  style: AppTypography.bodySm.copyWith(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                      color: AppColors.textPrimary,
+                      height: 1.55),
+                ),
+                if (hasTail)
+                  TextSpan(text: expanded ? ', ' : ', '),
+                if (hasTail)
+                  TextSpan(text: expanded ? tail.join(', ') : '…'),
+              ],
+            ),
+          ),
+          if (hasTail) ...[
+            const SizedBox(height: 10),
+            GestureDetector(
+              onTap: onToggle,
+              child: Text(
+                expanded ? 'Свернуть' : 'Развернуть полностью →',
+                style: AppTypography.bodySm.copyWith(
+                  fontSize: 12,
+                  color: AppColors.roseDeep,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _UsageRow extends StatelessWidget {
+  const _UsageRow({required this.phase});
+  final String phase;
+
+  @override
+  Widget build(BuildContext context) {
+    final morningActive = phase == 'morning' || phase != 'evening';
+    final eveningActive = phase == 'evening' || phase != 'morning';
+    return Row(
       children: [
-        EyebrowText(title),
-        const SizedBox(height: 8),
-        child,
+        Expanded(
+          child: _UsageCard(
+            icon: Icons.wb_sunny_rounded,
+            label: 'Утро',
+            active: morningActive,
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: _UsageCard(
+            icon: Icons.nightlight_round,
+            label: 'Вечер',
+            active: eveningActive,
+          ),
+        ),
       ],
+    );
+  }
+}
+
+class _UsageCard extends StatelessWidget {
+  const _UsageCard({
+    required this.icon,
+    required this.label,
+    required this.active,
+  });
+  final IconData icon;
+  final String label;
+  final bool active;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: active
+            ? AppColors.primaryAccent.withOpacity(0.10)
+            : AppColors.surface,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color:
+              active ? AppColors.primaryAccent : AppColors.divider,
+          width: active ? 1.2 : 1,
+        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Icon(icon,
+              size: 18,
+              color: active
+                  ? AppColors.roseDeep
+                  : AppColors.textSecondary),
+          const SizedBox(width: 8),
+          Text(
+            label,
+            style: AppTypography.bodyMedium.copyWith(
+              fontSize: 14,
+              color: active
+                  ? AppColors.roseDeep
+                  : AppColors.textSecondary,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StickyBar extends StatelessWidget {
+  const _StickyBar({
+    required this.price,
+    required this.onShelf,
+    required this.onAdd,
+    required this.adding,
+  });
+
+  final int price;
+  final bool onShelf;
+  final VoidCallback? onAdd;
+  final bool adding;
+
+  String _formatPrice(int p) {
+    final s = p.toString();
+    final buf = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      buf.write(s[i]);
+      final remain = s.length - i - 1;
+      if (remain > 0 && remain % 3 == 0) buf.write(' ');
+    }
+    return buf.toString();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        color: AppColors.background.withOpacity(0.94),
+        border: Border(
+          top: BorderSide(color: AppColors.divider),
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.lg),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Цена',
+                  style: AppTypography.caption.copyWith(fontSize: 11)),
+              Text(
+                '${_formatPrice(price)} ₽',
+                style: AppTypography.h2.copyWith(fontSize: 22),
+              ),
+            ],
+          ),
+          const SizedBox(width: AppSpacing.md),
+          Expanded(
+            child: Material(
+              color: onShelf
+                  ? AppColors.primary
+                  : (onAdd == null
+                      ? AppColors.roseDeep.withOpacity(0.6)
+                      : AppColors.roseDeep),
+              borderRadius: BorderRadius.circular(99),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(99),
+                onTap: onAdd,
+                child: Container(
+                  height: 52,
+                  alignment: Alignment.center,
+                  child: adding
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            color: Colors.white,
+                            strokeWidth: 2.4,
+                          ),
+                        )
+                      : Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              onShelf
+                                  ? Icons.check_rounded
+                                  : Icons.add_rounded,
+                              size: 18,
+                              color: onShelf
+                                  ? AppColors.roseDeep
+                                  : Colors.white,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              onShelf ? 'На полке' : 'На полку',
+                              style: AppTypography.button.copyWith(
+                                color: onShelf
+                                    ? AppColors.roseDeep
+                                    : Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }
