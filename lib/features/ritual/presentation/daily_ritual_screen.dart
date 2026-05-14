@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
@@ -5,6 +7,7 @@ import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/eyebrow_text.dart';
 import '../../../core/widgets/glow_background.dart';
+import '../../../core/widgets/lina_avatar.dart';
 import '../../api/backend_api.dart';
 import '../domain/today.dart';
 
@@ -60,7 +63,6 @@ class _DailyRitualScreenState extends ConsumerState<DailyRitualScreen> {
     final t = _today;
     if (t == null) return;
     final api = ref.read(backendApiProvider);
-    // optimistic
     setState(() => _today = t.withToggled(_phaseTab, step.index));
     try {
       if (step.done) {
@@ -72,12 +74,10 @@ class _DailyRitualScreenState extends ConsumerState<DailyRitualScreen> {
           stepTitle: step.title,
         );
       }
-      // refresh streak & state
       final fresh = await api.getToday();
       if (!mounted) return;
       setState(() => _today = fresh);
     } catch (e) {
-      // rollback
       if (!mounted) return;
       setState(() => _today = t);
       ScaffoldMessenger.of(context).showSnackBar(
@@ -88,15 +88,15 @@ class _DailyRitualScreenState extends ConsumerState<DailyRitualScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isMorning = _phaseTab == 'morning';
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
           Positioned.fill(
             child: GlowBackground(
-              variant: _phaseTab == 'morning'
-                  ? GlowVariant.sunrise
-                  : GlowVariant.deep,
+              variant:
+                  isMorning ? GlowVariant.sunrise : GlowVariant.deep,
             ),
           ),
           SafeArea(
@@ -145,252 +145,159 @@ class _Body extends StatelessWidget {
   final ValueChanged<TodayStep> onToggle;
   final VoidCallback? onScan;
 
+  bool get _isMorning => phaseTab == 'morning';
+
+  List<TodayStep> get _steps =>
+      _isMorning ? today.morning : today.evening;
+
+  int get _done => _isMorning ? today.morningDone : today.eveningDone;
+
+  int get _total => _steps.length;
+
+  /// Index in the visible list of the next not-yet-done step, or -1 when the
+  /// phase is fully complete. Drives the highlighted card + the sticky CTA.
+  int get _activeIdx => _steps.indexWhere((s) => !s.done);
+
   @override
   Widget build(BuildContext context) {
-    final steps = phaseTab == 'morning' ? today.morning : today.evening;
-    final done = phaseTab == 'morning' ? today.morningDone : today.eveningDone;
-    final progress = steps.isEmpty ? 0.0 : done / steps.length;
-
-    return Column(
+    final activeIdx = _activeIdx;
+    final hasActive = activeIdx >= 0;
+    return Stack(
       children: [
-        _Header(
-          today: today,
-          phaseTab: phaseTab,
-          onPhaseTab: onPhaseTab,
-          onBack: onBack,
-          progress: progress,
-        ),
-        Expanded(
-          child: ListView.separated(
-            padding: const EdgeInsets.fromLTRB(
-                AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.xxl),
-            itemCount: steps.length + (onScan != null ? 1 : 0),
-            separatorBuilder: (_, __) => const SizedBox(height: 10),
-            itemBuilder: (_, i) {
-              if (i == steps.length && onScan != null) {
-                return _ScanCta(onTap: onScan!);
-              }
-              return _StepCard(
-                step: steps[i],
-                order: i + 1,
-                total: steps.length,
-                onTap: () => onToggle(steps[i]),
-              );
-            },
+        ListView(
+          padding: EdgeInsets.fromLTRB(
+            AppSpacing.lg,
+            AppSpacing.md,
+            AppSpacing.lg,
+            hasActive ? 110 : AppSpacing.xxl,
           ),
+          children: [
+            _Header(
+              isMorning: _isMorning,
+              onBack: onBack,
+              onTogglePhase: () =>
+                  onPhaseTab(_isMorning ? 'evening' : 'morning'),
+            ),
+            const SizedBox(height: AppSpacing.md),
+            _Title(isMorning: _isMorning, total: _total),
+            const SizedBox(height: AppSpacing.lg),
+            _ProgressHero(
+              done: _done,
+              total: _total,
+              nextTitle: hasActive ? _steps[activeIdx].title : null,
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            ..._buildSteps(activeIdx),
+            const SizedBox(height: AppSpacing.md),
+            if (today.streak > 0) _StreakBadge(streak: today.streak),
+            if (today.streak > 0) const SizedBox(height: AppSpacing.md),
+            _LinaNote(isMorning: _isMorning),
+            if (onScan != null) ...[
+              const SizedBox(height: AppSpacing.md),
+              _ScanCta(onTap: onScan!),
+            ],
+          ],
         ),
+        if (hasActive)
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: _StickyCta(
+              order: activeIdx + 1,
+              onTap: () => onToggle(_steps[activeIdx]),
+            ),
+          ),
       ],
     );
   }
-}
 
-class _ScanCta extends StatelessWidget {
-  const _ScanCta({required this.onTap});
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(top: AppSpacing.md),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(20),
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(20),
-              gradient: const LinearGradient(
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-                colors: [Colors.white, AppColors.primary],
-              ),
-              border: Border.all(
-                  color: AppColors.primaryAccent.withOpacity(0.25)),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    color: AppColors.primaryAccent.withOpacity(0.18),
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                  child: const Icon(
-                    Icons.center_focus_strong_rounded,
-                    color: AppColors.roseDeep,
-                    size: 22,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Сделать скан сегодня',
-                          style: AppTypography.bodyMedium),
-                      const SizedBox(height: 2),
-                      Text(
-                        'Чтобы Лина увидела как кожа реагирует',
-                        style:
-                            AppTypography.caption.copyWith(fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ),
-                const Icon(Icons.arrow_forward_rounded,
-                    size: 20, color: AppColors.textSecondary),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
+  List<Widget> _buildSteps(int activeIdx) {
+    final out = <Widget>[];
+    for (var i = 0; i < _steps.length; i++) {
+      out.add(_StepCard(
+        step: _steps[i],
+        order: i + 1,
+        state: _steps[i].done
+            ? _StepState.done
+            : (i == activeIdx ? _StepState.active : _StepState.upcoming),
+        onTap: () => onToggle(_steps[i]),
+      ));
+      if (i < _steps.length - 1) out.add(const SizedBox(height: 8));
+    }
+    return out;
   }
 }
 
 class _Header extends StatelessWidget {
   const _Header({
-    required this.today,
-    required this.phaseTab,
-    required this.onPhaseTab,
+    required this.isMorning,
     required this.onBack,
-    required this.progress,
+    required this.onTogglePhase,
   });
 
-  final Today today;
-  final String phaseTab;
-  final ValueChanged<String> onPhaseTab;
+  final bool isMorning;
   final VoidCallback onBack;
-  final double progress;
+  final VoidCallback onTogglePhase;
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(
-          AppSpacing.lg, AppSpacing.md, AppSpacing.lg, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              SizedBox(
-                width: 40,
-                height: 40,
-                child: Material(
-                  color: Colors.white.withOpacity(0.7),
-                  shape: const CircleBorder(
-                      side: BorderSide(color: AppColors.divider)),
-                  child: InkWell(
-                    customBorder: const CircleBorder(),
-                    onTap: onBack,
-                    child:
-                        const Icon(Icons.arrow_back_ios_new, size: 16),
-                  ),
-                ),
-              ),
-              const SizedBox(width: AppSpacing.sm),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    EyebrowText(_dateLabel(),
-                        color: AppColors.roseDeep),
-                    const SizedBox(height: 2),
-                    Text.rich(
-                      TextSpan(children: [
-                        TextSpan(
-                            text: 'Твой ',
-                            style:
-                                AppTypography.h1.copyWith(fontSize: 26)),
-                        TextSpan(
-                          text: 'ритуал',
-                          style: AppTypography.serifItalic(fontSize: 26),
-                        ),
-                      ]),
-                    ),
-                  ],
-                ),
-              ),
-              if (today.streak > 0)
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 10, vertical: 6),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [AppColors.champagne, Colors.white],
-                    ),
-                    borderRadius: BorderRadius.circular(99),
-                    border: Border.all(
-                        color: AppColors.gold.withOpacity(0.3)),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.auto_awesome,
-                          size: 12, color: AppColors.gold),
-                      const SizedBox(width: 4),
-                      Text(
-                        '${today.streak} ${_dayWord(today.streak)}',
-                        style: AppTypography.caption.copyWith(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w600,
-                          color: AppColors.textPrimary,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-            ],
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        SizedBox(
+          width: 40,
+          height: 40,
+          child: Material(
+            color: Colors.white.withOpacity(0.7),
+            shape: const CircleBorder(
+                side: BorderSide(color: AppColors.divider)),
+            child: InkWell(
+              customBorder: const CircleBorder(),
+              onTap: onBack,
+              child: const Icon(Icons.arrow_back_ios_new, size: 16),
+            ),
           ),
-          const SizedBox(height: AppSpacing.lg),
-          Row(
-            children: [
-              Expanded(
-                child: _PhaseTab(
-                  active: phaseTab == 'morning',
-                  icon: Icons.wb_sunny_rounded,
-                  label: 'Утро',
-                  count:
-                      '${today.morningDone}/${today.morning.length}',
-                  onTap: () => onPhaseTab('morning'),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _PhaseTab(
-                  active: phaseTab == 'evening',
-                  icon: Icons.nightlight_round,
-                  label: 'Вечер',
-                  count:
-                      '${today.eveningDone}/${today.evening.length}',
-                  onTap: () => onPhaseTab('evening'),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: AppSpacing.md),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(99),
-            child: TweenAnimationBuilder<double>(
-              duration: const Duration(milliseconds: 400),
-              tween: Tween(begin: 0, end: progress),
-              builder: (_, t, __) => LinearProgressIndicator(
-                value: t,
-                minHeight: 5,
-                backgroundColor:
-                    AppColors.primaryAccent.withOpacity(0.15),
-                valueColor:
-                    const AlwaysStoppedAnimation(AppColors.roseDeep),
+        ),
+        const SizedBox(width: AppSpacing.sm),
+        Expanded(
+          child:
+              EyebrowText(_dateLabel(), color: AppColors.roseDeep),
+        ),
+        Material(
+          color: Colors.white.withOpacity(0.7),
+          shape: const StadiumBorder(
+              side: BorderSide(color: AppColors.divider)),
+          child: InkWell(
+            customBorder: const StadiumBorder(),
+            onTap: onTogglePhase,
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 12, vertical: 8),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    isMorning
+                        ? Icons.wb_sunny_rounded
+                        : Icons.nightlight_round,
+                    size: 14,
+                    color: AppColors.roseDeep,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    isMorning ? 'Утро' : 'Вечер',
+                    style: AppTypography.bodySm.copyWith(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -400,196 +307,309 @@ class _Header extends StatelessWidget {
       'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'
     ];
     final d = DateTime.now();
-    return '${d.day} ${months[d.month]}';
-  }
-
-  String _dayWord(int n) {
-    final m10 = n % 10, m100 = n % 100;
-    if (m10 == 1 && m100 != 11) return 'день';
-    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'дня';
-    return 'дней';
+    return '${isMorning ? "Утро" : "Вечер"} · ${d.day} ${months[d.month]}';
   }
 }
 
-class _PhaseTab extends StatelessWidget {
-  const _PhaseTab({
-    required this.active,
-    required this.icon,
-    required this.label,
-    required this.count,
-    required this.onTap,
-  });
-  final bool active;
-  final IconData icon;
-  final String label;
-  final String count;
-  final VoidCallback onTap;
+class _Title extends StatelessWidget {
+  const _Title({required this.isMorning, required this.total});
+  final bool isMorning;
+  final int total;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 14),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(16),
-            color:
-                active ? AppColors.surface : Colors.white.withOpacity(0.45),
-            border: Border.all(
-              color: active
-                  ? AppColors.primaryAccent
-                  : AppColors.divider,
-              width: active ? 1.4 : 1,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text.rich(
+          TextSpan(children: [
+            TextSpan(
+              text: isMorning ? 'Утренний ' : 'Вечерний ',
+              style: AppTypography.h1.copyWith(fontSize: 34, height: 1.05),
             ),
-            boxShadow: active
-                ? [
-                    BoxShadow(
-                      color: AppColors.shadowCard,
-                      blurRadius: 16,
-                      offset: const Offset(0, 6),
-                      spreadRadius: -6,
-                    ),
-                  ]
-                : null,
-          ),
-          child: Row(
-            children: [
-              Icon(icon,
-                  size: 18,
-                  color: active
-                      ? AppColors.roseDeep
-                      : AppColors.textSecondary),
-              const SizedBox(width: 8),
-              Text(
-                label,
-                style: AppTypography.bodyMedium.copyWith(
-                  color: active
-                      ? AppColors.textPrimary
-                      : AppColors.textSecondary,
-                ),
-              ),
-              const Spacer(),
-              Text(
-                count,
-                style: AppTypography.eyebrow().copyWith(
-                  fontSize: 11,
-                  color: active
-                      ? AppColors.roseDeep
-                      : AppColors.textSecondary,
-                  letterSpacing: 0.4,
-                ),
-              ),
-            ],
-          ),
+            TextSpan(
+              text: 'ритуал',
+              style: AppTypography.serifItalic(fontSize: 34),
+            ),
+          ]),
         ),
+        const SizedBox(height: 6),
+        Text(
+          '$total ${_stepWord(total)} · подобрано Линой под твою кожу',
+          style: AppTypography.caption.copyWith(fontSize: 13),
+        ),
+      ],
+    );
+  }
+
+  String _stepWord(int n) {
+    final m10 = n % 10, m100 = n % 100;
+    if (m10 == 1 && m100 != 11) return 'шаг';
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'шага';
+    return 'шагов';
+  }
+}
+
+class _ProgressHero extends StatelessWidget {
+  const _ProgressHero({
+    required this.done,
+    required this.total,
+    required this.nextTitle,
+  });
+  final int done;
+  final int total;
+  final String? nextTitle;
+
+  String _moodLabel() {
+    if (total == 0) return 'Подбираем ритуал…';
+    if (done == 0) return 'Начнём.';
+    if (done == total) return 'Готово!';
+    if (done * 2 < total) return 'Запустилось.';
+    if (done * 2 == total) return 'Половина пути.';
+    return 'Финишная прямая.';
+  }
+
+  String _captionLabel() {
+    if (total == 0) return '';
+    if (done == total) return 'Все шаги сделаны. Береги результат.';
+    return nextTitle == null
+        ? 'Следующий шаг скоро.'
+        : 'Следующий шаг — ${nextTitle!.toLowerCase()}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Colors.white, AppColors.primary],
+        ),
+        border: Border.all(color: AppColors.primaryAccent.withOpacity(0.18)),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primaryAccent.withOpacity(0.25),
+            blurRadius: 28,
+            offset: const Offset(0, 12),
+            spreadRadius: -10,
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          SizedBox(
+            width: 72,
+            height: 72,
+            child: TweenAnimationBuilder<double>(
+              duration: const Duration(milliseconds: 600),
+              tween: Tween(
+                  begin: 0, end: total == 0 ? 0.0 : done / total),
+              builder: (_, t, __) => Stack(
+                alignment: Alignment.center,
+                children: [
+                  CustomPaint(
+                    size: const Size(72, 72),
+                    painter: _RingPainter(progress: t),
+                  ),
+                  Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text('$done', style: AppTypography.h2.copyWith(height: 1)),
+                      const SizedBox(height: 2),
+                      Text(
+                        'ИЗ $total',
+                        style: AppTypography.eyebrow().copyWith(fontSize: 9),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                EyebrowText('Прогресс', color: AppColors.textSecondary),
+                const SizedBox(height: 4),
+                Text(
+                  _moodLabel(),
+                  style: AppTypography.h2.copyWith(fontSize: 22),
+                ),
+                if (_captionLabel().isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(
+                    _captionLabel(),
+                    style: AppTypography.caption.copyWith(fontSize: 12),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
+class _RingPainter extends CustomPainter {
+  _RingPainter({required this.progress});
+  final double progress;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final c = Offset(size.width / 2, size.height / 2);
+    final r = (size.width / 2) - 3;
+    final track = Paint()
+      ..color = AppColors.primaryAccent.withOpacity(0.18)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6;
+    canvas.drawCircle(c, r, track);
+    final stroke = Paint()
+      ..color = AppColors.roseDeep
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 6
+      ..strokeCap = StrokeCap.round;
+    canvas.drawArc(
+      Rect.fromCircle(center: c, radius: r),
+      -math.pi / 2,
+      progress.clamp(0, 1) * 2 * math.pi,
+      false,
+      stroke,
+    );
+  }
+
+  @override
+  bool shouldRepaint(covariant _RingPainter old) =>
+      old.progress != progress;
+}
+
+enum _StepState { upcoming, active, done }
+
 class _StepCard extends StatelessWidget {
   const _StepCard({
     required this.step,
     required this.order,
-    required this.total,
+    required this.state,
     required this.onTap,
   });
+
   final TodayStep step;
   final int order;
-  final int total;
+  final _StepState state;
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: onTap,
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 220),
-          padding: const EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: step.done
-                ? AppColors.success.withOpacity(0.08)
-                : AppColors.surface,
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: step.done
-                  ? AppColors.success.withOpacity(0.5)
-                  : AppColors.divider,
-            ),
-          ),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _Checkmark(done: step.done),
-              const SizedBox(width: 14),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Шаг $order из $total',
-                      style: AppTypography.eyebrow().copyWith(fontSize: 10),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      step.title,
-                      style: AppTypography.h3.copyWith(
-                        decoration: step.done
-                            ? TextDecoration.lineThrough
-                            : null,
-                        decorationColor: AppColors.textSecondary,
-                        color: step.done
-                            ? AppColors.textSecondary
-                            : AppColors.textPrimary,
-                      ),
-                    ),
-                    if (step.ingredients.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Wrap(
-                        spacing: 6,
-                        runSpacing: 6,
-                        children: step.ingredients
-                            .take(3)
-                            .map((i) => Container(
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 8, vertical: 3),
-                                  decoration: BoxDecoration(
-                                    color: AppColors.primary,
-                                    borderRadius:
-                                        BorderRadius.circular(99),
-                                  ),
-                                  child: Text(
-                                    i,
-                                    style: AppTypography.caption.copyWith(
-                                      fontSize: 11,
-                                      color: AppColors.roseDeep,
-                                    ),
-                                  ),
-                                ))
-                            .toList(),
-                      ),
-                    ],
-                    if (step.explanation.isNotEmpty) ...[
-                      const SizedBox(height: 8),
-                      Text(
-                        step.explanation,
-                        style: AppTypography.bodySm.copyWith(
-                          fontSize: 13,
-                          color: AppColors.textSecondary,
-                        ),
-                      ),
-                    ],
-                  ],
+    final isActive = state == _StepState.active;
+    final isDone = state == _StepState.done;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 220),
+      decoration: BoxDecoration(
+        gradient: isActive
+            ? const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [AppColors.primary, Colors.white],
+              )
+            : null,
+        color: isActive ? null : AppColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: isActive
+              ? AppColors.primaryAccent
+              : AppColors.divider,
+          width: isActive ? 1.2 : 1,
+        ),
+        boxShadow: isActive
+            ? [
+                BoxShadow(
+                  color: AppColors.primaryAccent.withOpacity(0.35),
+                  blurRadius: 28,
+                  offset: const Offset(0, 14),
+                  spreadRadius: -14,
                 ),
+              ]
+            : null,
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: onTap,
+          child: Opacity(
+            opacity: isDone ? 0.6 : 1,
+            child: Padding(
+              padding: const EdgeInsets.all(14),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _Checkmark(done: isDone),
+                  const SizedBox(width: 12),
+                  _OrderBadge(order: order, isActive: isActive),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          step.title,
+                          style: AppTypography.bodyMedium.copyWith(
+                            fontSize: 14,
+                            decoration: isDone
+                                ? TextDecoration.lineThrough
+                                : null,
+                            decorationColor: AppColors.textSecondary,
+                          ),
+                        ),
+                        if (step.explanation.isNotEmpty) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            step.explanation,
+                            style: AppTypography.caption.copyWith(fontSize: 12),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                        if (step.ingredients.isNotEmpty) ...[
+                          const SizedBox(height: 8),
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 6,
+                            children: step.ingredients
+                                .take(3)
+                                .map((i) => Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 8, vertical: 3),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.primary
+                                            .withOpacity(isActive ? 0.7 : 1),
+                                        borderRadius:
+                                            BorderRadius.circular(99),
+                                      ),
+                                      child: Text(
+                                        i,
+                                        style: AppTypography.caption.copyWith(
+                                          fontSize: 11,
+                                          color: AppColors.roseDeep,
+                                        ),
+                                      ),
+                                    ))
+                                .toList(),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                ],
               ),
-            ],
+            ),
           ),
         ),
       ),
@@ -609,15 +629,238 @@ class _Checkmark extends StatelessWidget {
       height: 28,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        color: done ? AppColors.success : Colors.transparent,
+        color: done ? AppColors.roseDeep : Colors.transparent,
         border: done
             ? null
             : Border.all(color: AppColors.dividerStrong, width: 1.5),
       ),
       alignment: Alignment.center,
       child: done
-          ? const Icon(Icons.check_rounded, size: 18, color: Colors.white)
+          ? const Icon(Icons.check_rounded, size: 16, color: Colors.white)
           : null,
+    );
+  }
+}
+
+class _OrderBadge extends StatelessWidget {
+  const _OrderBadge({required this.order, required this.isActive});
+  final int order;
+  final bool isActive;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      '$order.',
+      style: AppTypography.serifItalic(
+        fontSize: 18,
+        color: isActive ? AppColors.roseDeep : AppColors.textSecondary,
+      ).copyWith(height: 1),
+    );
+  }
+}
+
+class _LinaNote extends StatelessWidget {
+  const _LinaNote({required this.isMorning});
+  final bool isMorning;
+
+  static const _morningTips = [
+    'Подожди 90 секунд между сывороткой и кремом — иначе активы не успеют проникнуть.',
+    'SPF — последний шаг, перед выходом из дома, без исключений.',
+    'Холодная вода после умывания — лучше любого тонера для сужения пор.',
+  ];
+  static const _eveningTips = [
+    'Двойное очищение вечером убирает SPF и день — кожа дышит за ночь.',
+    'Активы (ретинол, кислоты) лучше работают только вечером — днём они под SPF.',
+    'Подушка влияет — переворачивай наволочку через ночь, помогает с акне.',
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final tips = isMorning ? _morningTips : _eveningTips;
+    final tip = tips[DateTime.now().day % tips.length];
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.roseDeep.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(18),
+        border:
+            Border.all(color: AppColors.primaryAccent.withOpacity(0.18)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const LinaAvatar(size: 32, monogram: true, online: false),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'СОВЕТ ОТ ЛИНЫ',
+                  style: AppTypography.eyebrow(color: AppColors.roseDeep),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '«$tip»',
+                  style: AppTypography.serifItalic(
+                    fontSize: 15,
+                    color: AppColors.textPrimary,
+                  ).copyWith(height: 1.45),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StreakBadge extends StatelessWidget {
+  const _StreakBadge({required this.streak});
+  final int streak;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.champagne, Colors.white],
+        ),
+        borderRadius: BorderRadius.circular(99),
+        border: Border.all(color: AppColors.gold.withOpacity(0.3)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          const Icon(Icons.auto_awesome, size: 14, color: AppColors.gold),
+          const SizedBox(width: 6),
+          Text(
+            '$streak ${_dayWord(streak)} подряд',
+            style: AppTypography.bodySm.copyWith(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _dayWord(int n) {
+    final m10 = n % 10, m100 = n % 100;
+    if (m10 == 1 && m100 != 11) return 'день';
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return 'дня';
+    return 'дней';
+  }
+}
+
+class _StickyCta extends StatelessWidget {
+  const _StickyCta({required this.order, required this.onTap});
+  final int order;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [
+            AppColors.background.withOpacity(0),
+            AppColors.background,
+          ],
+          stops: const [0, 0.35],
+        ),
+      ),
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.lg),
+      child: Material(
+        color: AppColors.roseDeep,
+        borderRadius: BorderRadius.circular(18),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 16),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  'Отметить шаг $order выполненным',
+                  style: AppTypography.button,
+                ),
+                const SizedBox(width: 8),
+                const Icon(Icons.check_rounded,
+                    size: 18, color: Colors.white),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ScanCta extends StatelessWidget {
+  const _ScanCta({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            color: AppColors.surface,
+            border: Border.all(color: AppColors.divider),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 36,
+                height: 36,
+                decoration: BoxDecoration(
+                  color: AppColors.primaryAccent.withOpacity(0.18),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(
+                  Icons.center_focus_strong_rounded,
+                  color: AppColors.roseDeep,
+                  size: 18,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Сделать скан сегодня',
+                        style:
+                            AppTypography.bodyMedium.copyWith(fontSize: 14)),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Чтобы Лина увидела как кожа реагирует',
+                      style: AppTypography.caption.copyWith(fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded,
+                  size: 18, color: AppColors.textSecondary),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
