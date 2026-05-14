@@ -1119,14 +1119,18 @@ class _Group extends StatelessWidget {
             padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
             child: EyebrowText(title, color: AppColors.textSecondary),
           ),
-          Container(
+          // Border + rounded-corner clip applied here; rows inside paint their
+          // own surface so InkWell ripples are visible on a real Material
+          // ancestor instead of disappearing into a transparent parent.
+          DecoratedBox(
             decoration: BoxDecoration(
-              color: AppColors.surface,
               borderRadius: BorderRadius.circular(18),
               border: Border.all(color: AppColors.divider),
             ),
-            clipBehavior: Clip.antiAlias,
-            child: Column(children: divided),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(18),
+              child: Column(children: divided),
+            ),
           ),
         ],
       ),
@@ -1170,9 +1174,16 @@ class _Row extends StatelessWidget {
     final detailColor =
         highlight ? AppColors.roseDeep : AppColors.textSecondary;
     return Material(
-      color: highlight ? AppColors.roseDeep.withOpacity(0.06) : Colors.transparent,
+      // Each row paints its own surface — gives InkWell a real Material to
+      // ink onto and makes the ripple visible. _Group only owns the rounded
+      // border + clip.
+      color: highlight
+          ? AppColors.roseDeep.withOpacity(0.06)
+          : AppColors.surface,
       child: InkWell(
         onTap: onTap,
+        splashColor: AppColors.primaryAccent.withOpacity(0.15),
+        highlightColor: AppColors.primaryAccent.withOpacity(0.06),
         child: Padding(
           padding:
               const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
