@@ -167,6 +167,26 @@ class BackendApi {
     await _dio.delete('$baseUrl/me/favorites/$productId', options: _auth());
   }
 
+  // ===== Avatar =====
+
+  String avatarUrl({int cacheBust = 0}) =>
+      cacheBust == 0 ? '$baseUrl/me/avatar' : '$baseUrl/me/avatar?v=$cacheBust';
+
+  Future<void> setAvatar({
+    required String photoBase64,
+    String mime = 'image/jpeg',
+  }) async {
+    await _dio.put(
+      '$baseUrl/me/avatar',
+      data: {'photo_b64': photoBase64, 'mime': mime},
+      options: _auth(),
+    );
+  }
+
+  Future<void> removeAvatar() async {
+    await _dio.delete('$baseUrl/me/avatar', options: _auth());
+  }
+
   Future<List<Product>> listFavorites() async {
     final r = await _dio.get('$baseUrl/me/favorites', options: _auth());
     final items =

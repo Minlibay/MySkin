@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
@@ -60,6 +61,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   bool _loaded = false;
   int? _shelfCount;
   late SkinProfile _profile = widget.profile;
+
+  /// Bumps every time the avatar is uploaded or removed; appended to the
+  /// network URL as ?v= so Flutter's image cache refetches instead of
+  /// serving the stale photo.
+  int _avatarVersion = DateTime.now().millisecondsSinceEpoch;
 
   @override
   void initState() {
@@ -267,6 +273,108 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     );
     if (result == null) return;
     await _updateProfile(_profile.copyWith(concerns: result));
+  }
+
+  void _openAvatarSheet() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.dividerStrong,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 12),
+            ListTile(
+              leading: const Icon(Icons.edit_rounded,
+                  color: AppColors.textPrimary),
+              title: Text('Изменить имя', style: AppTypography.body),
+              onTap: () {
+                Navigator.pop(ctx);
+                _editName();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.image_outlined,
+                  color: AppColors.textPrimary),
+              title: Text('Сменить фото', style: AppTypography.body),
+              onTap: () {
+                Navigator.pop(ctx);
+                _pickAvatar();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline_rounded,
+                  color: AppColors.warning),
+              title: Text('Убрать фото',
+                  style: AppTypography.body
+                      .copyWith(color: AppColors.warning)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _removeAvatar();
+              },
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _pickAvatar() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 88,
+      maxWidth: 800,
+    );
+    if (picked == null) return;
+    final bytes = await picked.readAsBytes();
+    if (bytes.length > 4 * 1024 * 1024) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Фото слишком большое (>4 МБ)')),
+      );
+      return;
+    }
+    try {
+      await ref.read(backendApiProvider).setAvatar(
+            photoBase64: base64Encode(bytes),
+            mime: picked.mimeType ?? 'image/jpeg',
+          );
+      if (!mounted) return;
+      setState(() =>
+          _avatarVersion = DateTime.now().millisecondsSinceEpoch);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не получилось загрузить: $e')),
+      );
+    }
+  }
+
+  Future<void> _removeAvatar() async {
+    try {
+      await ref.read(backendApiProvider).removeAvatar();
+      if (!mounted) return;
+      setState(() =>
+          _avatarVersion = DateTime.now().millisecondsSinceEpoch);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не получилось убрать: $e')),
+      );
+    }
   }
 
   Future<void> _editName() async {
@@ -658,7 +766,12 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 _AvatarBlock(
                   name: name,
                   subtitle: subtitle,
-                  onEdit: _editName,
+                  onEdit: _openAvatarSheet,
+                  avatarUrl: ref
+                      .read(backendApiProvider)
+                      .avatarUrl(cacheBust: _avatarVersion),
+                  headers:
+                      ref.read(backendApiProvider).imageAuthHeaders(),
                 ),
                 const SizedBox(height: AppSpacing.lg),
                 Padding(
@@ -823,11 +936,15 @@ class _AvatarBlock extends StatelessWidget {
     required this.name,
     required this.subtitle,
     required this.onEdit,
+    required this.avatarUrl,
+    required this.headers,
   });
 
   final String name;
   final String? subtitle;
   final VoidCallback onEdit;
+  final String avatarUrl;
+  final Map<String, String> headers;
 
   @override
   Widget build(BuildContext context) {
@@ -844,7 +961,7 @@ class _AvatarBlock extends StatelessWidget {
               Container(
                 width: 96,
                 height: 96,
-                alignment: Alignment.center,
+                clipBehavior: Clip.antiAlias,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: const LinearGradient(
@@ -862,11 +979,18 @@ class _AvatarBlock extends StatelessWidget {
                     ),
                   ],
                 ),
-                child: Text(
-                  initial,
-                  style: AppTypography.serifItalic(
-                    fontSize: 40,
-                    color: AppColors.roseDeep,
+                child: Image.network(
+                  avatarUrl,
+                  headers: headers,
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Center(
+                    child: Text(
+                      initial,
+                      style: AppTypography.serifItalic(
+                        fontSize: 40,
+                        color: AppColors.roseDeep,
+                      ),
+                    ),
                   ),
                 ),
               ),

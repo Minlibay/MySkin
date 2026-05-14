@@ -91,6 +91,51 @@ class UserRepository {
     return const {};
   }
 
+  Future<({List<int> bytes, String mime})?> getAvatar(String id) async {
+    final r = await db.execute(
+      Sql.named('SELECT avatar, avatar_mime FROM users WHERE id = @id'),
+      parameters: {'id': id},
+    );
+    if (r.isEmpty || r.first[0] == null) return null;
+    return (
+      bytes: r.first[0] as List<int>,
+      mime: (r.first[1] as String?) ?? 'image/jpeg',
+    );
+  }
+
+  Future<void> setAvatar({
+    required String id,
+    required List<int> bytes,
+    required String mime,
+  }) async {
+    await db.execute(
+      Sql.named(
+          'UPDATE users SET avatar = @b, avatar_mime = @m WHERE id = @id'),
+      parameters: {
+        'id': id,
+        'b': TypedValue(Type.byteArray, Uint8List.fromList(bytes)),
+        'm': mime,
+      },
+    );
+  }
+
+  Future<void> removeAvatar(String id) async {
+    await db.execute(
+      Sql.named(
+          'UPDATE users SET avatar = NULL, avatar_mime = NULL WHERE id = @id'),
+      parameters: {'id': id},
+    );
+  }
+
+  Future<bool> hasAvatar(String id) async {
+    final r = await db.execute(
+      Sql.named(
+          'SELECT 1 FROM users WHERE id = @id AND avatar IS NOT NULL'),
+      parameters: {'id': id},
+    );
+    return r.isNotEmpty;
+  }
+
   Future<void> setSettings(String id, Map<String, dynamic> settings) async {
     await db.execute(
       Sql.named('UPDATE users SET settings = @s::jsonb WHERE id = @id'),

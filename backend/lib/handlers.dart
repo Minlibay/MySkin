@@ -1158,7 +1158,10 @@ class MeHandlers {
     ..delete('/me/account', _withUser(_deleteAccount))
     ..get('/me/progress', _withUser(_progress))
     ..get('/me/chat', _withUser(_getChat))
-    ..delete('/me/chat', _withUser(_clearChat));
+    ..delete('/me/chat', _withUser(_clearChat))
+    ..get('/me/avatar', _withUser(_getAvatar))
+    ..put('/me/avatar', _withUser(_setAvatar))
+    ..delete('/me/avatar', _withUser(_removeAvatar));
 
   Handler _withUser(Future<Response> Function(Request, UserRow) inner) =>
       (Request req) async {
@@ -1397,6 +1400,45 @@ class MeHandlers {
 
   Future<Response> _clearChat(Request req, UserRow user) async {
     await chatMessages.clear(user.id);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _getAvatar(Request req, UserRow user) async {
+    final p = await users.getAvatar(user.id);
+    if (p == null) return jsonResponse(404, {'error': 'no_avatar'});
+    return Response.ok(
+      p.bytes,
+      headers: {
+        'content-type': p.mime,
+        // No public caching — avatar bytes are personal.
+        'cache-control': 'private, max-age=3600',
+      },
+    );
+  }
+
+  Future<Response> _setAvatar(Request req, UserRow user) async {
+    final body =
+        jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final b64 = body['photo_b64'] as String?;
+    final mime = body['mime'] as String? ?? 'image/jpeg';
+    if (b64 == null || b64.isEmpty) {
+      return jsonResponse(400, {'error': 'no_photo'});
+    }
+    List<int> bytes;
+    try {
+      bytes = base64Decode(b64);
+    } catch (_) {
+      return jsonResponse(400, {'error': 'invalid_photo'});
+    }
+    if (bytes.length > 4 * 1024 * 1024) {
+      return jsonResponse(413, {'error': 'photo_too_large'});
+    }
+    await users.setAvatar(id: user.id, bytes: bytes, mime: mime);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _removeAvatar(Request req, UserRow user) async {
+    await users.removeAvatar(user.id);
     return jsonResponse(200, {'ok': true});
   }
 }
