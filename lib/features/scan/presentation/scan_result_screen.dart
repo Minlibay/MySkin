@@ -1,6 +1,12 @@
+import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
@@ -345,7 +351,7 @@ class _MetricsGrid extends StatelessWidget {
   }
 }
 
-class _Heatmap extends StatelessWidget {
+class _Heatmap extends ConsumerStatefulWidget {
   const _Heatmap({
     required this.scan,
     required this.photoUrl,
@@ -356,9 +362,114 @@ class _Heatmap extends StatelessWidget {
   final Map<String, String> photoHeaders;
 
   @override
+  ConsumerState<_Heatmap> createState() => _HeatmapState();
+}
+
+class _HeatmapState extends ConsumerState<_Heatmap> {
+  /// Face bbox we computed locally by running ML Kit on the saved photo.
+  /// Wins over `widget.scan.face` when it's set — that one can be a stale
+  /// skin-colour heuristic that covers the whole frame.
+  FaceGeometry? _detected;
+
+  /// True after we've attempted local detection (regardless of success).
+  /// Avoids re-running detection on every rebuild.
+  bool _detectAttempted = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_serverFaceLooksGood(widget.scan.face)) {
+      _detectAttempted = true;
+    } else if (widget.scan.hasPhoto) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _runDetect());
+    } else {
+      _detectAttempted = true;
+    }
+  }
+
+  bool _serverFaceLooksGood(FaceGeometry? f) {
+    if (f == null) return false;
+    final w = f.x1 - f.x0, h = f.y1 - f.y0;
+    // Reject obviously broken or 'whole frame' bboxes — those are the case
+    // the user sees in the screenshot where the oval just sits dead-centre.
+    if (w <= 0.1 || h <= 0.1) return false;
+    if (w >= 0.85 || h >= 0.92) return false;
+    return true;
+  }
+
+  Future<void> _runDetect() async {
+    if (_detectAttempted) return;
+    _detectAttempted = true;
+    try {
+      final bytes = await ref
+          .read(backendApiProvider)
+          .scanPhotoBytes(widget.scan.id);
+      if (bytes == null || bytes.isEmpty || !mounted) return;
+      final tmp =
+          File('${Directory.systemTemp.path}/scan-${widget.scan.id}.jpg');
+      await tmp.writeAsBytes(bytes, flush: true);
+      final detector = FaceDetector(
+        options: FaceDetectorOptions(
+          performanceMode: FaceDetectorMode.accurate,
+          minFaceSize: 0.15,
+        ),
+      );
+      try {
+        final input = InputImage.fromFilePath(tmp.path);
+        final faces = await detector.processImage(input);
+        if (faces.isEmpty || !mounted) return;
+        faces.sort((a, b) =>
+            (b.boundingBox.width * b.boundingBox.height)
+                .compareTo(a.boundingBox.width * a.boundingBox.height));
+        final box = faces.first.boundingBox;
+        final size = await _decodeSize(Uint8List.fromList(bytes));
+        if (size == null || !mounted) return;
+        final w = size.width, h = size.height;
+        if (w <= 0 || h <= 0) return;
+        setState(() {
+          _detected = FaceGeometry(bbox: [
+            (box.left / w).clamp(0.0, 1.0),
+            (box.top / h).clamp(0.0, 1.0),
+            (box.right / w).clamp(0.0, 1.0),
+            (box.bottom / h).clamp(0.0, 1.0),
+          ]);
+        });
+      } finally {
+        await detector.close();
+        try {
+          await tmp.delete();
+        } catch (_) {/* ignore */}
+      }
+    } catch (e) {
+      debugPrint('Result-screen face detect failed: $e');
+    }
+  }
+
+  Future<({double width, double height})?> _decodeSize(
+      Uint8List bytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final img = frame.image;
+      final w = img.width.toDouble();
+      final h = img.height.toDouble();
+      img.dispose();
+      return (width: w, height: h);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  FaceGeometry? get _effectiveFace =>
+      _detected ?? widget.scan.face;
+
+  @override
   Widget build(BuildContext context) {
-    final zones = scan.zones;
-    final face = scan.face;
+    final zones = widget.scan.zones;
+    final face = _effectiveFace;
+    final scan = widget.scan;
+    final photoUrl = widget.photoUrl;
+    final photoHeaders = widget.photoHeaders;
     return Container(
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(24),

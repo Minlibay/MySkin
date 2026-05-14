@@ -254,6 +254,22 @@ class BackendApi {
 
   String scanPhotoUrl(String id) => '$baseUrl/me/scans/$id/photo';
 
+  /// Raw scan photo bytes — used by the result screen when it needs to run
+  /// ML Kit again on the saved image (older scans that pre-date face_bbox
+  /// support, or scans where the backend skin-colour bbox is too broad to
+  /// be useful for the heatmap).
+  Future<List<int>?> scanPhotoBytes(String id) async {
+    try {
+      final r = await _dio.get<List<int>>(
+        '$baseUrl/me/scans/$id/photo',
+        options: _auth().copyWith(responseType: ResponseType.bytes),
+      );
+      return r.data;
+    } catch (_) {
+      return null;
+    }
+  }
+
   String productPhotoUrl(String id) => '$baseUrl/products/$id/photo';
 
   Future<ScanResult> getScan(String id) async {
