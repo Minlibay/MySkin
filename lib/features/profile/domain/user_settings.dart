@@ -2,21 +2,35 @@
 class UserSettings {
   const UserSettings({
     this.notifications = const NotificationSettings(),
+    this.tutorialSeen = false,
   });
 
   final NotificationSettings notifications;
 
-  UserSettings copyWith({NotificationSettings? notifications}) =>
-      UserSettings(notifications: notifications ?? this.notifications);
+  /// True once the user has finished (or skipped) the welcome tutorial that
+  /// explains the three home actions. Stored server-side so the tutorial
+  /// doesn't re-trigger across devices / reinstalls.
+  final bool tutorialSeen;
+
+  UserSettings copyWith({
+    NotificationSettings? notifications,
+    bool? tutorialSeen,
+  }) =>
+      UserSettings(
+        notifications: notifications ?? this.notifications,
+        tutorialSeen: tutorialSeen ?? this.tutorialSeen,
+      );
 
   factory UserSettings.fromJson(Map<String, dynamic> j) => UserSettings(
         notifications: NotificationSettings.fromJson(
             (j['notifications'] as Map?)?.cast<String, dynamic>() ??
                 const {}),
+        tutorialSeen: j['tutorial_seen'] as bool? ?? false,
       );
 
   Map<String, dynamic> toJson() => {
         'notifications': notifications.toJson(),
+        'tutorial_seen': tutorialSeen,
       };
 }
 

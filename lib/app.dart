@@ -18,6 +18,7 @@ import 'features/derm2/presentation/derm2_screen.dart';
 import 'features/home/presentation/home_screen.dart';
 import 'features/notifications/data/local_notifications.dart';
 import 'features/notifications/presentation/notifications_screen.dart';
+import 'features/tutorial/presentation/welcome_tutorial_screen.dart';
 import 'features/onboarding/presentation/onboarding_screen.dart';
 import 'features/profile/domain/user_settings.dart';
 import 'features/profile/presentation/profile_screen.dart';
@@ -131,6 +132,7 @@ enum _Shell {
   bootstrapping,
   bootstrapError,
   onboarding,
+  tutorial,
   home,
   standardLoading,
   standardResult,
@@ -188,7 +190,15 @@ class _AppShellState extends ConsumerState<_AppShell> {
         if (profile != null) _profile = profile;
         if (routines.isNotEmpty) _lastResult = routines.first.result;
         _today = today;
-        _view = profile != null ? _Shell.home : _Shell.onboarding;
+        if (profile == null) {
+          _view = _Shell.onboarding;
+        } else if (!settings.tutorialSeen) {
+          // Existing user from a build that pre-dates the tutorial — show it
+          // once on next launch.
+          _view = _Shell.tutorial;
+        } else {
+          _view = _Shell.home;
+        }
       });
       // Schedule local ritual reminders based on the user's stored settings.
       // No-op (silently) if OS-level notification permission was never granted.
@@ -198,6 +208,17 @@ class _AppShellState extends ConsumerState<_AppShell> {
       if (!mounted) return;
       setState(() => _view = _Shell.bootstrapError);
     }
+  }
+
+  Future<void> _onTutorialFinished() async {
+    setState(() => _view = _Shell.home);
+    // Persist tutorial_seen so we don't show it again on this account.
+    // Read current settings first so we don't stomp notification prefs.
+    try {
+      final api = ref.read(backendApiProvider);
+      final current = await api.getSettings();
+      await api.updateSettings(current.copyWith(tutorialSeen: true));
+    } catch (_) {/* best-effort */}
   }
 
   Future<void> _refreshToday() async {
@@ -211,7 +232,7 @@ class _AppShellState extends ConsumerState<_AppShell> {
   Future<void> _onOnboardingComplete(SkinProfile profile) async {
     setState(() {
       _profile = profile;
-      _view = _Shell.home;
+      _view = _Shell.tutorial;
     });
     try {
       await ref.read(backendApiProvider).putProfile(profile);
@@ -264,6 +285,8 @@ class _AppShellState extends ConsumerState<_AppShell> {
         return _BootstrapErrorScreen(onRetry: _bootstrap);
       case _Shell.onboarding:
         return OnboardingScreen(onComplete: _onOnboardingComplete);
+      case _Shell.tutorial:
+        return WelcomeTutorialScreen(onFinish: _onTutorialFinished);
       case _Shell.home:
         return HomeScreen(
           profile: _profile,
