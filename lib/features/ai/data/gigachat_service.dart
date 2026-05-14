@@ -146,7 +146,11 @@ class GigachatService implements AIService {
   }
 
   @override
-  Future<RoutineResult> generateRoutine(SkinProfile profile) async {
+  Future<RoutineResult> generateRoutine(SkinProfile profile,
+      {Map<String, String>? checkIn}) async {
+    // Direct-to-GigaChat path is dev-only — `checkIn` is logged but not
+    // currently woven into the local prompt. Production goes through the
+    // HTTP service which handles check_in server-side.
     final body = jsonEncode(profile.toJson());
     final raw = await _chat(
       systemPrompt: _standardSystemPrompt,
@@ -188,7 +192,8 @@ class MockAIService implements AIService {
   int _dermCallCount = 0;
 
   @override
-  Future<RoutineResult> generateRoutine(SkinProfile profile) async {
+  Future<RoutineResult> generateRoutine(SkinProfile profile,
+      {Map<String, String>? checkIn}) async {
     await Future.delayed(const Duration(seconds: 2));
     return const RoutineResult(
       morning: [

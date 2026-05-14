@@ -524,10 +524,21 @@ class AiHandlers {
   Future<Response> _generate(Request req, UserRow user) async {
     final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
     final profile = body['profile'] as Map<String, dynamic>? ?? const {};
+    final checkIn = body['check_in'] as Map<String, dynamic>?;
     try {
+      // Optional same-day check-in: mood, what they notice, what they want
+      // today. Feeds into the prompt so a routine generated right now reflects
+      // 'кожа сегодня тонкая, хочу успокоить', not just the static profile.
+      final userMsg = StringBuffer('Данные пользователя:\n');
+      userMsg.write(jsonEncode(profile));
+      if (checkIn != null && checkIn.isNotEmpty) {
+        userMsg.write('\n\nСостояние сегодня (опрос пользователя): ');
+        userMsg.write(jsonEncode(checkIn));
+        userMsg.write('\nУчти это в подборе шагов и тоне комментариев.');
+      }
       final raw = await giga.chat(
         systemPrompt: standardSystemPrompt,
-        userMessage: 'Данные пользователя:\n${jsonEncode(profile)}',
+        userMessage: userMsg.toString(),
       );
       return jsonResponse(200, parseJsonReply(raw));
     } on GigaChatException catch (e) {

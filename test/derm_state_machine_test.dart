@@ -18,7 +18,8 @@ class _ScriptedAI implements AIService {
   }
 
   @override
-  Future<RoutineResult> generateRoutine(SkinProfile profile) async {
+  Future<RoutineResult> generateRoutine(SkinProfile profile,
+      {Map<String, String>? checkIn}) async {
     return const RoutineResult(
       morning: [],
       evening: [],

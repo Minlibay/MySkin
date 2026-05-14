@@ -84,11 +84,15 @@ class HttpAIService implements AIService {
       });
 
   @override
-  Future<RoutineResult> generateRoutine(SkinProfile profile) async {
+  Future<RoutineResult> generateRoutine(SkinProfile profile,
+      {Map<String, String>? checkIn}) async {
     try {
       final resp = await _dio.post(
         '$baseUrl/ai/generate-routine',
-        data: {'profile': profile.toJson()},
+        data: {
+          'profile': profile.toJson(),
+          if (checkIn != null && checkIn.isNotEmpty) 'check_in': checkIn,
+        },
         options: _auth(),
       );
       return RoutineResult.fromJson(resp.data as Map<String, dynamic>);

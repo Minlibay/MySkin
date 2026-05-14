@@ -29,6 +29,7 @@ import 'features/scan/domain/scan_result.dart';
 import 'features/scan/presentation/scan_result_screen.dart';
 import 'features/scan/presentation/scan_screen.dart';
 import 'features/routine/presentation/loading_screen.dart';
+import 'features/routine/presentation/quick_check_in_screen.dart';
 import 'features/routine/presentation/routine_history_screen.dart';
 import 'features/routine/presentation/routine_screen.dart';
 
@@ -147,6 +148,7 @@ enum _Shell {
   progress,
   chat,
   notifications,
+  quickCheckIn,
 }
 
 class _AppShell extends ConsumerStatefulWidget {
@@ -254,12 +256,13 @@ class _AppShellState extends ConsumerState<_AppShell> {
     }
   }
 
-  Future<void> _runStandard() async {
+  Future<void> _runStandard({Map<String, String>? checkIn}) async {
     setState(() => _view = _Shell.standardLoading);
     try {
       final ai = ref.read(aiServiceProvider);
       final api = ref.read(backendApiProvider);
-      final result = await ai.generateRoutine(_profile);
+      final result =
+          await ai.generateRoutine(_profile, checkIn: checkIn);
       if (!mounted) return;
       setState(() {
         _lastResult = result;
@@ -292,7 +295,7 @@ class _AppShellState extends ConsumerState<_AppShell> {
           profile: _profile,
           lastResult: _lastResult,
           today: _today,
-          onStandardMode: _runStandard,
+          onStandardMode: () => setState(() => _view = _Shell.quickCheckIn),
           onDermMode: () => setState(() => _view = _Shell.chat),
           onRetake: () => setState(() {
             _view = _Shell.onboarding;
@@ -404,6 +407,14 @@ class _AppShellState extends ConsumerState<_AppShell> {
         return NotificationsScreen(
           onBack: () => setState(() => _view = _Shell.home),
           onOpenScan: _openScanById,
+        );
+      case _Shell.quickCheckIn:
+        return QuickCheckInScreen(
+          onBack: () => setState(() => _view = _Shell.home),
+          onSubmit: (answers) {
+            // ignore: unawaited_futures
+            _runStandard(checkIn: answers);
+          },
         );
     }
   }

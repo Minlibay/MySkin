@@ -175,7 +175,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       _ModeCard(
                         icon: Icons.center_focus_strong_rounded,
                         title: 'Сканировать кожу',
-                        subtitle: 'Селфи → метрики и карта улучшений',
+                        subtitle:
+                            'Селфи и точные метрики — самый честный совет.',
                         onTap: widget.onOpenScan!,
                       ),
                       const SizedBox(height: AppSpacing.sm),
@@ -183,14 +184,16 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     _ModeCard(
                       icon: Icons.bolt_rounded,
                       title: 'Быстрая рекомендация',
-                      subtitle: 'AI подберёт уход по твоему профилю',
+                      subtitle:
+                          'Пара вопросов о коже сегодня — готовый уход за минуту.',
                       onTap: widget.onStandardMode,
                     ),
                     const SizedBox(height: AppSpacing.sm),
                     _ModeCard(
                       icon: Icons.auto_awesome_rounded,
                       title: 'Лина · диалог',
-                      subtitle: 'Точная формула после уточняющих вопросов',
+                      subtitle:
+                          'Углублённый разбор с уточняющими вопросами.',
                       tinted: true,
                       onTap: widget.onDermMode,
                     ),
