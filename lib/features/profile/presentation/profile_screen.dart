@@ -1,7 +1,9 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'dart:convert';
+
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
@@ -13,6 +15,9 @@ import '../../auth/presentation/auth_controller.dart';
 import '../../notifications/data/local_notifications.dart';
 import '../domain/user_settings.dart';
 
+/// Profile / settings hub. Re-built from the handoff design — avatar block
+/// with edit pencil, stats card (indices), three settings groups (Моё /
+/// Лина — мой AI-агент / Аккаунт), and a version footer.
 class ProfileScreen extends ConsumerStatefulWidget {
   const ProfileScreen({
     super.key,
@@ -23,6 +28,8 @@ class ProfileScreen extends ConsumerStatefulWidget {
     required this.onOpenProgress,
     required this.onProfileUpdated,
     this.onOpenRoutineHistory,
+    this.skinScore,
+    this.streak,
   });
 
   final SkinProfile profile;
@@ -33,6 +40,13 @@ class ProfileScreen extends ConsumerStatefulWidget {
   final ValueChanged<SkinProfile> onProfileUpdated;
   final VoidCallback? onOpenRoutineHistory;
 
+  /// Latest skin index from the most recent scan/routine — drives the centre
+  /// stat. Null while bootstrap hasn't loaded a result yet.
+  final int? skinScore;
+
+  /// Days-in-a-row streak from `today` — drives the middle stat.
+  final int? streak;
+
   @override
   ConsumerState<ProfileScreen> createState() => _ProfileScreenState();
 }
@@ -40,6 +54,7 @@ class ProfileScreen extends ConsumerStatefulWidget {
 class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   UserSettings _settings = const UserSettings();
   bool _loaded = false;
+  int? _shelfCount;
   late SkinProfile _profile = widget.profile;
 
   @override
@@ -49,11 +64,16 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
   }
 
   Future<void> _load() async {
+    final api = ref.read(backendApiProvider);
     try {
-      final s = await ref.read(backendApiProvider).getSettings();
+      final results = await Future.wait([
+        api.getSettings(),
+        api.getShelf(),
+      ]);
       if (!mounted) return;
       setState(() {
-        _settings = s;
+        _settings = results[0] as UserSettings;
+        _shelfCount = (results[1] as List).length;
         _loaded = true;
       });
     } catch (_) {
@@ -75,8 +95,6 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       );
       return;
     }
-    // If the user just enabled a reminder, ask the OS for notification
-    // permission before scheduling — otherwise zonedSchedule silently no-ops.
     final justEnabled = (updated.notifications.morning && !wasMorning) ||
         (updated.notifications.evening && !wasEvening);
     if (justEnabled) {
@@ -107,8 +125,8 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text('Как тебя зовут?', style: AppTypography.h2),
         content: TextField(
           controller: ctrl,
@@ -118,13 +136,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Отмена'),
-          ),
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('Отмена')),
           TextButton(
-            onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
-            child: const Text('Сохранить'),
-          ),
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('Сохранить')),
         ],
       ),
     );
@@ -132,15 +148,93 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     await _updateProfile(_profile.copyWith(name: newName));
   }
 
-  Future<void> _editSkinType() async {
-    const options = [
-      ('dry', 'Сухая', '🌵'),
-      ('oily', 'Жирная', '🫧'),
-      ('combo', 'Комбинированная', '🪞'),
-      ('normal', 'Нормальная', '🌸'),
-      ('sensitive', 'Чувствительная', '⚠️'),
-    ];
-    final picked = await showModalBottomSheet<String>(
+  void _openReminders() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg, AppSpacing.sm, AppSpacing.lg, AppSpacing.lg),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: AppSpacing.md),
+                    decoration: BoxDecoration(
+                      color: AppColors.dividerStrong,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                Text('Напоминания', style: AppTypography.h2),
+                const SizedBox(height: AppSpacing.md),
+                _ReminderTile(
+                  icon: Icons.wb_sunny_rounded,
+                  title: 'Утренний ритуал',
+                  enabled: _settings.notifications.morning,
+                  time: _settings.notifications.morningTime,
+                  onEnabled: (v) {
+                    setSheet(() {});
+                    _save(_settings.copyWith(
+                        notifications:
+                            _settings.notifications.copyWith(morning: v)));
+                  },
+                  onPickTime: () async {
+                    final t = await _pickTime(
+                        label: 'Утром в',
+                        current: _settings.notifications.morningTime);
+                    if (t != null) {
+                      setSheet(() {});
+                      await _save(_settings.copyWith(
+                          notifications: _settings.notifications
+                              .copyWith(morningTime: t)));
+                    }
+                  },
+                ),
+                const SizedBox(height: AppSpacing.sm),
+                _ReminderTile(
+                  icon: Icons.nightlight_round,
+                  title: 'Вечерний ритуал',
+                  enabled: _settings.notifications.evening,
+                  time: _settings.notifications.eveningTime,
+                  onEnabled: (v) {
+                    setSheet(() {});
+                    _save(_settings.copyWith(
+                        notifications:
+                            _settings.notifications.copyWith(evening: v)));
+                  },
+                  onPickTime: () async {
+                    final t = await _pickTime(
+                        label: 'Вечером в',
+                        current: _settings.notifications.eveningTime);
+                    if (t != null) {
+                      setSheet(() {});
+                      await _save(_settings.copyWith(
+                          notifications: _settings.notifications
+                              .copyWith(eveningTime: t)));
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _openPrivacy() {
+    showModalBottomSheet<void>(
       context: context,
       backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
@@ -160,29 +254,80 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            Padding(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: AppSpacing.lg, vertical: AppSpacing.sm),
-              child: Text('Тип кожи', style: AppTypography.h2),
-            ),
-            for (final o in options)
-              ListTile(
-                leading: Text(o.$3,
-                    style: const TextStyle(fontSize: 22)),
-                title: Text(o.$2, style: AppTypography.body),
-                trailing: _profile.skinType == o.$1
-                    ? const Icon(Icons.check_rounded,
-                        color: AppColors.roseDeep)
-                    : null,
-                onTap: () => Navigator.pop(ctx, o.$1),
+            ListTile(
+              leading: const Icon(Icons.download_rounded,
+                  color: AppColors.textPrimary),
+              title: Text('Экспорт моих данных', style: AppTypography.body),
+              subtitle: Text(
+                'Скопируется JSON в буфер',
+                style: AppTypography.caption.copyWith(fontSize: 12),
               ),
-            const SizedBox(height: 12),
+              onTap: () {
+                Navigator.pop(ctx);
+                _exportData();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.delete_outline_rounded,
+                  color: AppColors.warning),
+              title: Text('Удалить аккаунт',
+                  style:
+                      AppTypography.body.copyWith(color: AppColors.warning)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _confirmDelete();
+              },
+            ),
+            const SizedBox(height: 8),
           ],
         ),
       ),
     );
-    if (picked == null || picked == _profile.skinType) return;
-    await _updateProfile(_profile.copyWith(skinType: picked));
+  }
+
+  void _openSettingsCog() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const SizedBox(height: 8),
+            Container(
+              width: 36,
+              height: 4,
+              decoration: BoxDecoration(
+                color: AppColors.dividerStrong,
+                borderRadius: BorderRadius.circular(2),
+              ),
+            ),
+            const SizedBox(height: 12),
+            ListTile(
+              leading: const Icon(Icons.refresh_rounded,
+                  color: AppColors.textPrimary),
+              title:
+                  Text('Пройти анкету заново', style: AppTypography.body),
+              onTap: () {
+                Navigator.pop(ctx);
+                widget.onRetake();
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.menu_book_rounded,
+                  color: AppColors.textPrimary),
+              title: Text('Политика конфиденциальности',
+                  style: AppTypography.body),
+              onTap: () => Navigator.pop(ctx),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   Future<void> _exportData() async {
@@ -192,8 +337,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       await Clipboard.setData(ClipboardData(text: json));
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-            content: Text('Все твои данные скопированы в буфер обмена')),
+        const SnackBar(content: Text('Данные скопированы в буфер обмена')),
       );
     } catch (e) {
       if (!mounted) return;
@@ -208,18 +352,17 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: AppColors.surface,
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(20)),
+        shape:
+            RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: Text('Удалить аккаунт?', style: AppTypography.h2),
         content: Text(
-          'Это удалит профиль, все рекомендации, отметки и полку. Действие необратимо.',
+          'Это удалит профиль, рекомендации, отметки и полку. Действие необратимо.',
           style: AppTypography.body,
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Отмена'),
-          ),
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Отмена')),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
             style: TextButton.styleFrom(foregroundColor: AppColors.warning),
@@ -241,10 +384,9 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
     }
   }
 
-  Future<void> _pickTime({
+  Future<String?> _pickTime({
     required String label,
     required String current,
-    required ValueChanged<String> onPick,
   }) async {
     final parts = current.split(':');
     final initial = TimeOfDay(
@@ -267,167 +409,158 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         child: child ?? const SizedBox(),
       ),
     );
-    if (picked == null) return;
-    final hh = picked.hour.toString().padLeft(2, '0');
-    final mm = picked.minute.toString().padLeft(2, '0');
-    onPick('$hh:$mm');
+    if (picked == null) return null;
+    return '${picked.hour.toString().padLeft(2, '0')}:'
+        '${picked.minute.toString().padLeft(2, '0')}';
+  }
+
+  String? _subtitle() {
+    final type = _skinTypeLabel(_profile.skinType);
+    if (type == null) return null;
+    return type.toLowerCase() + ' кожа';
+  }
+
+  String? _skinTypeLabel(String? id) => switch (id) {
+        'dry' => 'Сухая',
+        'oily' => 'Жирная',
+        'combo' => 'Комбинированная',
+        'normal' => 'Нормальная',
+        'sensitive' => 'Чувствительная',
+        _ => null,
+      };
+
+  String _remindersDetail() {
+    final n = _settings.notifications;
+    if (!n.morning && !n.evening) return 'выкл';
+    final parts = <String>[
+      if (n.morning) 'Утро',
+      if (n.evening) 'Вечер',
+    ];
+    return parts.join(' · ');
   }
 
   @override
   Widget build(BuildContext context) {
-    final user = ref.watch(authControllerProvider).user;
     final name = _profile.name?.trim().isNotEmpty == true
-        ? _profile.name!
+        ? _profile.name!.trim()
         : 'Без имени';
+    final scoreText = widget.skinScore?.toString() ?? '—';
+    final streakText = widget.streak?.toString() ?? '—';
+    final shelfText = _shelfCount?.toString() ?? '—';
+    final subtitle = _subtitle();
 
     return Scaffold(
       backgroundColor: AppColors.background,
       body: Stack(
         children: [
           const Positioned.fill(
-              child: GlowBackground(variant: GlowVariant.champagne)),
+              child: GlowBackground(variant: GlowVariant.blush)),
           SafeArea(
-            child: Column(
+            child: ListView(
+              padding:
+                  const EdgeInsets.fromLTRB(0, 0, 0, AppSpacing.xxl),
               children: [
-                _Header(onBack: widget.onBack),
-                Expanded(
-                  child: ListView(
-                    padding: const EdgeInsets.fromLTRB(AppSpacing.lg, 0,
-                        AppSpacing.lg, AppSpacing.xxl),
-                    children: [
-                      _ProfileHero(
-                        name: name,
-                        phone: user?.phone ?? '',
-                        onEditName: _editName,
-                      ),
-                      const SizedBox(height: AppSpacing.lg),
-                      const _SectionTitle('Уход'),
-                      _Tile(
-                        icon: Icons.spa_rounded,
-                        title: 'Тип кожи',
-                        trailing: _skinTypeLabel(_profile.skinType),
-                        onTap: _editSkinType,
-                      ),
-                      _Tile(
-                        icon: Icons.flag_rounded,
-                        title: 'Мои цели',
-                        trailing: _profile.concerns.isEmpty
-                            ? '—'
-                            : '${_profile.concerns.length}',
-                      ),
-                      _Tile(
-                        icon: Icons.inventory_2_rounded,
-                        title: 'Моя полка',
-                        onTap: widget.onOpenShelf,
-                      ),
-                      if (widget.onOpenRoutineHistory != null)
-                        _Tile(
-                          icon: Icons.history_rounded,
-                          title: 'Мои уходы',
-                          onTap: widget.onOpenRoutineHistory,
-                        ),
-                      _Tile(
-                        icon: Icons.trending_up_rounded,
-                        title: 'История и прогресс',
-                        onTap: widget.onOpenProgress,
-                      ),
-                      _Tile(
-                        icon: Icons.refresh_rounded,
-                        title: 'Пройти анкету заново',
-                        onTap: widget.onRetake,
-                      ),
-                      const SizedBox(height: AppSpacing.lg),
-                      const _SectionTitle('Уведомления'),
-                      _SwitchTile(
-                        icon: Icons.wb_sunny_rounded,
-                        title: 'Утренний ритуал',
-                        subtitle: _settings.notifications.morning
-                            ? _settings.notifications.morningTime
-                            : 'выкл',
-                        value: _settings.notifications.morning,
-                        onChanged: (v) => _save(_settings.copyWith(
-                          notifications: _settings.notifications
-                              .copyWith(morning: v),
-                        )),
-                        onTapTime: _settings.notifications.morning
-                            ? () => _pickTime(
-                                  label: 'Утром в',
-                                  current:
-                                      _settings.notifications.morningTime,
-                                  onPick: (t) => _save(
-                                    _settings.copyWith(
-                                      notifications: _settings.notifications
-                                          .copyWith(morningTime: t),
-                                    ),
-                                  ),
-                                )
-                            : null,
-                      ),
-                      _SwitchTile(
-                        icon: Icons.nightlight_round,
-                        title: 'Вечерний ритуал',
-                        subtitle: _settings.notifications.evening
-                            ? _settings.notifications.eveningTime
-                            : 'выкл',
-                        value: _settings.notifications.evening,
-                        onChanged: (v) => _save(_settings.copyWith(
-                          notifications: _settings.notifications
-                              .copyWith(evening: v),
-                        )),
-                        onTapTime: _settings.notifications.evening
-                            ? () => _pickTime(
-                                  label: 'Вечером в',
-                                  current:
-                                      _settings.notifications.eveningTime,
-                                  onPick: (t) => _save(
-                                    _settings.copyWith(
-                                      notifications: _settings.notifications
-                                          .copyWith(eveningTime: t),
-                                    ),
-                                  ),
-                                )
-                            : null,
-                      ),
-                      if (!_loaded) ...[
-                        const SizedBox(height: AppSpacing.xs),
-                        const _LoadingHint(),
-                      ],
-                      const SizedBox(height: AppSpacing.lg),
-                      const _SectionTitle('Конфиденциальность'),
-                      _Tile(
-                        icon: Icons.download_rounded,
-                        title: 'Экспорт моих данных',
-                        subtitle:
-                            'Скопирует JSON со всеми твоими данными',
-                        onTap: _exportData,
-                      ),
-                      _Tile(
-                        icon: Icons.delete_outline_rounded,
-                        title: 'Удалить аккаунт',
-                        danger: true,
-                        onTap: _confirmDelete,
-                      ),
-                      const SizedBox(height: AppSpacing.lg),
-                      const _SectionTitle('О приложении'),
-                      _Tile(
-                        icon: Icons.info_outline_rounded,
-                        title: 'Версия',
-                        trailing: '0.1.0',
-                      ),
-                      _Tile(
-                        icon: Icons.menu_book_rounded,
-                        title: 'Политика конфиденциальности',
-                        onTap: () {/* TODO link */},
-                      ),
-                      const SizedBox(height: AppSpacing.lg),
-                      _LogoutButton(
-                        onLogout: () => ref
-                            .read(authControllerProvider.notifier)
-                            .logout(),
-                      ),
-                    ],
+                _TopBar(onBack: widget.onBack, onSettings: _openSettingsCog),
+                _AvatarBlock(
+                  name: name,
+                  subtitle: subtitle,
+                  onEdit: _editName,
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                Padding(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: AppSpacing.lg),
+                  child: _StatsCard(
+                    index: scoreText,
+                    streak: streakText,
+                    shelf: shelfText,
                   ),
                 ),
+                const SizedBox(height: AppSpacing.lg),
+                _Group(
+                  title: 'Моё',
+                  children: [
+                    _Row(
+                      icon: Icons.bookmark_outline_rounded,
+                      label: 'Моя полка',
+                      detail: shelfText,
+                      onTap: widget.onOpenShelf,
+                    ),
+                    _Row(
+                      icon: Icons.trending_up_rounded,
+                      label: 'Прогресс кожи',
+                      onTap: widget.onOpenProgress,
+                    ),
+                    if (widget.onOpenRoutineHistory != null)
+                      _Row(
+                        icon: Icons.history_rounded,
+                        label: 'История уходов',
+                        onTap: widget.onOpenRoutineHistory,
+                      ),
+                  ],
+                ),
+                _Group(
+                  title: 'Лина — мой AI-агент',
+                  children: [
+                    _Row(
+                      icon: Icons.spa_outlined,
+                      label: 'Тип кожи',
+                      detail: _skinTypeLabel(_profile.skinType) ?? '—',
+                    ),
+                    _Row(
+                      icon: Icons.flag_outlined,
+                      label: 'Цели и приоритеты',
+                      detail: _profile.concerns.isEmpty
+                          ? '—'
+                          : _profile.concerns.length.toString(),
+                    ),
+                    _Row(
+                      icon: Icons.notifications_outlined,
+                      label: 'Напоминания',
+                      detail: _remindersDetail(),
+                      onTap: _openReminders,
+                    ),
+                  ],
+                ),
+                _Group(
+                  title: 'Аккаунт',
+                  children: [
+                    _Row(
+                      icon: Icons.shield_outlined,
+                      label: 'Конфиденциальность',
+                      onTap: _openPrivacy,
+                    ),
+                    _Row(
+                      icon: Icons.auto_awesome_rounded,
+                      label: 'Перейти на Pro',
+                      detail: 'скоро',
+                      highlight: true,
+                    ),
+                    _Row(
+                      icon: Icons.logout_rounded,
+                      label: 'Выйти',
+                      muted: true,
+                      onTap: () => ref
+                          .read(authControllerProvider.notifier)
+                          .logout(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: AppSpacing.lg),
+                Center(
+                  child: Text(
+                    'Моя Кожа · v0.1.0 · Made with ✿',
+                    style: AppTypography.eyebrow(
+                        color: AppColors.textSecondary),
+                  ),
+                ),
+                if (!_loaded) ...[
+                  const SizedBox(height: AppSpacing.xs),
+                  Center(
+                    child: Text('Загружаем настройки…',
+                        style: AppTypography.caption.copyWith(fontSize: 12)),
+                  ),
+                ],
               ],
             ),
           ),
@@ -435,333 +568,397 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       ),
     );
   }
-
-  String _skinTypeLabel(String? id) => switch (id) {
-        'dry' => 'Сухая',
-        'oily' => 'Жирная',
-        'combo' => 'Комбинированная',
-        'normal' => 'Нормальная',
-        'sensitive' => 'Чувствительная',
-        _ => '—',
-      };
 }
 
-class _Header extends StatelessWidget {
-  const _Header({required this.onBack});
+class _TopBar extends StatelessWidget {
+  const _TopBar({required this.onBack, required this.onSettings});
   final VoidCallback onBack;
+  final VoidCallback onSettings;
 
   @override
   Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(
-          AppSpacing.lg, AppSpacing.md, AppSpacing.lg, AppSpacing.sm),
+          AppSpacing.md, AppSpacing.sm, AppSpacing.md, AppSpacing.xs),
       child: Row(
         children: [
-          SizedBox(
-            width: 40,
-            height: 40,
-            child: Material(
-              color: Colors.white.withOpacity(0.7),
-              shape: const CircleBorder(
-                  side: BorderSide(color: AppColors.divider)),
-              child: InkWell(
-                customBorder: const CircleBorder(),
-                onTap: onBack,
-                child: const Icon(Icons.arrow_back_ios_new, size: 16),
-              ),
-            ),
-          ),
+          _RoundButton(
+              icon: Icons.arrow_back_ios_new_rounded, onTap: onBack),
           const Spacer(),
+          _RoundButton(icon: Icons.settings_outlined, onTap: onSettings),
         ],
       ),
     );
   }
 }
 
-class _ProfileHero extends StatelessWidget {
-  const _ProfileHero({
-    required this.name,
-    required this.phone,
-    required this.onEditName,
-  });
-  final String name;
-  final String phone;
-  final VoidCallback onEditName;
+class _RoundButton extends StatelessWidget {
+  const _RoundButton({required this.icon, required this.onTap});
+  final IconData icon;
+  final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
+    return SizedBox(
+      width: 44,
+      height: 44,
+      child: Material(
+        color: Colors.white.withOpacity(0.7),
+        shape: const CircleBorder(
+            side: BorderSide(color: AppColors.divider)),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onTap,
+          child: Icon(icon, size: 18, color: AppColors.textPrimary),
+        ),
+      ),
+    );
+  }
+}
+
+class _AvatarBlock extends StatelessWidget {
+  const _AvatarBlock({
+    required this.name,
+    required this.subtitle,
+    required this.onEdit,
+  });
+
+  final String name;
+  final String? subtitle;
+  final VoidCallback onEdit;
+
+  @override
+  Widget build(BuildContext context) {
+    final initial = name.isEmpty ? '✿' : name.characters.first.toUpperCase();
     return Column(
       children: [
-        Container(
-          width: 88,
-          height: 88,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [AppColors.primary, AppColors.blush2],
-            ),
-            border: Border.all(color: Colors.white, width: 2),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.primaryAccent.withOpacity(0.5),
-                blurRadius: 28,
-                offset: const Offset(0, 12),
-                spreadRadius: -8,
+        const SizedBox(height: AppSpacing.xs),
+        SizedBox(
+          width: 96,
+          height: 96,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 96,
+                height: 96,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: const LinearGradient(
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                    colors: [AppColors.primary, AppColors.blush2],
+                  ),
+                  border: Border.all(color: Colors.white, width: 2),
+                  boxShadow: [
+                    BoxShadow(
+                      color: AppColors.primaryAccent.withOpacity(0.45),
+                      blurRadius: 30,
+                      offset: const Offset(0, 14),
+                      spreadRadius: -10,
+                    ),
+                  ],
+                ),
+                child: Text(
+                  initial,
+                  style: AppTypography.serifItalic(
+                    fontSize: 40,
+                    color: AppColors.roseDeep,
+                  ),
+                ),
+              ),
+              Positioned(
+                right: -2,
+                bottom: -2,
+                child: Material(
+                  color: AppColors.roseDeep,
+                  shape: const CircleBorder(
+                      side: BorderSide(color: Colors.white, width: 2.5)),
+                  child: InkWell(
+                    customBorder: const CircleBorder(),
+                    onTap: onEdit,
+                    child: const SizedBox(
+                      width: 32,
+                      height: 32,
+                      child: Icon(Icons.edit_rounded,
+                          size: 14, color: Colors.white),
+                    ),
+                  ),
+                ),
               ),
             ],
           ),
-          alignment: Alignment.center,
-          child: Text(
-            name[0].toUpperCase(),
-            style: AppTypography.serifItalic(
-              fontSize: 38,
-              color: AppColors.roseDeep,
-            ),
-          ),
         ),
-        const SizedBox(height: AppSpacing.md),
-        InkWell(
-          onTap: onEditName,
-          borderRadius: BorderRadius.circular(8),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            child: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(name, style: AppTypography.h1),
-                const SizedBox(width: 6),
-                const Icon(Icons.edit_rounded,
-                    size: 16, color: AppColors.textSecondary),
-              ],
-            ),
-          ),
-        ),
-        const SizedBox(height: 4),
-        Text(phone, style: AppTypography.caption),
+        const SizedBox(height: 14),
+        Text(name, style: AppTypography.h1.copyWith(fontSize: 26)),
+        if (subtitle != null) ...[
+          const SizedBox(height: 2),
+          Text(subtitle!,
+              style: AppTypography.caption.copyWith(fontSize: 13)),
+        ],
       ],
     );
   }
 }
 
-class _SectionTitle extends StatelessWidget {
-  const _SectionTitle(this.text);
-  final String text;
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-      child: EyebrowText(text, color: AppColors.textSecondary),
-    );
-  }
-}
-
-class _Tile extends StatelessWidget {
-  const _Tile({
-    required this.icon,
-    required this.title,
-    this.subtitle,
-    this.trailing,
-    this.onTap,
-    this.danger = false,
+class _StatsCard extends StatelessWidget {
+  const _StatsCard({
+    required this.index,
+    required this.streak,
+    required this.shelf,
   });
 
-  final IconData icon;
-  final String title;
-  final String? subtitle;
-  final String? trailing;
-  final VoidCallback? onTap;
-  final bool danger;
+  final String index;
+  final String streak;
+  final String shelf;
 
   @override
   Widget build(BuildContext context) {
-    final color = danger ? AppColors.warning : AppColors.textPrimary;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onTap: onTap,
-          child: Container(
-            padding: const EdgeInsets.symmetric(
-                vertical: 14, horizontal: AppSpacing.md),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: AppColors.divider),
-            ),
-            child: Row(
-              children: [
-                Container(
-                  width: 36,
-                  height: 36,
-                  decoration: BoxDecoration(
-                    color: danger
-                        ? AppColors.warning.withOpacity(0.15)
-                        : AppColors.primary,
-                    borderRadius: BorderRadius.circular(10),
-                  ),
-                  child: Icon(icon, size: 18, color: color),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(title,
-                          style: AppTypography.body
-                              .copyWith(color: color)),
-                      if (subtitle != null) ...[
-                        const SizedBox(height: 2),
-                        Text(subtitle!,
-                            style: AppTypography.caption
-                                .copyWith(fontSize: 12)),
-                      ],
-                    ],
-                  ),
-                ),
-                if (trailing != null) ...[
-                  Text(
-                    trailing!,
-                    style: AppTypography.caption
-                        .copyWith(color: AppColors.textSecondary),
-                  ),
-                  const SizedBox(width: 8),
-                ],
-                if (onTap != null)
-                  const Icon(Icons.chevron_right_rounded,
-                      size: 20, color: AppColors.textSecondary),
-              ],
-            ),
-          ),
-        ),
+    final stats = [
+      (value: index, label: 'Индекс'),
+      (value: streak, label: 'Дней подряд'),
+      (value: shelf, label: 'На полке'),
+    ];
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 18, horizontal: 8),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(22),
+        border: Border.all(color: AppColors.divider),
       ),
-    );
-  }
-}
-
-class _SwitchTile extends StatelessWidget {
-  const _SwitchTile({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.value,
-    required this.onChanged,
-    this.onTapTime,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final bool value;
-  final ValueChanged<bool> onChanged;
-  final VoidCallback? onTapTime;
-
-  @override
-  Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Container(
-        padding: const EdgeInsets.symmetric(
-            vertical: 10, horizontal: AppSpacing.md),
-        decoration: BoxDecoration(
-          color: AppColors.surface,
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: AppColors.divider),
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: AppColors.primary,
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(icon, size: 18, color: AppColors.roseDeep),
-            ),
-            const SizedBox(width: 12),
+      child: Row(
+        children: [
+          for (var i = 0; i < stats.length; i++)
             Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: AppTypography.body),
-                  const SizedBox(height: 2),
-                  GestureDetector(
-                    onTap: onTapTime,
-                    child: Text(
-                      subtitle,
-                      style: AppTypography.caption.copyWith(
-                        color: onTapTime != null
-                            ? AppColors.roseDeep
-                            : AppColors.textSecondary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
+              child: Container(
+                decoration: i == 0
+                    ? null
+                    : const BoxDecoration(
+                        border: Border(
+                          left: BorderSide(color: AppColors.divider),
+                        ),
+                      ),
+                alignment: Alignment.center,
+                child: Column(
+                  children: [
+                    Text(
+                      stats[i].value,
+                      style: AppTypography.h1.copyWith(
+                        fontSize: 26,
+                        color: AppColors.roseDeep,
+                        height: 1,
                       ),
                     ),
-                  ),
-                ],
+                    const SizedBox(height: 4),
+                    Text(
+                      stats[i].label,
+                      style: AppTypography.caption.copyWith(fontSize: 11),
+                    ),
+                  ],
+                ),
               ),
             ),
-            Switch.adaptive(
-              value: value,
-              onChanged: onChanged,
-              activeColor: AppColors.roseDeep,
-            ),
-          ],
-        ),
+        ],
       ),
     );
   }
 }
 
-class _LoadingHint extends StatelessWidget {
-  const _LoadingHint();
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 6),
-        child: Text('Загружаем настройки…',
-            style: AppTypography.caption.copyWith(fontSize: 12)),
-      ),
-    );
-  }
-}
+class _Group extends StatelessWidget {
+  const _Group({required this.title, required this.children});
+  final String title;
+  final List<Widget> children;
 
-class _LogoutButton extends StatelessWidget {
-  const _LogoutButton({required this.onLogout});
-  final VoidCallback onLogout;
   @override
   Widget build(BuildContext context) {
-    return Material(
-      color: Colors.transparent,
-      child: InkWell(
-        borderRadius: BorderRadius.circular(16),
-        onTap: onLogout,
-        child: Container(
-          alignment: Alignment.center,
-          padding: const EdgeInsets.symmetric(vertical: 16),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.6),
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: AppColors.divider),
+    final divided = <Widget>[];
+    for (var i = 0; i < children.length; i++) {
+      divided.add(children[i]);
+      if (i < children.length - 1) {
+        divided.add(Container(
+          height: 1,
+          margin: const EdgeInsets.symmetric(horizontal: 16),
+          color: AppColors.divider,
+        ));
+      }
+    }
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+          AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.md),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+            child: EyebrowText(title, color: AppColors.textSecondary),
           ),
+          Container(
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: AppColors.divider),
+            ),
+            clipBehavior: Clip.antiAlias,
+            child: Column(children: divided),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _Row extends StatelessWidget {
+  const _Row({
+    required this.icon,
+    required this.label,
+    this.detail,
+    this.onTap,
+    this.highlight = false,
+    this.muted = false,
+  });
+
+  final IconData icon;
+  final String label;
+  final String? detail;
+  final VoidCallback? onTap;
+
+  /// "Pro" — blush tint background, rose accents on icon + detail.
+  final bool highlight;
+
+  /// "Выйти" / destructive — warning colour text, no chevron.
+  final bool muted;
+
+  @override
+  Widget build(BuildContext context) {
+    final labelColor =
+        muted ? AppColors.warning : AppColors.textPrimary;
+    final iconBg = highlight
+        ? AppColors.primary
+        : (muted
+            ? AppColors.warning.withOpacity(0.10)
+            : const Color(0x0A2E2E2E));
+    final iconColor = highlight
+        ? AppColors.roseDeep
+        : (muted ? AppColors.warning : AppColors.textPrimary);
+    final detailColor =
+        highlight ? AppColors.roseDeep : AppColors.textSecondary;
+    return Material(
+      color: highlight ? AppColors.roseDeep.withOpacity(0.06) : Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        child: Padding(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
           child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              const Icon(Icons.logout_rounded,
-                  color: AppColors.textSecondary, size: 18),
-              const SizedBox(width: 8),
-              Text('Выйти из аккаунта',
-                  style: AppTypography.body.copyWith(
-                      color: AppColors.textSecondary,
-                      fontWeight: FontWeight.w500)),
+              Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: iconBg,
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: Icon(icon, size: 18, color: iconColor),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  label,
+                  style: AppTypography.bodyMedium.copyWith(
+                    fontSize: 15,
+                    color: labelColor,
+                  ),
+                ),
+              ),
+              if (detail != null) ...[
+                Text(
+                  detail!,
+                  style: AppTypography.bodySm.copyWith(
+                    color: detailColor,
+                    fontWeight:
+                        highlight ? FontWeight.w600 : FontWeight.w400,
+                  ),
+                ),
+                if (!muted) const SizedBox(width: 8),
+              ],
+              if (!muted)
+                const Icon(Icons.chevron_right_rounded,
+                    size: 18, color: AppColors.textSecondary),
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+class _ReminderTile extends StatelessWidget {
+  const _ReminderTile({
+    required this.icon,
+    required this.title,
+    required this.enabled,
+    required this.time,
+    required this.onEnabled,
+    required this.onPickTime,
+  });
+
+  final IconData icon;
+  final String title;
+  final bool enabled;
+  final String time;
+  final ValueChanged<bool> onEnabled;
+  final VoidCallback onPickTime;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 36,
+            height: 36,
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(10),
+            ),
+            child: Icon(icon, size: 18, color: AppColors.roseDeep),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title, style: AppTypography.body),
+                const SizedBox(height: 2),
+                GestureDetector(
+                  onTap: enabled ? onPickTime : null,
+                  child: Text(
+                    enabled ? time : 'выкл',
+                    style: AppTypography.caption.copyWith(
+                      color: enabled
+                          ? AppColors.roseDeep
+                          : AppColors.textSecondary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Switch.adaptive(
+            value: enabled,
+            onChanged: onEnabled,
+            activeColor: AppColors.roseDeep,
+          ),
+        ],
       ),
     );
   }

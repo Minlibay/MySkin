@@ -363,6 +363,8 @@ class _AppShellState extends ConsumerState<_AppShell> {
       case _Shell.profile:
         return ProfileScreen(
           profile: _profile,
+          skinScore: _lastResult?.skinScore,
+          streak: _today?.streak,
           onBack: () => setState(() => _view = _Shell.home),
           onRetake: () => setState(() {
             _view = _Shell.onboarding;
