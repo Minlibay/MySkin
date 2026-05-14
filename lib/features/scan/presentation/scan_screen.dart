@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
+import 'dart:ui' as ui;
 
 import 'package:camera/camera.dart';
 import 'package:flutter/foundation.dart';
@@ -11,7 +13,7 @@ import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../../core/telemetry/telemetry.dart';
 import 'widgets/scan_camera_backdrop.dart';
-import 'widgets/scan_face_overlay.dart';
+import 'widgets/scan_face_overlay.dart' show DetectedFace;
 import 'widgets/scan_overlay_widgets.dart';
 
 import '../../../core/theme/app_colors.dart';
@@ -422,10 +424,6 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       return _pickFromGallery();
     }
     if (_busy) return;
-    // Snapshot the most recent ML Kit face *before* we stop the stream — the
-    // detector goes silent once streaming stops, and we want the bbox that
-    // was visible to the user when they tapped the shutter.
-    final faceBbox = _normalizedFaceBbox();
     setState(() {
       _busy = true;
       _error = null;
@@ -434,6 +432,11 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       await _stopStream();
       final pic = await cam.takePicture();
       final bytes = await File(pic.path).readAsBytes();
+      // Detect face directly on the saved photo. Far more accurate than
+      // re-using the stream bbox because the still picture and the preview
+      // frames have different FOVs / aspect ratios — a stream bbox would
+      // land in the wrong place once we project it onto the photo.
+      final faceBbox = await _faceBboxFromFile(pic.path, bytes);
       await _uploadAndFinish(bytes, mime: 'image/jpeg', faceBbox: faceBbox);
     } catch (e) {
       if (!mounted) return;
@@ -492,31 +495,52 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     widget.onResult(result);
   }
 
-  /// Convert the current ML Kit detection to a normalised [x0, y0, x1, y1]
-  /// bbox in the photo coordinate space (assumes still photo and stream share
-  /// the same FOV, which is true for both iOS and Android front cameras).
-  /// Returns null if no face was visible at capture time.
-  List<double>? _normalizedFaceBbox() {
-    final f = _face;
-    if (f == null) return null;
-    final w = f.imageSize.width;
-    final h = f.imageSize.height;
-    if (w <= 0 || h <= 0) return null;
-    final b = f.bounds;
-    // ML Kit bounds are in raw stream coords (non-mirrored). The saved photo
-    // is also non-mirrored, so the ratio carries over directly.
-    return [
-      (b.left / w).clamp(0.0, 1.0),
-      (b.top / h).clamp(0.0, 1.0),
-      (b.right / w).clamp(0.0, 1.0),
-      (b.bottom / h).clamp(0.0, 1.0),
-    ];
+  /// Run ML Kit on the saved photo file and normalise the bbox into [0..1]
+  /// against the decoded photo's pixel dimensions. EXIF rotation is honoured
+  /// by InputImage.fromFilePath and by Flutter's image decoder, so the
+  /// resulting rect lines up with how the photo is later displayed.
+  Future<List<double>?> _faceBboxFromFile(
+      String path, List<int> bytes) async {
+    try {
+      final input = InputImage.fromFilePath(path);
+      final faces = await _faceDetector.processImage(input);
+      if (faces.isEmpty) return null;
+      // Largest detected face — same convention as the live stream branch.
+      faces.sort((a, b) =>
+          (b.boundingBox.width * b.boundingBox.height)
+              .compareTo(a.boundingBox.width * a.boundingBox.height));
+      final f = faces.first.boundingBox;
+      final size = await _decodedImageSize(Uint8List.fromList(bytes));
+      if (size == null) return null;
+      return [
+        (f.left / size.width).clamp(0.0, 1.0),
+        (f.top / size.height).clamp(0.0, 1.0),
+        (f.right / size.width).clamp(0.0, 1.0),
+        (f.bottom / size.height).clamp(0.0, 1.0),
+      ];
+    } catch (e) {
+      debugPrint('face bbox from photo failed: $e');
+      return null;
+    }
+  }
+
+  Future<({double width, double height})?> _decodedImageSize(
+      Uint8List bytes) async {
+    try {
+      final codec = await ui.instantiateImageCodec(bytes);
+      final frame = await codec.getNextFrame();
+      final img = frame.image;
+      final w = img.width.toDouble();
+      final h = img.height.toDouble();
+      img.dispose();
+      return (width: w, height: h);
+    } catch (_) {
+      return null;
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final cam = _camera;
-    final previewAspect = cam?.value.aspectRatio ?? (16 / 9);
     return Scaffold(
       backgroundColor: const Color(0xFF0F0A0C),
       body: Stack(
@@ -546,22 +570,11 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
               ),
             ),
           ),
-          // Adaptive face mask overlay
-          Positioned.fill(
-            child: IgnorePointer(
-              child: AnimatedBuilder(
-                animation: _pulse,
-                builder: (_, __) => CustomPaint(
-                  painter: FaceMeshPainter(
-                    t: _pulse.value,
-                    face: _face,
-                    previewAspect: previewAspect,
-                    locked: _light == LightLevel.ok && _face != null,
-                  ),
-                ),
-              ),
-            ),
-          ),
+          // Face-mesh overlay deliberately removed — the live mesh felt
+          // intrusive on top of a self-portrait, and the alignment value it
+          // gave the user wasn't worth the visual cost. The detected face
+          // still drives the locked/ok states for hints and capture timing,
+          // it just isn't drawn on screen anymore.
           Positioned.fill(
             child: SafeArea(
               child: Column(
