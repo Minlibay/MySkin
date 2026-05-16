@@ -468,8 +468,12 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         return;
       }
       final bytes = await picked.readAsBytes();
+      // Same as the camera path — run ML Kit on the chosen file so the
+      // result screen gets a precise bbox instead of the server's looser
+      // skin-colour heuristic.
+      final faceBbox = await _faceBboxFromFile(picked.path, bytes);
       await _uploadAndFinish(bytes,
-          mime: picked.mimeType ?? 'image/jpeg', faceBbox: null);
+          mime: picked.mimeType ?? 'image/jpeg', faceBbox: faceBbox);
     } catch (e) {
       if (!mounted) return;
       setState(() {

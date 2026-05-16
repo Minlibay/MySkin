@@ -281,6 +281,16 @@ class BackendApi {
 
   String scanPhotoUrl(String id) => '$baseUrl/me/scans/$id/photo';
 
+  /// Per-zone drill-down — Лина's take on a single face zone of one scan.
+  /// `zone` is one of: forehead | tzone | left_cheek | right_cheek | chin.
+  Future<ZoneInsight> fetchZoneInsight(String scanId, String zone) async {
+    final r = await _dio.get(
+      '$baseUrl/me/scans/$scanId/zone/$zone',
+      options: _auth(),
+    );
+    return ZoneInsight.fromJson(r.data as Map<String, dynamic>);
+  }
+
   /// Raw scan photo bytes — used by the result screen when it needs to run
   /// ML Kit again on the saved image (older scans that pre-date face_bbox
   /// support, or scans where the backend skin-colour bbox is too broad to

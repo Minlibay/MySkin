@@ -24,11 +24,18 @@ class ScanResultScreen extends ConsumerWidget {
     required this.scan,
     required this.onBack,
     required this.onAccept,
+    this.onOpenCatalog,
   });
 
   final ScanResult scan;
   final VoidCallback onBack;
   final VoidCallback onAccept;
+
+  /// Called when the user taps "Подобрать средства" in a zone drill-down.
+  /// Receives the catalog concern filter (e.g. 'acne', 'dehydration', or
+  /// empty when no specific concern applies). Optional — when null the CTA
+  /// is hidden.
+  final void Function(String concern)? onOpenCatalog;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -64,6 +71,7 @@ class ScanResultScreen extends ConsumerWidget {
                         scan: scan,
                         photoUrl: api.scanPhotoUrl(scan.id),
                         photoHeaders: api.imageAuthHeaders(),
+                        onOpenCatalog: onOpenCatalog,
                       ),
                       const SizedBox(height: AppSpacing.lg),
                       _LinaInsight(text: scan.insight),
@@ -356,48 +364,57 @@ class _Heatmap extends ConsumerStatefulWidget {
     required this.scan,
     required this.photoUrl,
     required this.photoHeaders,
+    this.onOpenCatalog,
   });
   final ScanResult scan;
   final String photoUrl;
   final Map<String, String> photoHeaders;
+  final void Function(String concern)? onOpenCatalog;
 
   @override
   ConsumerState<_Heatmap> createState() => _HeatmapState();
 }
 
-class _HeatmapState extends ConsumerState<_Heatmap> {
-  /// Face bbox we computed locally by running ML Kit on the saved photo.
-  /// Wins over `widget.scan.face` when it's set — that one can be a stale
-  /// skin-colour heuristic that covers the whole frame.
-  FaceGeometry? _detected;
+class _HeatmapState extends ConsumerState<_Heatmap>
+    with SingleTickerProviderStateMixin {
+  /// Rich face geometry — actual contour polygon + zone landmarks. Built
+  /// from ML Kit's contour detector on the saved photo; null until detection
+  /// finishes. Falls back to bbox-only shape when contours aren't available.
+  _FaceShape? _shape;
+
+  /// Actual pixel size of the photo. Needed because the photo is rendered
+  /// with BoxFit.cover into a 3:4 widget — when the original aspect differs,
+  /// part of the image is cropped and the bbox must be mapped through the
+  /// same transform or the overlay drifts off the face.
+  double? _imgW;
+  double? _imgH;
 
   /// True after we've attempted local detection (regardless of success).
-  /// Avoids re-running detection on every rebuild.
   bool _detectAttempted = false;
+
+  late final AnimationController _reveal;
 
   @override
   void initState() {
     super.initState();
-    if (_serverFaceLooksGood(widget.scan.face)) {
-      _detectAttempted = true;
-    } else if (widget.scan.hasPhoto) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _runDetect());
+    _reveal = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1100),
+    );
+    if (widget.scan.hasPhoto) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadPhoto());
     } else {
       _detectAttempted = true;
     }
   }
 
-  bool _serverFaceLooksGood(FaceGeometry? f) {
-    if (f == null) return false;
-    final w = f.x1 - f.x0, h = f.y1 - f.y0;
-    // Reject obviously broken or 'whole frame' bboxes — those are the case
-    // the user sees in the screenshot where the oval just sits dead-centre.
-    if (w <= 0.1 || h <= 0.1) return false;
-    if (w >= 0.85 || h >= 0.92) return false;
-    return true;
+  @override
+  void dispose() {
+    _reveal.dispose();
+    super.dispose();
   }
 
-  Future<void> _runDetect() async {
+  Future<void> _loadPhoto() async {
     if (_detectAttempted) return;
     _detectAttempted = true;
     try {
@@ -405,43 +422,66 @@ class _HeatmapState extends ConsumerState<_Heatmap> {
           .read(backendApiProvider)
           .scanPhotoBytes(widget.scan.id);
       if (bytes == null || bytes.isEmpty || !mounted) return;
-      final tmp =
-          File('${Directory.systemTemp.path}/scan-${widget.scan.id}.jpg');
-      await tmp.writeAsBytes(bytes, flush: true);
-      final detector = FaceDetector(
-        options: FaceDetectorOptions(
-          performanceMode: FaceDetectorMode.accurate,
-          minFaceSize: 0.15,
-        ),
-      );
-      try {
-        final input = InputImage.fromFilePath(tmp.path);
-        final faces = await detector.processImage(input);
-        if (faces.isEmpty || !mounted) return;
-        faces.sort((a, b) =>
-            (b.boundingBox.width * b.boundingBox.height)
-                .compareTo(a.boundingBox.width * a.boundingBox.height));
-        final box = faces.first.boundingBox;
-        final size = await _decodeSize(Uint8List.fromList(bytes));
-        if (size == null || !mounted) return;
-        final w = size.width, h = size.height;
-        if (w <= 0 || h <= 0) return;
+      final size = await _decodeSize(Uint8List.fromList(bytes));
+      if (size != null && mounted) {
         setState(() {
-          _detected = FaceGeometry(bbox: [
-            (box.left / w).clamp(0.0, 1.0),
-            (box.top / h).clamp(0.0, 1.0),
-            (box.right / w).clamp(0.0, 1.0),
-            (box.bottom / h).clamp(0.0, 1.0),
-          ]);
+          _imgW = size.width;
+          _imgH = size.height;
         });
-      } finally {
-        await detector.close();
-        try {
-          await tmp.delete();
-        } catch (_) {/* ignore */}
       }
+      await _detectFromBytes(bytes, size);
     } catch (e) {
-      debugPrint('Result-screen face detect failed: $e');
+      debugPrint('Result-screen photo load failed: $e');
+    }
+  }
+
+  Future<void> _detectFromBytes(
+      List<int> bytes, ({double width, double height})? size) async {
+    final tmp =
+        File('${Directory.systemTemp.path}/scan-${widget.scan.id}.jpg');
+    await tmp.writeAsBytes(bytes, flush: true);
+    final detector = FaceDetector(
+      options: FaceDetectorOptions(
+        performanceMode: FaceDetectorMode.accurate,
+        enableContours: true,
+        enableLandmarks: true,
+        minFaceSize: 0.15,
+      ),
+    );
+    try {
+      final input = InputImage.fromFilePath(tmp.path);
+      final faces = await detector.processImage(input);
+      if (faces.isEmpty || !mounted) {
+        // Fall back to whatever server gave us so the overlay still appears.
+        final fallback = widget.scan.face;
+        if (fallback != null && mounted) {
+          setState(() => _shape = _FaceShape.fromBbox(fallback));
+          _reveal.forward(from: 0);
+        }
+        return;
+      }
+      faces.sort((a, b) =>
+          (b.boundingBox.width * b.boundingBox.height)
+              .compareTo(a.boundingBox.width * a.boundingBox.height));
+      final face = faces.first;
+      final s = size ?? await _decodeSize(Uint8List.fromList(bytes));
+      if (s == null || !mounted) return;
+      final w = s.width, h = s.height;
+      if (w <= 0 || h <= 0) return;
+      final shape = _FaceShape.fromFace(face, w, h) ??
+          _FaceShape.fromBbox(FaceGeometry(bbox: [
+            (face.boundingBox.left / w).clamp(0.0, 1.0),
+            (face.boundingBox.top / h).clamp(0.0, 1.0),
+            (face.boundingBox.right / w).clamp(0.0, 1.0),
+            (face.boundingBox.bottom / h).clamp(0.0, 1.0),
+          ]));
+      setState(() => _shape = shape);
+      _reveal.forward(from: 0);
+    } finally {
+      await detector.close();
+      try {
+        await tmp.delete();
+      } catch (_) {/* ignore */}
     }
   }
 
@@ -460,13 +500,10 @@ class _HeatmapState extends ConsumerState<_Heatmap> {
     }
   }
 
-  FaceGeometry? get _effectiveFace =>
-      _detected ?? widget.scan.face;
-
   @override
   Widget build(BuildContext context) {
     final zones = widget.scan.zones;
-    final face = _effectiveFace;
+    final shape = _shape;
     final scan = widget.scan;
     final photoUrl = widget.photoUrl;
     final photoHeaders = widget.photoHeaders;
@@ -505,9 +542,31 @@ class _HeatmapState extends ConsumerState<_Heatmap> {
                     ),
                   ),
                 ),
-                CustomPaint(
-                  painter: _HeatmapPainter(zones: zones, face: face),
-                ),
+                if (shape != null)
+                  AnimatedBuilder(
+                    animation: _reveal,
+                    builder: (_, __) => CustomPaint(
+                      painter: _HeatmapPainter(
+                        zones: zones,
+                        shape: shape,
+                        progress:
+                            Curves.easeOutCubic.transform(_reveal.value),
+                        imageW: _imgW,
+                        imageH: _imgH,
+                      ),
+                    ),
+                  ),
+                if (shape != null)
+                  LayoutBuilder(
+                    builder: (context, c) => _ZoneTapLayer(
+                      shape: shape,
+                      zones: zones,
+                      size: c.biggest,
+                      imageW: _imgW,
+                      imageH: _imgH,
+                      onTap: (key) => _showZoneSheet(context, key),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -517,10 +576,11 @@ class _HeatmapState extends ConsumerState<_Heatmap> {
               spacing: 8,
               runSpacing: 8,
               children: [
-                _zonePill('Лоб', zones.forehead),
-                _zonePill('Т-зона', zones.tzone),
-                _zonePill('Щёки', zones.cheeks),
-                _zonePill('Подбородок', zones.chin),
+                _zonePill(context, 'Лоб', zones.forehead, _ZoneKey.forehead),
+                _zonePill(context, 'Т-зона', zones.tzone, _ZoneKey.tzone),
+                _zonePill(context, 'Левая щека', zones.cheeks, _ZoneKey.leftCheek),
+                _zonePill(context, 'Правая щека', zones.cheeks, _ZoneKey.rightCheek),
+                _zonePill(context, 'Подбородок', zones.chin, _ZoneKey.chin),
               ],
             ),
           ),
@@ -539,18 +599,207 @@ class _HeatmapState extends ConsumerState<_Heatmap> {
         ),
       );
 
-  Widget _zonePill(String label, int score) {
+  Widget _zonePill(
+      BuildContext context, String label, int score, _ZoneKey key) {
     final variant = score >= 75
         ? PillVariant.success
         : (score >= 60 ? PillVariant.soft : PillVariant.warning);
-    return Pill(label: '$label · $score', variant: variant, dot: true);
+    return InkWell(
+      borderRadius: BorderRadius.circular(100),
+      onTap: () => _showZoneSheet(context, key),
+      child: Pill(label: '$label · $score', variant: variant, dot: true),
+    );
+  }
+
+  void _showZoneSheet(BuildContext context, _ZoneKey key) {
+    final zones = widget.scan.zones;
+    final int score = switch (key) {
+      _ZoneKey.forehead => zones.forehead,
+      _ZoneKey.tzone => zones.tzone,
+      _ZoneKey.leftCheek || _ZoneKey.rightCheek => zones.cheeks,
+      _ZoneKey.chin => zones.chin,
+    };
+    final api = ref.read(backendApiProvider);
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (_) => _ZoneSheet(
+        zoneKey: key,
+        score: score,
+        insightFuture: api.fetchZoneInsight(widget.scan.id, _zoneApiKey(key)),
+        onOpenCatalog: widget.onOpenCatalog,
+      ),
+    );
+  }
+}
+
+String _zoneApiKey(_ZoneKey k) => switch (k) {
+      _ZoneKey.forehead => 'forehead',
+      _ZoneKey.tzone => 'tzone',
+      _ZoneKey.leftCheek => 'left_cheek',
+      _ZoneKey.rightCheek => 'right_cheek',
+      _ZoneKey.chin => 'chin',
+    };
+
+/// Apply the Flutter `BoxFit.cover` transform to a normalised image-space
+/// point so it lands on the matching pixel of a widget of size [size].
+Offset _coverMap(Offset p, Size size, double? imgW, double? imgH) {
+  double x = p.dx, y = p.dy;
+  if (imgW != null && imgH != null && imgW > 0 && imgH > 0 && size.height > 0) {
+    final imgA = imgW / imgH;
+    final wA = size.width / size.height;
+    if (imgA > wA) {
+      final visW = wA / imgA;
+      final off = (1 - visW) / 2;
+      x = (p.dx - off) / visW;
+    } else if (imgA < wA) {
+      final visH = imgA / wA;
+      final off = (1 - visH) / 2;
+      y = (p.dy - off) / visH;
+    }
+  }
+  return Offset(x * size.width, y * size.height);
+}
+
+/// Stable identifiers for the five zones the heatmap can drill into.
+enum _ZoneKey { forehead, tzone, leftCheek, rightCheek, chin }
+
+/// Result of ML Kit contour detection — face outline polygon + 5 zone
+/// landmarks in normalised photo coordinates (0..1). When contour detection
+/// fails we fall back to a synthesised ellipse from the plain bbox so the
+/// overlay still renders, just less precise.
+class _FaceShape {
+  const _FaceShape({
+    required this.contour,
+    required this.forehead,
+    required this.tzone,
+    required this.leftCheek,
+    required this.rightCheek,
+    required this.chin,
+  });
+
+  final List<Offset> contour;
+  final Offset forehead;
+  final Offset tzone;
+  final Offset leftCheek;
+  final Offset rightCheek;
+  final Offset chin;
+
+  /// Build from a full ML Kit Face (contours + landmarks). Returns null if
+  /// the face contour itself isn't present — the caller will use the bbox
+  /// fallback instead.
+  static _FaceShape? fromFace(Face face, double imgW, double imgH) {
+    final faceC = face.contours[FaceContourType.face]?.points;
+    if (faceC == null || faceC.length < 8) return null;
+    Offset norm(num x, num y) => Offset(x / imgW, y / imgH);
+    final contour = faceC.map((p) => norm(p.x, p.y)).toList(growable: false);
+
+    final lBrow = face.contours[FaceContourType.leftEyebrowTop]?.points ?? [];
+    final rBrow = face.contours[FaceContourType.rightEyebrowTop]?.points ?? [];
+    final nose = face.contours[FaceContourType.noseBridge]?.points ?? [];
+
+    // Forehead = above the midpoint between the two brow tops, lifted by
+    // ~18% of face height.
+    final faceH = contour.map((o) => o.dy).reduce(math.max) -
+        contour.map((o) => o.dy).reduce(math.min);
+    Offset forehead;
+    if (lBrow.isNotEmpty && rBrow.isNotEmpty) {
+      final all = [...lBrow, ...rBrow];
+      final cx = all.map((p) => p.x).reduce((a, b) => a + b) / all.length;
+      final cy = all.map((p) => p.y).reduce((a, b) => a + b) / all.length;
+      forehead = Offset(cx / imgW, cy / imgH - faceH * 0.18);
+    } else {
+      final topY = contour.map((o) => o.dy).reduce(math.min);
+      final cxAll = contour.map((o) => o.dx).reduce((a, b) => a + b) /
+          contour.length;
+      forehead = Offset(cxAll, topY + faceH * 0.10);
+    }
+
+    // T-zone = mid-point of the nose bridge contour.
+    Offset tzone;
+    if (nose.isNotEmpty) {
+      final mid = nose[nose.length ~/ 2];
+      tzone = norm(mid.x, mid.y);
+    } else {
+      tzone = Offset(forehead.dx, forehead.dy + faceH * 0.30);
+    }
+
+    // Cheeks — prefer explicit landmarks, fall back to leftmost/rightmost
+    // contour points at the cheekbone height.
+    final lCheekL = face.landmarks[FaceLandmarkType.leftCheek];
+    final rCheekL = face.landmarks[FaceLandmarkType.rightCheek];
+    Offset leftCheek;
+    Offset rightCheek;
+    if (lCheekL != null) {
+      leftCheek = norm(lCheekL.position.x, lCheekL.position.y);
+    } else {
+      final lp = contour.reduce((a, b) => a.dx < b.dx ? a : b);
+      leftCheek = Offset(lp.dx + 0.03, tzone.dy + faceH * 0.05);
+    }
+    if (rCheekL != null) {
+      rightCheek = norm(rCheekL.position.x, rCheekL.position.y);
+    } else {
+      final rp = contour.reduce((a, b) => a.dx > b.dx ? a : b);
+      rightCheek = Offset(rp.dx - 0.03, tzone.dy + faceH * 0.05);
+    }
+
+    // Chin = bottom-most contour point, pulled up slightly so the blob
+    // sits on the chin rather than past it.
+    final bottom = contour.reduce((a, b) => a.dy > b.dy ? a : b);
+    final chin = Offset(bottom.dx, bottom.dy - faceH * 0.04);
+
+    return _FaceShape(
+      contour: contour,
+      forehead: forehead,
+      tzone: tzone,
+      leftCheek: leftCheek,
+      rightCheek: rightCheek,
+      chin: chin,
+    );
+  }
+
+  /// Last-resort fallback when contours weren't available — synthesises a
+  /// 48-point ellipse from the bbox and uses the old proportional layout.
+  factory _FaceShape.fromBbox(FaceGeometry f) {
+    final cx = (f.x0 + f.x1) / 2;
+    final cy = (f.y0 + f.y1) / 2;
+    final w = (f.x1 - f.x0) / 2;
+    final h = (f.y1 - f.y0) / 2;
+    const steps = 48;
+    final contour = <Offset>[
+      for (var i = 0; i < steps; i++)
+        Offset(
+          cx + math.cos(i / steps * 2 * math.pi) * w,
+          cy + math.sin(i / steps * 2 * math.pi) * h,
+        ),
+    ];
+    return _FaceShape(
+      contour: contour,
+      forehead: Offset(cx, f.y0 + (f.y1 - f.y0) * 0.15),
+      tzone: Offset(cx, f.y0 + (f.y1 - f.y0) * 0.45),
+      leftCheek: Offset(f.x0 + (f.x1 - f.x0) * 0.25,
+          f.y0 + (f.y1 - f.y0) * 0.55),
+      rightCheek: Offset(f.x0 + (f.x1 - f.x0) * 0.75,
+          f.y0 + (f.y1 - f.y0) * 0.55),
+      chin: Offset(cx, f.y0 + (f.y1 - f.y0) * 0.86),
+    );
   }
 }
 
 class _HeatmapPainter extends CustomPainter {
-  _HeatmapPainter({required this.zones, required this.face});
+  _HeatmapPainter({
+    required this.zones,
+    required this.shape,
+    required this.progress,
+    this.imageW,
+    this.imageH,
+  });
   final ScanZones zones;
-  final FaceGeometry? face;
+  final _FaceShape shape;
+  final double progress; // 0..1 reveal timeline
+  final double? imageW;
+  final double? imageH;
 
   Color _colorFor(int score) {
     if (score >= 75) return AppColors.success;
@@ -558,10 +807,19 @@ class _HeatmapPainter extends CustomPainter {
     return AppColors.warning;
   }
 
-  void _drawBlob(
-      Canvas canvas, Offset center, double rx, double ry, int score) {
+  Offset _map(Offset p, Size size) => _coverMap(p, size, imageW, imageH);
+
+  /// Reveal sub-timing helper — returns the local 0..1 progress for a
+  /// sub-animation that starts at `start` and lasts `length` on the global
+  /// timeline.
+  double _sub(double start, double length) =>
+      ((progress - start) / length).clamp(0.0, 1.0);
+
+  void _blob(Canvas canvas, Offset center, double rx, double ry,
+      int score, double opacity) {
+    if (opacity <= 0) return;
     final color = _colorFor(score);
-    final intensity = (1 - (score / 100)).clamp(0.25, 0.7);
+    final intensity = (1 - score / 100).clamp(0.25, 0.7) * opacity;
     final paint = Paint()
       ..shader = RadialGradient(
         colors: [color.withOpacity(intensity), color.withOpacity(0)],
@@ -579,71 +837,81 @@ class _HeatmapPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    // Determine where the face actually sits inside this widget. Falls back
-    // to a centred oval covering most of the frame when we have no bbox.
-    final Rect faceRect;
-    final f = face;
-    if (f != null) {
-      faceRect = Rect.fromLTRB(
-        f.x0 * size.width,
-        f.y0 * size.height,
-        f.x1 * size.width,
-        f.y1 * size.height,
-      );
-    } else {
-      faceRect = Rect.fromCenter(
-        center: Offset(size.width / 2, size.height * 0.5),
-        width: size.width * 0.6,
-        height: size.height * 0.75,
-      );
-    }
+    if (shape.contour.length < 3) return;
+    final pts = shape.contour
+        .map((p) => _map(p, size))
+        .toList(growable: false);
 
-    // Soft oval outline around the detected face area.
-    final outline = Paint()
-      ..style = PaintingStyle.stroke
-      ..color = Colors.white.withOpacity(0.6)
-      ..strokeWidth = 1.2;
-    final dashed = Path();
-    final src = Path()..addOval(faceRect);
-    for (final m in src.computeMetrics()) {
-      var dist = 0.0;
-      while (dist < m.length) {
-        final next = math.min(dist + 5, m.length);
-        dashed.addPath(m.extractPath(dist, next), Offset.zero);
-        dist = next + 5;
+    // 1. Trace the face outline along the actual contour — first 35% of
+    // the reveal timeline. Dashed for the diagnostic-instrument look.
+    final outlineP = _sub(0.0, 0.35);
+    if (outlineP > 0) {
+      final full = Path()..moveTo(pts.first.dx, pts.first.dy);
+      for (var i = 1; i < pts.length; i++) {
+        full.lineTo(pts[i].dx, pts[i].dy);
       }
+      full.close();
+      final dashed = Path();
+      for (final m in full.computeMetrics()) {
+        final endLen = m.length * outlineP;
+        var dist = 0.0;
+        while (dist < endLen) {
+          final next = math.min(dist + 5.0, endLen);
+          dashed.addPath(m.extractPath(dist, next), Offset.zero);
+          dist = next + 5.0;
+        }
+      }
+      final outline = Paint()
+        ..style = PaintingStyle.stroke
+        ..color = Colors.white.withOpacity(0.65)
+        ..strokeWidth = 1.4
+        ..strokeCap = StrokeCap.round;
+      canvas.drawPath(dashed, outline);
     }
-    canvas.drawPath(dashed, outline);
 
-    final fx = faceRect.left, fy = faceRect.top;
-    final fw = faceRect.width, fh = faceRect.height;
+    // Approximate face extents in widget pixels so blob sizes scale with
+    // however big the face actually is on screen.
+    final xs = pts.map((p) => p.dx);
+    final ys = pts.map((p) => p.dy);
+    final fw = xs.reduce(math.max) - xs.reduce(math.min);
+    final fh = ys.reduce(math.max) - ys.reduce(math.min);
 
-    // Zones are placed proportionally inside the detected face bbox, so the
-    // markers line up with the actual forehead / cheeks / chin of the user.
-    Offset p(double rx, double ry) => Offset(fx + fw * rx, fy + fh * ry);
+    // 2. Staggered blob reveal — each zone gets a 250ms ramp.
+    final blobs = <(Offset, double, double, int, double)>[
+      (_map(shape.forehead, size), fw * 0.36, fh * 0.10, zones.forehead, 0.38),
+      (_map(shape.tzone, size), fw * 0.18, fh * 0.18, zones.tzone, 0.46),
+      (_map(shape.leftCheek, size), fw * 0.18, fh * 0.13, zones.cheeks, 0.54),
+      (_map(shape.rightCheek, size), fw * 0.18, fh * 0.13, zones.cheeks, 0.54),
+      (_map(shape.chin, size), fw * 0.22, fh * 0.10, zones.chin, 0.62),
+    ];
+    for (final b in blobs) {
+      _blob(canvas, b.$1, b.$2, b.$3, b.$4, _sub(b.$5, 0.25));
+    }
 
-    _drawBlob(canvas, p(0.50, 0.15), fw * 0.34, fh * 0.10, zones.forehead);
-    _drawBlob(canvas, p(0.50, 0.45), fw * 0.16, fh * 0.18, zones.tzone);
-    _drawBlob(canvas, p(0.25, 0.55), fw * 0.18, fh * 0.12, zones.cheeks);
-    _drawBlob(canvas, p(0.75, 0.55), fw * 0.18, fh * 0.12, zones.cheeks);
-    _drawBlob(canvas, p(0.50, 0.86), fw * 0.22, fh * 0.10, zones.chin);
-
-    // Subtle marker dots so it reads as 'analysed' even at low intensity.
-    final dot = Paint()..color = Colors.white.withOpacity(0.85);
-    for (final c in [
-      p(0.50, 0.15),
-      p(0.50, 0.45),
-      p(0.25, 0.55),
-      p(0.75, 0.55),
-      p(0.50, 0.86),
-    ]) {
-      canvas.drawCircle(c, 2.4, dot);
+    // 3. Marker dots fade-in near the end — feels like the diagnostic
+    // "pins" landing on the result.
+    final dotsP = _sub(0.65, 0.25);
+    if (dotsP > 0) {
+      final dot = Paint()..color = Colors.white.withOpacity(0.85 * dotsP);
+      for (final c in [
+        shape.forehead,
+        shape.tzone,
+        shape.leftCheek,
+        shape.rightCheek,
+        shape.chin,
+      ]) {
+        canvas.drawCircle(_map(c, size), 2.4 * dotsP, dot);
+      }
     }
   }
 
   @override
   bool shouldRepaint(covariant _HeatmapPainter old) =>
-      old.zones != zones || old.face != face;
+      old.zones != zones ||
+      old.shape != shape ||
+      old.progress != progress ||
+      old.imageW != imageW ||
+      old.imageH != imageH;
 }
 
 class _QualityBanner extends StatelessWidget {
@@ -789,5 +1057,478 @@ class _LinaInsight extends StatelessWidget {
         ),
       ],
     );
+  }
+}
+
+/// Transparent hit-targets sitting on top of the heatmap blobs so the user
+/// can tap a zone to drill into it. Each target is 44pt (Apple HIG minimum).
+class _ZoneTapLayer extends StatelessWidget {
+  const _ZoneTapLayer({
+    required this.shape,
+    required this.zones,
+    required this.size,
+    required this.onTap,
+    this.imageW,
+    this.imageH,
+  });
+
+  final _FaceShape shape;
+  final ScanZones zones;
+  final Size size;
+  final void Function(_ZoneKey) onTap;
+  final double? imageW;
+  final double? imageH;
+
+  @override
+  Widget build(BuildContext context) {
+    Offset pos(Offset p) => _coverMap(p, size, imageW, imageH);
+    final targets = <(_ZoneKey, Offset)>[
+      (_ZoneKey.forehead, pos(shape.forehead)),
+      (_ZoneKey.tzone, pos(shape.tzone)),
+      (_ZoneKey.leftCheek, pos(shape.leftCheek)),
+      (_ZoneKey.rightCheek, pos(shape.rightCheek)),
+      (_ZoneKey.chin, pos(shape.chin)),
+    ];
+    const r = 28.0;
+    return Stack(
+      children: [
+        for (final t in targets)
+          Positioned(
+            left: t.$2.dx - r,
+            top: t.$2.dy - r,
+            width: r * 2,
+            height: r * 2,
+            child: Semantics(
+              button: true,
+              label: _zoneLabel(t.$1),
+              child: Material(
+                color: Colors.transparent,
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () => onTap(t.$1),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+String _zoneLabel(_ZoneKey key) => switch (key) {
+      _ZoneKey.forehead => 'Лоб',
+      _ZoneKey.tzone => 'Т-зона',
+      _ZoneKey.leftCheek => 'Левая щека',
+      _ZoneKey.rightCheek => 'Правая щека',
+      _ZoneKey.chin => 'Подбородок',
+    };
+
+class _ZoneSheet extends StatefulWidget {
+  const _ZoneSheet({
+    required this.zoneKey,
+    required this.score,
+    required this.insightFuture,
+    this.onOpenCatalog,
+  });
+
+  final _ZoneKey zoneKey;
+  final int score;
+  final Future<ZoneInsight> insightFuture;
+  final void Function(String concern)? onOpenCatalog;
+
+  @override
+  State<_ZoneSheet> createState() => _ZoneSheetState();
+}
+
+class _ZoneSheetState extends State<_ZoneSheet> {
+  late final Future<ZoneInsight> _future = widget.insightFuture;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = _statusFor(widget.score);
+    return DraggableScrollableSheet(
+      initialChildSize: 0.6,
+      minChildSize: 0.4,
+      maxChildSize: 0.9,
+      expand: false,
+      builder: (ctx, controller) => Container(
+        decoration: const BoxDecoration(
+          color: AppColors.background,
+          borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
+        child: FutureBuilder<ZoneInsight>(
+          future: _future,
+          builder: (_, snap) {
+            final loading = snap.connectionState != ConnectionState.done;
+            // Fall back to the static table if the server call failed.
+            final data = snap.hasData
+                ? snap.data!
+                : (loading
+                    ? null
+                    : _fallbackInsight(widget.zoneKey, widget.score));
+
+            return ListView(
+              controller: controller,
+              children: [
+                Center(
+                  child: Container(
+                    width: 36,
+                    height: 4,
+                    margin: const EdgeInsets.only(bottom: 16),
+                    decoration: BoxDecoration(
+                      color: AppColors.divider,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          EyebrowText(status.eyebrow, color: status.color),
+                          const SizedBox(height: 6),
+                          Text(_zoneLabel(widget.zoneKey),
+                              style:
+                                  AppTypography.h1.copyWith(fontSize: 28)),
+                        ],
+                      ),
+                    ),
+                    Text(
+                      '${widget.score}',
+                      style: AppTypography.display.copyWith(
+                        fontSize: 44,
+                        height: 1,
+                        color: status.color,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 18),
+                if (data == null) ...[
+                  _ZoneBlockSkeleton(lines: 2),
+                  const SizedBox(height: 12),
+                  _ZoneBlockSkeleton(lines: 3),
+                ] else ...[
+                  _ZoneBlock(title: 'Что замечаем', body: data.issue),
+                  const SizedBox(height: 12),
+                  _ZoneBlock(title: 'Что поможет', bullets: data.remedies),
+                ],
+                const SizedBox(height: 20),
+                if (data != null &&
+                    widget.onOpenCatalog != null &&
+                    data.concern.isNotEmpty)
+                  SizedBox(
+                    width: double.infinity,
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        widget.onOpenCatalog!(data.concern);
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.roseDeep,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: const StadiumBorder(),
+                      ),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text('Подобрать средства',
+                              style: AppTypography.button),
+                          const SizedBox(width: 8),
+                          const Icon(Icons.arrow_forward_rounded, size: 18),
+                        ],
+                      ),
+                    ),
+                  ),
+                if (data != null &&
+                    widget.onOpenCatalog != null &&
+                    data.concern.isNotEmpty)
+                  const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: TextButton(
+                    onPressed: () => Navigator.of(ctx).pop(),
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.textSecondary,
+                      shape: const StadiumBorder(),
+                    ),
+                    child: const Text('Закрыть'),
+                  ),
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _ZoneBlockSkeleton extends StatelessWidget {
+  const _ZoneBlockSkeleton({required this.lines});
+  final int lines;
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 60,
+            height: 10,
+            decoration: BoxDecoration(
+              color: AppColors.divider,
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+          const SizedBox(height: 12),
+          for (var i = 0; i < lines; i++) ...[
+            Container(
+              width: double.infinity,
+              height: 12,
+              decoration: BoxDecoration(
+                color: AppColors.divider,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            if (i < lines - 1) const SizedBox(height: 8),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+/// Last-resort copy if the server call fails — same wording as the backend's
+/// own fallback, so the UX is identical in both branches.
+ZoneInsight _fallbackInsight(_ZoneKey k, int score) {
+  final info = _zoneInsight(k, score);
+  return ZoneInsight(
+    zone: _zoneApiKey(k),
+    score: score,
+    issue: info.issue,
+    remedies: info.remedies,
+    concern: _fallbackConcern(k, score),
+  );
+}
+
+String _fallbackConcern(_ZoneKey k, int score) {
+  final low = score < 55;
+  final mid = score >= 55 && score < 70;
+  if (!low && !mid) return ''; // High score → no CTA.
+  return switch (k) {
+    _ZoneKey.forehead => 'dehydration',
+    _ZoneKey.tzone => 'acne',
+    _ZoneKey.leftCheek || _ZoneKey.rightCheek => 'redness',
+    _ZoneKey.chin => 'acne',
+  };
+}
+
+class _ZoneBlock extends StatelessWidget {
+  const _ZoneBlock({required this.title, this.body, this.bullets});
+  final String title;
+  final String? body;
+  final List<String>? bullets;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 16),
+      decoration: BoxDecoration(
+        color: AppColors.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          EyebrowText(title),
+          const SizedBox(height: 8),
+          if (body != null) Text(body!, style: AppTypography.bodyMedium),
+          if (bullets != null)
+            for (final b in bullets!)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(top: 7, right: 10),
+                      child: Container(
+                        width: 5,
+                        height: 5,
+                        decoration: const BoxDecoration(
+                          color: AppColors.primaryAccent,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(b, style: AppTypography.bodyMedium),
+                    ),
+                  ],
+                ),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+({String eyebrow, Color color}) _statusFor(int score) {
+  if (score >= 85) return (eyebrow: 'Отлично', color: AppColors.success);
+  if (score >= 70) return (eyebrow: 'Хорошо', color: AppColors.success);
+  if (score >= 55) return (eyebrow: 'Норма', color: AppColors.primaryAccent);
+  return (eyebrow: 'Нужно внимание', color: AppColors.warning);
+}
+
+/// Static rule-table for per-zone diagnostics. Conservative wording — this
+/// is product copy, not medical advice. Later we can swap this for a
+/// GigaChat call keyed on (zone, score, scan).
+({String issue, List<String> remedies}) _zoneInsight(_ZoneKey k, int score) {
+  final low = score < 55;
+  final mid = score >= 55 && score < 70;
+  switch (k) {
+    case _ZoneKey.forehead:
+      if (low) {
+        return (
+          issue:
+              'На лбу заметна обезвоженность и неровный тон. Часто это след '
+                  'стресса, обогревателя или слишком плотного крема.',
+          remedies: [
+            'Гиалуроновая кислота утром, под крем',
+            'Лёгкий пантенол на ночь',
+            'Перерыв в кислотах на 2–3 дня',
+          ],
+        );
+      }
+      if (mid) {
+        return (
+          issue:
+              'Лоб в стабильной форме, но запас увлажнения небольшой — кожа '
+                  'может тянуть к вечеру.',
+          remedies: [
+            'Сыворотка с ниацинамидом 5%',
+            'Питательный ночной крем 2–3 раза в неделю',
+          ],
+        );
+      }
+      return (
+        issue: 'Лоб в отличной форме. Поддерживаем баланс — ничего нового.',
+        remedies: [
+          'SPF 50 каждое утро',
+          'Раз в неделю — лёгкий пилинг с PHA',
+        ],
+      );
+    case _ZoneKey.tzone:
+      if (low) {
+        return (
+          issue:
+              'Т-зона активная: повышенный себум, расширенные поры и риск '
+                  'воспалений. Скорее всего из-за плотных текстур и сладкого.',
+          remedies: [
+            'Салициловая кислота 2% точечно вечером',
+            'Цинк или ниацинамид 10% утром',
+            'Матирующий тонер вместо плотного крема',
+          ],
+        );
+      }
+      if (mid) {
+        return (
+          issue:
+              'Т-зона работает нормально, но к вечеру появляется блеск и '
+                  'выделяются поры.',
+          remedies: [
+            'Ниацинамид 5–10% утром',
+            'Глиняная маска 1 раз в неделю',
+          ],
+        );
+      }
+      return (
+        issue: 'Т-зона сбалансирована — это редкий и хороший случай.',
+        remedies: [
+          'Лёгкая текстура крема, чтобы не утяжелять',
+          'BHA 1 раз в неделю как профилактика',
+        ],
+      );
+    case _ZoneKey.leftCheek:
+    case _ZoneKey.rightCheek:
+      if (low) {
+        return (
+          issue:
+              'На щеках видны сухость, реактивная краснота или следы. '
+                  'Часто это барьер просит восстановления, а не активов.',
+          remedies: [
+            'Церамиды и сквалан вечером',
+            'Пантенол утром под SPF',
+            'Пауза в ретиноле и кислотах на неделю',
+          ],
+        );
+      }
+      if (mid) {
+        return (
+          issue:
+              'Щёки в норме, но кожа реагирует на холод и плотный макияж. '
+                  'Барьер чуть тоньше, чем хотелось бы.',
+          remedies: [
+            'Крем с центеллой утром',
+            'Лёгкая эмульсия с церамидами на ночь',
+          ],
+        );
+      }
+      return (
+        issue: 'Щёки сияют — увлажнение и барьер в порядке.',
+        remedies: [
+          'SPF 50 каждое утро',
+          'Сыворотка с витамином C для тона',
+        ],
+      );
+    case _ZoneKey.chin:
+      if (low) {
+        return (
+          issue:
+              'Подбородок реагирует на гормоны и стресс — там чаще всего '
+                  'появляются воспаления и плотные комедоны.',
+          remedies: [
+            'Азелаиновая кислота 10% точечно вечером',
+            'BHA-тонер 2–3 раза в неделю',
+            'Не трогать руками в течение дня',
+          ],
+        );
+      }
+      if (mid) {
+        return (
+          issue:
+              'Подбородок стабилен, но иногда выскакивают единичные '
+                  'воспаления — обычно в дни недосыпа.',
+          remedies: [
+            'Точечный гель с цинком',
+            'Лёгкое увлажнение, без масел',
+          ],
+        );
+      }
+      return (
+        issue: 'Подбородок в норме — продолжаем ухаживать как сейчас.',
+        remedies: [
+          'Поддерживающий крем без отдушек',
+          'SPF 50 каждое утро',
+        ],
+      );
   }
 }

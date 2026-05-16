@@ -15,6 +15,12 @@ import 'repos.dart';
 
 final _rng = Random.secure();
 
+/// Reserved phone that bypasses OTP — used by moderators and reviewers
+/// (App Store / Google Play) so they can sign in without a real SMS.
+/// Code is always [_kModeratorCode]; nothing is written to the OTP table.
+const _kModeratorPhone = '+70000000000';
+const _kModeratorCode = '1111';
+
 String? normalizePhone(String raw) {
   final digits = raw.replaceAll(RegExp(r'\D'), '');
   if (digits.length == 11 &&
@@ -100,6 +106,15 @@ class AuthHandlers {
     final phone = normalizePhone(raw['phone'] as String? ?? '');
     if (phone == null) return jsonResponse(400, {'error': 'invalid_phone'});
 
+    if (phone == _kModeratorPhone) {
+      return jsonResponse(200, {
+        'ok': true,
+        'phone': phone,
+        'expires_in_sec': 300,
+        'sms_sent': false,
+      });
+    }
+
     if (await otps.hasFreshCode(phone)) {
       return jsonResponse(429, {'error': 'too_many_requests'});
     }
@@ -130,6 +145,24 @@ class AuthHandlers {
     final code = (raw['code'] as String? ?? '').trim();
     if (phone == null || code.isEmpty) {
       return jsonResponse(400, {'error': 'invalid_request'});
+    }
+    if (phone == _kModeratorPhone) {
+      if (code != _kModeratorCode) {
+        return jsonResponse(401, {'error': 'wrong_code'});
+      }
+      final user = await users.findOrCreateByPhone(phone);
+      if (user.isBlocked) {
+        return jsonResponse(403, {'error': 'user_blocked'});
+      }
+      await users.markLogin(user.id);
+      final token = await sessions.create(
+        user.id,
+        userAgent: req.headers['user-agent'],
+      );
+      return jsonResponse(200, {
+        'token': token,
+        'user': user.toClientJson(),
+      });
     }
     final pending = await otps.get(phone);
     if (pending == null) {
@@ -798,7 +831,14 @@ class ScanHandlers {
     ..post('/me/scans', _withUser(_create))
     ..get('/me/scans', _withUser(_list))
     ..get('/me/scans/<id>', _withUser(_detail))
-    ..get('/me/scans/<id>/photo', _withUser(_photo));
+    ..get('/me/scans/<id>/photo', _withUser(_photo))
+    ..get('/me/scans/<id>/zone/<zone>', _withUser(_zoneInsight));
+
+  /// Per-process LRU-ish cache so the bottom-sheet drill-down doesn't hit
+  /// GigaChat twice for the same zone in one session. Bounded so a long-
+  /// running server doesn't leak memory.
+  static final _zoneInsightCache = <String, Map<String, dynamic>>{};
+  static const _zoneInsightCacheMax = 256;
 
   Handler _withUser(Future<Response> Function(Request, UserRow) inner) =>
       (Request req) async {
@@ -929,7 +969,258 @@ class ScanHandlers {
       },
     );
   }
+
+  /// Returns Лина's drill-down advice for a single zone of a scan:
+  /// `{ "zone", "score", "issue", "remedies": [...], "concern" }`.
+  ///
+  /// `concern` is one of the catalog filter keys (`acne`, `dehydration`,
+  /// `redness`, `aging`, `pih`, `dullness`) so the client can open the
+  /// catalog pre-filtered to relevant products.
+  Future<Response> _zoneInsight(Request req, UserRow user) async {
+    final id = req.params['id']!;
+    final rawZone = (req.params['zone'] ?? '').toLowerCase();
+    const validZones = {
+      'forehead',
+      'tzone',
+      'left_cheek',
+      'right_cheek',
+      'chin',
+    };
+    if (!validZones.contains(rawZone)) {
+      return jsonResponse(400, {'error': 'invalid_zone'});
+    }
+    final scan = await scans.findById(userId: user.id, id: id);
+    if (scan == null) return jsonResponse(404, {'error': 'not_found'});
+
+    final score = _scoreForZone(scan, rawZone);
+    final cacheKey = '${scan.id}:$rawZone';
+    final cached = _zoneInsightCache[cacheKey];
+    if (cached != null) {
+      return jsonResponse(200, cached);
+    }
+
+    Map<String, dynamic>? aiResult;
+    if (giga != null) {
+      try {
+        final profile = await profiles.get(user.id) ?? const <String, dynamic>{};
+        final raw = await giga!.chat(
+          systemPrompt: _zoneInsightSystemPrompt,
+          userMessage: jsonEncode({
+            'zone': rawZone,
+            'score': score,
+            'scan': {
+              'overall': scan.score,
+              'hydration': scan.hydration,
+              'sebum': scan.sebum,
+              'tone': scan.tone,
+              'pores': scan.pores,
+              'zones': scan.zones,
+              'insight': scan.insight,
+            },
+            'profile': profile,
+          }),
+        );
+        final parsed = parseJsonReply(raw);
+        aiResult = _sanitiseZoneInsight(parsed, rawZone, score);
+      } catch (e) {
+        stderr.writeln('Zone insight via GigaChat failed: $e');
+      }
+    }
+
+    final payload = aiResult ?? _staticZoneInsight(rawZone, score);
+    if (_zoneInsightCache.length >= _zoneInsightCacheMax) {
+      _zoneInsightCache.remove(_zoneInsightCache.keys.first);
+    }
+    _zoneInsightCache[cacheKey] = payload;
+    return jsonResponse(200, payload);
+  }
+
+  int _scoreForZone(ScanRow scan, String zone) {
+    final z = scan.zones;
+    return switch (zone) {
+      'forehead' => z['forehead'] ?? 70,
+      'tzone' => z['nose'] ?? 70,
+      'left_cheek' => z['left_cheek'] ?? 70,
+      'right_cheek' => z['right_cheek'] ?? 70,
+      'chin' => z['chin'] ?? 70,
+      _ => 70,
+    };
+  }
+
+  /// Coerce GigaChat output into the shape clients expect. Drops anything
+  /// suspicious — never trust the model to follow the schema perfectly.
+  Map<String, dynamic> _sanitiseZoneInsight(
+      Map<String, dynamic> raw, String zone, int score) {
+    String s(String key, {int max = 320}) {
+      final v = raw[key];
+      if (v is! String) return '';
+      final t = v.trim();
+      return t.length > max ? t.substring(0, max) : t;
+    }
+
+    final remediesRaw = raw['remedies'];
+    final remedies = <String>[];
+    if (remediesRaw is List) {
+      for (final r in remediesRaw) {
+        if (r is String && r.trim().isNotEmpty) {
+          final t = r.trim();
+          remedies.add(t.length > 140 ? t.substring(0, 140) : t);
+        }
+        if (remedies.length >= 4) break;
+      }
+    }
+    const validConcerns = {
+      'acne',
+      'pih',
+      'aging',
+      'dullness',
+      'redness',
+      'dehydration',
+    };
+    final concern = (raw['concern'] as String?)?.toLowerCase();
+    final fallback = _staticZoneInsight(zone, score);
+    return {
+      'zone': zone,
+      'score': score,
+      'issue': s('issue').isNotEmpty ? s('issue') : fallback['issue'],
+      'remedies': remedies.isNotEmpty ? remedies : fallback['remedies'],
+      'concern': validConcerns.contains(concern)
+          ? concern
+          : fallback['concern'],
+    };
+  }
+
+  /// Mirrors the in-app Russian copy so we always have something to show
+  /// when GigaChat is unavailable. Three score bands per zone.
+  Map<String, dynamic> _staticZoneInsight(String zone, int score) {
+    final low = score < 55;
+    final mid = score >= 55 && score < 70;
+    String issue;
+    List<String> remedies;
+    String concern;
+    switch (zone) {
+      case 'forehead':
+        if (low) {
+          issue =
+              'Лоб обезвожен, тон неровный — кожа просит увлажнения и покоя.';
+          remedies = [
+            'Гиалуроновая кислота утром, под крем',
+            'Пантенол на ночь',
+            'Перерыв в кислотах на 2–3 дня',
+          ];
+          concern = 'dehydration';
+        } else if (mid) {
+          issue = 'Лоб стабилен, но запас увлажнения небольшой.';
+          remedies = [
+            'Сыворотка с ниацинамидом 5%',
+            'Питательный ночной крем 2–3 раза в неделю',
+          ];
+          concern = 'dehydration';
+        } else {
+          issue = 'Лоб в отличной форме — поддерживаем баланс.';
+          remedies = ['SPF 50 каждое утро', 'Лёгкий PHA раз в неделю'];
+          concern = 'dullness';
+        }
+        break;
+      case 'tzone':
+        if (low) {
+          issue = 'Т-зона активная: себум, поры, риск воспалений.';
+          remedies = [
+            'Салициловая кислота 2% точечно вечером',
+            'Ниацинамид 10% утром',
+            'Матирующий тонер вместо плотного крема',
+          ];
+          concern = 'acne';
+        } else if (mid) {
+          issue = 'Т-зона рабочая, к вечеру появляется блеск и видимые поры.';
+          remedies = [
+            'Ниацинамид 5–10% утром',
+            'Глиняная маска раз в неделю',
+          ];
+          concern = 'acne';
+        } else {
+          issue = 'Т-зона сбалансирована — это редкий хороший случай.';
+          remedies = ['Лёгкая текстура крема', 'BHA раз в неделю профилактически'];
+          concern = 'acne';
+        }
+        break;
+      case 'left_cheek':
+      case 'right_cheek':
+        if (low) {
+          issue = 'Щёки реактивные, барьер просит восстановления.';
+          remedies = [
+            'Церамиды и сквалан вечером',
+            'Пантенол утром под SPF',
+            'Пауза в ретиноле и кислотах',
+          ];
+          concern = 'redness';
+        } else if (mid) {
+          issue = 'Щёки в норме, но барьер чуть тоньше нужного.';
+          remedies = [
+            'Крем с центеллой утром',
+            'Эмульсия с церамидами на ночь',
+          ];
+          concern = 'redness';
+        } else {
+          issue = 'Щёки сияют — увлажнение и барьер в порядке.';
+          remedies = ['SPF 50 каждое утро', 'Сыворотка с витамином C'];
+          concern = 'dullness';
+        }
+        break;
+      case 'chin':
+      default:
+        if (low) {
+          issue =
+              'Подбородок реагирует на гормоны и стресс — воспаления и комедоны.';
+          remedies = [
+            'Азелаиновая кислота 10% точечно вечером',
+            'BHA-тонер 2–3 раза в неделю',
+            'Не трогать руками в течение дня',
+          ];
+          concern = 'acne';
+        } else if (mid) {
+          issue = 'Подбородок стабилен, но единичные воспаления случаются.';
+          remedies = [
+            'Точечный гель с цинком',
+            'Лёгкое увлажнение, без масел',
+          ];
+          concern = 'acne';
+        } else {
+          issue = 'Подбородок в норме — продолжаем как сейчас.';
+          remedies = [
+            'Поддерживающий крем без отдушек',
+            'SPF 50 каждое утро',
+          ];
+          concern = 'aging';
+        }
+    }
+    return {
+      'zone': zone,
+      'score': score,
+      'issue': issue,
+      'remedies': remedies,
+      'concern': concern,
+    };
+  }
 }
+
+const _zoneInsightSystemPrompt = '''
+Ты — Лина, AI-косметолог приложения «Моя Кожа». Тон тёплый, краткий, без
+медицинских терминов и без диагнозов.
+
+Тебе дают JSON: { zone, score (0..100), scan, profile }.
+Зона — одна из: forehead, tzone, left_cheek, right_cheek, chin.
+
+Верни СТРОГО JSON без обёрток markdown:
+{
+  "issue": "1–2 предложения о том, что происходит с зоной (по делу)",
+  "remedies": ["1–3 ингредиента/действия, без брендов"],
+  "concern": "один из: acne | pih | aging | dullness | redness | dehydration"
+}
+
+issue — до 240 символов. Каждый remedy — до 100 символов.
+Никаких эмодзи, без "я думаю", без вступлений.
+''';
 
 class CatalogHandlers {
   CatalogHandlers({

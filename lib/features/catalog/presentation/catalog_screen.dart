@@ -16,9 +16,14 @@ class CatalogScreen extends ConsumerStatefulWidget {
     super.key,
     required this.onOpen,
     required this.onBack,
+    this.initialConcern,
   });
   final void Function(Product) onOpen;
   final VoidCallback onBack;
+
+  /// Concern filter to apply on open — set when the user came here from a
+  /// zone drill-down on the scan result screen.
+  final String? initialConcern;
 
   @override
   ConsumerState<CatalogScreen> createState() => _CatalogScreenState();
@@ -32,6 +37,7 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
   @override
   void initState() {
     super.initState();
+    _concern = widget.initialConcern;
     _future = _load();
   }
 

@@ -102,6 +102,38 @@ class FaceGeometry {
   }
 }
 
+/// Лина's drill-down for a single face zone of a scan. Used to back the
+/// bottom-sheet that opens when the user taps a zone on the heatmap.
+class ZoneInsight {
+  const ZoneInsight({
+    required this.zone,
+    required this.score,
+    required this.issue,
+    required this.remedies,
+    required this.concern,
+  });
+
+  /// Backend zone key: forehead | tzone | left_cheek | right_cheek | chin.
+  final String zone;
+  final int score;
+  final String issue;
+  final List<String> remedies;
+
+  /// Catalog filter key (acne, dehydration, etc.) so the "Подобрать средства"
+  /// CTA can open the catalog pre-filtered. Empty when the zone is fine and
+  /// no specific concern applies.
+  final String concern;
+
+  factory ZoneInsight.fromJson(Map<String, dynamic> j) => ZoneInsight(
+        zone: j['zone'] as String? ?? '',
+        score: (j['score'] as num?)?.toInt() ?? 0,
+        issue: j['issue'] as String? ?? '',
+        remedies:
+            ((j['remedies'] as List?) ?? const []).map((e) => '$e').toList(),
+        concern: j['concern'] as String? ?? '',
+      );
+}
+
 class ScanZones {
   const ScanZones({
     required this.forehead,

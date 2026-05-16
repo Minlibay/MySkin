@@ -168,6 +168,7 @@ class _AppShellState extends ConsumerState<_AppShell> {
   String? _openProductSlug;
   Today? _today;
   ScanResult? _lastScan;
+  String? _catalogInitialConcern;
 
   @override
   void initState() {
@@ -333,8 +334,13 @@ class _AppShellState extends ConsumerState<_AppShell> {
           onBack: () => setState(() => _view = _Shell.home),
         );
       case _Shell.catalog:
+        final concern = _catalogInitialConcern;
+        // Consume — next time user opens the catalog from the home tab
+        // it should start unfiltered.
+        _catalogInitialConcern = null;
         return CatalogScreen(
           onBack: () => setState(() => _view = _Shell.home),
+          initialConcern: concern,
           onOpen: (Product p) => setState(() {
             _previousView = _Shell.catalog;
             _openProductSlug = p.slug;
@@ -398,6 +404,10 @@ class _AppShellState extends ConsumerState<_AppShell> {
           scan: _lastScan!,
           onBack: () => setState(() => _view = _Shell.home),
           onAccept: _runStandard,
+          onOpenCatalog: (concern) => setState(() {
+            _catalogInitialConcern = concern.isEmpty ? null : concern;
+            _view = _Shell.catalog;
+          }),
         );
       case _Shell.progress:
         return ProgressScreen(
