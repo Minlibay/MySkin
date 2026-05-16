@@ -20,6 +20,7 @@ import 'widgets/scan_overlay_widgets.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../api/backend_api.dart';
+import '../data/face_geom_builder.dart';
 import '../domain/scan_result.dart';
 
 class ScanScreen extends ConsumerStatefulWidget {
@@ -437,8 +438,8 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       // re-using the stream bbox because the still picture and the preview
       // frames have different FOVs / aspect ratios — a stream bbox would
       // land in the wrong place once we project it onto the photo.
-      final faceBbox = await _faceBboxFromFile(pic.path, bytes);
-      await _uploadAndFinish(bytes, mime: 'image/jpeg', faceBbox: faceBbox);
+      final faceGeom = await _faceGeomFromFile(pic.path, bytes);
+      await _uploadAndFinish(bytes, mime: 'image/jpeg', faceGeom: faceGeom);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -469,11 +470,11 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       }
       final bytes = await picked.readAsBytes();
       // Same as the camera path — run ML Kit on the chosen file so the
-      // result screen gets a precise bbox instead of the server's looser
-      // skin-colour heuristic.
-      final faceBbox = await _faceBboxFromFile(picked.path, bytes);
+      // server gets the full face_geom (polygon + landmarks) and the
+      // result screen never needs to re-detect.
+      final faceGeom = await _faceGeomFromFile(picked.path, bytes);
       await _uploadAndFinish(bytes,
-          mime: picked.mimeType ?? 'image/jpeg', faceBbox: faceBbox);
+          mime: picked.mimeType ?? 'image/jpeg', faceGeom: faceGeom);
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -484,17 +485,18 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   }
 
   Future<void> _uploadAndFinish(List<int> bytes,
-      {required String mime, List<double>? faceBbox}) async {
+      {required String mime, Map<String, dynamic>? faceGeom}) async {
     final b64 = base64Encode(bytes);
     final result = await ref.read(backendApiProvider).uploadScan(
           photoBase64: b64,
           mime: mime,
-          faceBbox: faceBbox,
+          faceGeom: faceGeom,
         );
     Telemetry.event('scan_uploaded', data: {
       'photo_kb': (bytes.length / 1024).round(),
       'score': result.score,
-      'had_face_bbox': faceBbox != null,
+      'had_face_geom': faceGeom != null,
+      'had_face_contour': faceGeom?['contour'] != null,
     });
     if (!mounted) return;
     widget.onResult(result);
@@ -504,45 +506,46 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   /// against the decoded photo's pixel dimensions. EXIF rotation is honoured
   /// by InputImage.fromFilePath and by Flutter's image decoder, so the
   /// resulting rect lines up with how the photo is later displayed.
-  Future<List<double>?> _faceBboxFromFile(
+  /// Detects the user's face on a saved photo and produces the full
+  /// `face_geom` payload uploaded with the scan. We run a 3-step cascade:
+  /// accurate+contours → accurate plain → fast. The contour-aware pass is
+  /// preferred (it gives the polygon + landmarks for the heatmap); the
+  /// remaining passes serve as bbox-only fallbacks for tricky lighting.
+  ///
+  /// Returns null only when no pass found a face at all.
+  Future<Map<String, dynamic>?> _faceGeomFromFile(
       String path, List<int> bytes) async {
     final size = await _decodedImageSize(Uint8List.fromList(bytes));
     if (size == null) return null;
 
-    // First try the shared accurate detector (already warm). Fallback to a
-    // more permissive one if it returns nothing — iOS in dim lighting often
-    // refuses borderline faces in accurate mode at minFaceSize=0.2.
-    final f = await _runDetector(_faceDetector, path) ??
-        await _runDetector(
-          FaceDetector(
-            options: FaceDetectorOptions(
-              performanceMode: FaceDetectorMode.accurate,
-              minFaceSize: 0.08,
-            ),
-          ),
-          path,
-          dispose: true,
-        ) ??
-        await _runDetector(
-          FaceDetector(
-            options: FaceDetectorOptions(
-              performanceMode: FaceDetectorMode.fast,
-              minFaceSize: 0.08,
-            ),
-          ),
-          path,
-          dispose: true,
-        );
-    if (f == null) return null;
-    return [
-      (f.left / size.width).clamp(0.0, 1.0),
-      (f.top / size.height).clamp(0.0, 1.0),
-      (f.right / size.width).clamp(0.0, 1.0),
-      (f.bottom / size.height).clamp(0.0, 1.0),
-    ];
+    Face? face = await _runDetector(_faceDetector, path);
+    face ??= await _runDetector(
+      FaceDetector(
+        options: FaceDetectorOptions(
+          performanceMode: FaceDetectorMode.accurate,
+          enableContours: true,
+          enableLandmarks: true,
+          minFaceSize: 0.08,
+        ),
+      ),
+      path,
+      dispose: true,
+    );
+    face ??= await _runDetector(
+      FaceDetector(
+        options: FaceDetectorOptions(
+          performanceMode: FaceDetectorMode.fast,
+          minFaceSize: 0.08,
+        ),
+      ),
+      path,
+      dispose: true,
+    );
+    if (face == null) return null;
+    return buildFaceGeomJson(face, size.width, size.height);
   }
 
-  Future<Rect?> _runDetector(
+  Future<Face?> _runDetector(
     FaceDetector detector,
     String path, {
     bool dispose = false,
@@ -554,9 +557,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       faces.sort((a, b) =>
           (b.boundingBox.width * b.boundingBox.height)
               .compareTo(a.boundingBox.width * a.boundingBox.height));
-      return faces.first.boundingBox;
+      return faces.first;
     } catch (e) {
-      debugPrint('face bbox detect failed: $e');
+      debugPrint('face detect failed: $e');
       return null;
     } finally {
       if (dispose) await detector.close();

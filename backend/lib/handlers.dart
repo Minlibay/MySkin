@@ -775,6 +775,65 @@ String _slugify(String s) {
       .replaceAll(RegExp(r'^-+|-+$'), '');
 }
 
+/// Validate and trim down a `face_geom` payload from the client. We
+/// trust the client (it ran ML Kit on-device) but defend against
+/// malformed JSON or hostile values — every coordinate is clamped to
+/// [0..1], outlier point counts are rejected, missing pieces drop to
+/// null instead of poisoning the row.
+Map<String, dynamic>? _sanitiseFaceGeom(Map<String, dynamic> raw) {
+  final rb = raw['bbox'];
+  if (rb is! List || rb.length != 4) return null;
+  final bbox = rb
+      .whereType<num>()
+      .map((n) => n.toDouble().clamp(0.0, 1.0))
+      .toList();
+  if (bbox.length != 4) return null;
+  if (bbox[2] <= bbox[0] || bbox[3] <= bbox[1]) return null;
+
+  List<List<double>>? contour;
+  final rc = raw['contour'];
+  if (rc is List && rc.length >= 8 && rc.length <= 200) {
+    final pts = <List<double>>[];
+    for (final p in rc) {
+      if (p is List && p.length >= 2 && p[0] is num && p[1] is num) {
+        pts.add([
+          (p[0] as num).toDouble().clamp(0.0, 1.0),
+          (p[1] as num).toDouble().clamp(0.0, 1.0),
+        ]);
+      }
+    }
+    if (pts.length >= 8) contour = pts;
+  }
+
+  Map<String, List<double>>? landmarks;
+  final rl = raw['landmarks'];
+  if (rl is Map) {
+    final out = <String, List<double>>{};
+    for (final key in const [
+      'forehead',
+      'tzone',
+      'left_cheek',
+      'right_cheek',
+      'chin',
+    ]) {
+      final v = rl[key];
+      if (v is List && v.length >= 2 && v[0] is num && v[1] is num) {
+        out[key] = [
+          (v[0] as num).toDouble().clamp(0.0, 1.0),
+          (v[1] as num).toDouble().clamp(0.0, 1.0),
+        ];
+      }
+    }
+    if (out.length == 5) landmarks = out;
+  }
+
+  return {
+    'bbox': bbox,
+    if (contour != null) 'contour': contour,
+    if (landmarks != null) 'landmarks': landmarks,
+  };
+}
+
 class AiHandlers {
   AiHandlers({
     required this.sessions,
@@ -1044,7 +1103,9 @@ ScanAnalysis _mergeAiAnalysis(ScanAnalysis local, Map<String, dynamic> ai) {
       'source': 'gigachat-vision',
       if (ai['concerns'] is List) 'ai_concerns': ai['concerns'],
     },
-    faceGeom: local.faceGeom,
+    // Don't propagate the server-side skin-colour bbox — the result
+    // screen now relies on the client-supplied face_geom from ML Kit.
+    faceGeom: null,
   );
 }
 
@@ -1132,20 +1193,28 @@ class ScanHandlers {
         stderr.writeln('Vision scan failed, using local analysis: $e');
       }
     }
-    // Prefer the client's ML Kit bbox (precise face detector) over the
-    // backend's skin-colour heuristic, which often blooms to cover the whole
-    // photo on well-lit selfies. Validate before accepting.
-    Map<String, dynamic>? faceGeom = analysis.faceGeom;
-    final clientBbox = body['face_bbox'];
-    if (clientBbox is List && clientBbox.length == 4) {
-      final v = clientBbox.map((e) => (e as num).toDouble()).toList();
-      final ok = v.every((e) => e >= 0 && e <= 1) &&
-          v[2] > v[0] &&
-          v[3] > v[1] &&
-          (v[2] - v[0]) < 0.95 &&
-          (v[3] - v[1]) < 0.95;
-      if (ok) {
-        faceGeom = {'bbox': v};
+    // Face geometry is now a single source of truth: whatever the mobile
+    // client (ML Kit on-device) sent. We deliberately do NOT fall back to
+    // the server's skin-colour heuristic — it routinely captured neck and
+    // shoulders alongside the face, dragging the heatmap overlay off.
+    // When the client couldn't detect a face at all, we store null and
+    // the result screen hides the heatmap with a friendly nudge to retake.
+    Map<String, dynamic>? faceGeom;
+    final rawGeom = body['face_geom'];
+    if (rawGeom is Map) {
+      faceGeom = _sanitiseFaceGeom(rawGeom.cast<String, dynamic>());
+    } else {
+      // Legacy clients (pre face_geom rollout) shipped only `face_bbox`.
+      // Still honoured so old app builds keep working until forced update.
+      final legacy = body['face_bbox'];
+      if (legacy is List && legacy.length == 4) {
+        final v = legacy.map((e) => (e as num).toDouble()).toList();
+        final ok = v.every((e) => e >= 0 && e <= 1) &&
+            v[2] > v[0] &&
+            v[3] > v[1] &&
+            (v[2] - v[0]) < 0.95 &&
+            (v[3] - v[1]) < 0.95;
+        if (ok) faceGeom = {'bbox': v};
       }
     }
     final scan = await scans.create(

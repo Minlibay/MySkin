@@ -6,7 +6,6 @@ import 'dart:ui' as ui;
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
@@ -377,20 +376,17 @@ class _Heatmap extends ConsumerStatefulWidget {
 
 class _HeatmapState extends ConsumerState<_Heatmap>
     with SingleTickerProviderStateMixin {
-  /// Rich face geometry — actual contour polygon + zone landmarks. Built
-  /// from ML Kit's contour detector on the saved photo; null until detection
-  /// finishes. Falls back to bbox-only shape when contours aren't available.
+  /// Face shape built once from `widget.scan.face` (the client-supplied
+  /// face_geom produced by ML Kit at scan time). We never re-detect on
+  /// this screen — there's a single source of truth on the server.
   _FaceShape? _shape;
 
   /// Actual pixel size of the photo. Needed because the photo is rendered
   /// with BoxFit.cover into a 3:4 widget — when the original aspect differs,
-  /// part of the image is cropped and the bbox must be mapped through the
-  /// same transform or the overlay drifts off the face.
+  /// part of the image is cropped and bbox-space coordinates must be
+  /// mapped through the same transform.
   double? _imgW;
   double? _imgH;
-
-  /// True after we've attempted local detection (regardless of success).
-  bool _detectAttempted = false;
 
   late final AnimationController _reveal;
 
@@ -401,10 +397,24 @@ class _HeatmapState extends ConsumerState<_Heatmap>
       vsync: this,
       duration: const Duration(milliseconds: 1100),
     );
+
+    // Build the shape synchronously from scan.face — no async work needed.
+    // If face is null (ML Kit found nothing at scan time) we leave _shape
+    // null and the build() method shows a friendly "couldn't detect" card
+    // instead of misleading the user with a fake overlay.
+    final face = widget.scan.face;
+    if (face != null) {
+      _shape = _FaceShape.fromGeometry(face);
+    }
+
     if (widget.scan.hasPhoto) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _loadPhoto());
-    } else {
-      _detectAttempted = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) => _loadPhotoSize());
+    }
+    // Kick off the reveal animation as soon as the first frame paints.
+    if (_shape != null) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _reveal.forward(from: 0),
+      );
     }
   }
 
@@ -414,9 +424,10 @@ class _HeatmapState extends ConsumerState<_Heatmap>
     super.dispose();
   }
 
-  Future<void> _loadPhoto() async {
-    if (_detectAttempted) return;
-    _detectAttempted = true;
+  /// We still need the photo's real dimensions to apply the BoxFit.cover
+  /// transform to face_geom points. Fetched lazily; the painter uses no-
+  /// transform until they land.
+  Future<void> _loadPhotoSize() async {
     try {
       final bytes = await ref
           .read(backendApiProvider)
@@ -429,114 +440,9 @@ class _HeatmapState extends ConsumerState<_Heatmap>
           _imgH = size.height;
         });
       }
-      await _detectFromBytes(bytes, size);
     } catch (e) {
-      debugPrint('Result-screen photo load failed: $e');
+      debugPrint('Result-screen photo size load failed: $e');
     }
-  }
-
-  Future<void> _detectFromBytes(
-      List<int> bytes, ({double width, double height})? size) async {
-    final tmp =
-        File('${Directory.systemTemp.path}/scan-${widget.scan.id}.jpg');
-    await tmp.writeAsBytes(bytes, flush: true);
-    final s = size ?? await _decodeSize(Uint8List.fromList(bytes));
-    try {
-      // Pass 1: accurate detection with contours + landmarks. Best quality
-      // when it works (gives us the polygon).
-      var face = await _tryDetect(
-        tmp.path,
-        accurate: true,
-        contours: true,
-        minFaceSize: 0.15,
-      );
-      // Pass 2: same accuracy, smaller minFaceSize. Helps when the user
-      // composed the shot loosely or the face takes up <15% of the frame.
-      face ??= await _tryDetect(
-        tmp.path,
-        accurate: true,
-        contours: false,
-        minFaceSize: 0.08,
-      );
-      // Pass 3: fast mode as a last resort. iOS sometimes refuses borderline
-      // faces in accurate but accepts them in fast.
-      face ??= await _tryDetect(
-        tmp.path,
-        accurate: false,
-        contours: false,
-        minFaceSize: 0.08,
-      );
-
-      if (!mounted) return;
-      if (face != null && s != null && s.width > 0 && s.height > 0) {
-        final w = s.width, h = s.height;
-        final shape = _FaceShape.fromFace(face, w, h) ??
-            _FaceShape.fromBbox(FaceGeometry(bbox: [
-              (face.boundingBox.left / w).clamp(0.0, 1.0),
-              (face.boundingBox.top / h).clamp(0.0, 1.0),
-              (face.boundingBox.right / w).clamp(0.0, 1.0),
-              (face.boundingBox.bottom / h).clamp(0.0, 1.0),
-            ]));
-        setState(() => _shape = shape);
-        _reveal.forward(from: 0);
-        return;
-      }
-
-      // All ML Kit passes failed. Server bbox is the last fallback, but
-      // we use the version that auto-tightens loose head+shoulders boxes
-      // so the proportional layout doesn't spray cheek/chin dots onto
-      // the user's neck. If the bbox is so bad we can't even tighten it,
-      // we hide the overlay rather than mislead the user.
-      final fallback = widget.scan.face;
-      if (fallback != null && _looksUsable(fallback)) {
-        setState(() => _shape = _FaceShape.fromBbox(fallback));
-        _reveal.forward(from: 0);
-      }
-    } finally {
-      try {
-        await tmp.delete();
-      } catch (_) {/* ignore */}
-    }
-  }
-
-  Future<Face?> _tryDetect(
-    String path, {
-    required bool accurate,
-    required bool contours,
-    required double minFaceSize,
-  }) async {
-    final detector = FaceDetector(
-      options: FaceDetectorOptions(
-        performanceMode:
-            accurate ? FaceDetectorMode.accurate : FaceDetectorMode.fast,
-        enableContours: contours,
-        enableLandmarks: contours,
-        minFaceSize: minFaceSize,
-      ),
-    );
-    try {
-      final input = InputImage.fromFilePath(path);
-      final faces = await detector.processImage(input);
-      if (faces.isEmpty) return null;
-      faces.sort((a, b) =>
-          (b.boundingBox.width * b.boundingBox.height)
-              .compareTo(a.boundingBox.width * a.boundingBox.height));
-      return faces.first;
-    } catch (e) {
-      debugPrint('ML Kit detect failed (accurate=$accurate): $e');
-      return null;
-    } finally {
-      await detector.close();
-    }
-  }
-
-  /// Reject obviously useless bboxes — a server skin-colour heuristic that
-  /// fills the entire frame, or anything tiny enough to be a misfire.
-  bool _looksUsable(FaceGeometry f) {
-    final w = f.x1 - f.x0, h = f.y1 - f.y0;
-    if (w <= 0.12 || h <= 0.12) return false;
-    if (w >= 0.95 || h >= 0.95) return false;
-    return true;
   }
 
   Future<({double width, double height})?> _decodeSize(
@@ -621,6 +527,10 @@ class _HeatmapState extends ConsumerState<_Heatmap>
                       onTap: (key) => _showZoneSheet(context, key),
                     ),
                   ),
+                if (shape == null && scan.hasPhoto)
+                  // Honest empty-state — heatmap is hidden because ML Kit
+                  // didn't find a face at scan time. Metrics still work.
+                  const _NoFaceOverlay(),
               ],
             ),
           ),
@@ -652,6 +562,7 @@ class _HeatmapState extends ConsumerState<_Heatmap>
           ),
         ),
       );
+
 
   Widget _zonePill(
       BuildContext context, String label, int score, _ZoneKey key) {
@@ -740,77 +651,26 @@ class _FaceShape {
   final Offset rightCheek;
   final Offset chin;
 
-  /// Build from a full ML Kit Face (contours + landmarks). Returns null if
-  /// the face contour itself isn't present — the caller will use the bbox
-  /// fallback instead.
-  static _FaceShape? fromFace(Face face, double imgW, double imgH) {
-    final faceC = face.contours[FaceContourType.face]?.points;
-    if (faceC == null || faceC.length < 8) return null;
-    Offset norm(num x, num y) => Offset(x / imgW, y / imgH);
-    final contour = faceC.map((p) => norm(p.x, p.y)).toList(growable: false);
-
-    final lBrow = face.contours[FaceContourType.leftEyebrowTop]?.points ?? [];
-    final rBrow = face.contours[FaceContourType.rightEyebrowTop]?.points ?? [];
-    final nose = face.contours[FaceContourType.noseBridge]?.points ?? [];
-
-    // Forehead = above the midpoint between the two brow tops, lifted by
-    // ~18% of face height.
-    final faceH = contour.map((o) => o.dy).reduce(math.max) -
-        contour.map((o) => o.dy).reduce(math.min);
-    Offset forehead;
-    if (lBrow.isNotEmpty && rBrow.isNotEmpty) {
-      final all = [...lBrow, ...rBrow];
-      final cx = all.map((p) => p.x).reduce((a, b) => a + b) / all.length;
-      final cy = all.map((p) => p.y).reduce((a, b) => a + b) / all.length;
-      forehead = Offset(cx / imgW, cy / imgH - faceH * 0.18);
-    } else {
-      final topY = contour.map((o) => o.dy).reduce(math.min);
-      final cxAll = contour.map((o) => o.dx).reduce((a, b) => a + b) /
-          contour.length;
-      forehead = Offset(cxAll, topY + faceH * 0.10);
+  /// Build from the server-stored face_geom payload. Prefers the rich
+  /// (contour + landmarks) path when those fields are present; falls back
+  /// to the bbox-only ellipse layout when the client only managed to get
+  /// a bbox.
+  factory _FaceShape.fromGeometry(FaceGeometry f) {
+    final contour = f.contour;
+    final landmarks = f.landmarks;
+    if (contour != null && landmarks != null) {
+      Offset l(String key) =>
+          Offset(landmarks[key]![0], landmarks[key]![1]);
+      return _FaceShape(
+        contour: contour.map((p) => Offset(p[0], p[1])).toList(growable: false),
+        forehead: l('forehead'),
+        tzone: l('tzone'),
+        leftCheek: l('left_cheek'),
+        rightCheek: l('right_cheek'),
+        chin: l('chin'),
+      );
     }
-
-    // T-zone = mid-point of the nose bridge contour.
-    Offset tzone;
-    if (nose.isNotEmpty) {
-      final mid = nose[nose.length ~/ 2];
-      tzone = norm(mid.x, mid.y);
-    } else {
-      tzone = Offset(forehead.dx, forehead.dy + faceH * 0.30);
-    }
-
-    // Cheeks — prefer explicit landmarks, fall back to leftmost/rightmost
-    // contour points at the cheekbone height.
-    final lCheekL = face.landmarks[FaceLandmarkType.leftCheek];
-    final rCheekL = face.landmarks[FaceLandmarkType.rightCheek];
-    Offset leftCheek;
-    Offset rightCheek;
-    if (lCheekL != null) {
-      leftCheek = norm(lCheekL.position.x, lCheekL.position.y);
-    } else {
-      final lp = contour.reduce((a, b) => a.dx < b.dx ? a : b);
-      leftCheek = Offset(lp.dx + 0.03, tzone.dy + faceH * 0.05);
-    }
-    if (rCheekL != null) {
-      rightCheek = norm(rCheekL.position.x, rCheekL.position.y);
-    } else {
-      final rp = contour.reduce((a, b) => a.dx > b.dx ? a : b);
-      rightCheek = Offset(rp.dx - 0.03, tzone.dy + faceH * 0.05);
-    }
-
-    // Chin = bottom-most contour point, pulled up slightly so the blob
-    // sits on the chin rather than past it.
-    final bottom = contour.reduce((a, b) => a.dy > b.dy ? a : b);
-    final chin = Offset(bottom.dx, bottom.dy - faceH * 0.04);
-
-    return _FaceShape(
-      contour: contour,
-      forehead: forehead,
-      tzone: tzone,
-      leftCheek: leftCheek,
-      rightCheek: rightCheek,
-      chin: chin,
-    );
+    return _FaceShape.fromBbox(f);
   }
 
   /// Last-resort fallback when contours weren't available — synthesises a
@@ -1603,5 +1463,54 @@ class _ZoneBlock extends StatelessWidget {
           'SPF 50 каждое утро',
         ],
       );
+  }
+}
+
+/// Shown over the photo when ML Kit couldn't find a face at scan time.
+/// We don't draw a fake heatmap — instead we say so honestly and invite
+/// the user to retake. The photo and metrics still display below.
+class _NoFaceOverlay extends StatelessWidget {
+  const _NoFaceOverlay();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: Colors.black.withOpacity(0.45),
+      padding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(20, 18, 20, 18),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.96),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(color: AppColors.divider),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.face_retouching_off_outlined,
+                  color: AppColors.roseDeep, size: 28),
+              const SizedBox(height: 10),
+              Text(
+                'Лицо не распозналось',
+                style: AppTypography.h2.copyWith(fontSize: 18),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 6),
+              Text(
+                'Карта улучшений работает, когда видно всё лицо. '
+                'Метрики по пикселям мы рассчитали — переснимите при '
+                'дневном свете, чтобы увидеть карту.',
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.textSecondary,
+                  height: 1.4,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
   }
 }

@@ -75,11 +75,28 @@ class ScanResult {
   }
 }
 
+/// Geometry of the user's face on the saved scan photo. Everything is in
+/// normalised image coordinates (0..1). Produced by `buildFaceGeomJson`
+/// on the mobile client at scan time and stored verbatim on the backend
+/// — the result screen never re-detects.
 class FaceGeometry {
-  const FaceGeometry({required this.bbox});
+  const FaceGeometry({
+    required this.bbox,
+    this.contour,
+    this.landmarks,
+  });
 
-  /// [x0, y0, x1, y1] all normalised to 0..1 on the source photo.
+  /// `[x0, y0, x1, y1]` ML Kit bounding box.
   final List<double> bbox;
+
+  /// Face outline polygon. Null when ML Kit didn't return contours
+  /// (older devices, fast-mode fallback, …) — renderer falls back to a
+  /// synthesised ellipse from the bbox.
+  final List<List<double>>? contour;
+
+  /// Zone landmark points, keyed by zone id: `forehead`, `tzone`,
+  /// `left_cheek`, `right_cheek`, `chin`. Null when contour is null.
+  final Map<String, List<double>>? landmarks;
 
   double get x0 => bbox[0];
   double get y0 => bbox[1];
@@ -92,13 +109,51 @@ class FaceGeometry {
     if (j is! Map) return null;
     final raw = j['bbox'];
     if (raw is! List || raw.length != 4) return null;
-    final values = raw
+    final bbox = raw
         .whereType<num>()
         .map((n) => n.toDouble().clamp(0.0, 1.0))
         .toList();
-    if (values.length != 4) return null;
-    if (values[2] <= values[0] || values[3] <= values[1]) return null;
-    return FaceGeometry(bbox: values);
+    if (bbox.length != 4) return null;
+    if (bbox[2] <= bbox[0] || bbox[3] <= bbox[1]) return null;
+
+    List<List<double>>? contour;
+    final rawC = j['contour'];
+    if (rawC is List && rawC.length >= 8) {
+      final out = <List<double>>[];
+      for (final p in rawC) {
+        if (p is List && p.length >= 2 && p[0] is num && p[1] is num) {
+          out.add([
+            (p[0] as num).toDouble().clamp(0.0, 1.0),
+            (p[1] as num).toDouble().clamp(0.0, 1.0),
+          ]);
+        }
+      }
+      if (out.length >= 8) contour = out;
+    }
+
+    Map<String, List<double>>? landmarks;
+    final rawL = j['landmarks'];
+    if (rawL is Map) {
+      final out = <String, List<double>>{};
+      for (final key in const [
+        'forehead',
+        'tzone',
+        'left_cheek',
+        'right_cheek',
+        'chin'
+      ]) {
+        final v = rawL[key];
+        if (v is List && v.length >= 2 && v[0] is num && v[1] is num) {
+          out[key] = [
+            (v[0] as num).toDouble().clamp(0.0, 1.0),
+            (v[1] as num).toDouble().clamp(0.0, 1.0),
+          ];
+        }
+      }
+      if (out.length == 5) landmarks = out;
+    }
+
+    return FaceGeometry(bbox: bbox, contour: contour, landmarks: landmarks);
   }
 }
 

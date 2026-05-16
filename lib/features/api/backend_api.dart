@@ -259,14 +259,14 @@ class BackendApi {
   Future<ScanResult> uploadScan({
     required String photoBase64,
     String mime = 'image/jpeg',
-    List<double>? faceBbox,
+    Map<String, dynamic>? faceGeom,
   }) async {
     final r = await _dio.post(
       '$baseUrl/me/scans',
       data: {
         'photo_b64': photoBase64,
         'mime': mime,
-        if (faceBbox != null && faceBbox.length == 4) 'face_bbox': faceBbox,
+        if (faceGeom != null) 'face_geom': faceGeom,
       },
       options: _auth(),
     );
