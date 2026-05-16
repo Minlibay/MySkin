@@ -1829,12 +1829,20 @@ class UserProductRepository {
   final Pool db;
 
   Future<List<ShelfItem>> list(String userId) async {
+    // Select the same 24 product columns ProductRow.fromRow expects (kept
+    // in sync with ProductRepository._cols), then append user_products
+    // fields after. Earlier we shipped only 14 columns which silently set
+    // hasPhoto=false on every shelf item.
     final r = await db.execute(
       Sql.named('''
         SELECT p.id, p.slug, p.brand, p.name, p.kind, p.description,
                p.price_rub, p.accent_color, p.ingredients, p.tags,
                p.skin_types, p.is_active_ingredient, p.gentle, p.routine_phase,
-               up.status, up.added_at, up.notes
+               p.status, (p.photo IS NOT NULL), p.buy_url,
+               p.moderation_status, p.moderation_reason,
+               p.submitted_by_partner_id, p.composition, p.precautions,
+               p.usage_instructions, p.extra_info,
+               up.status AS up_status, up.added_at, up.notes
         FROM user_products up
         JOIN products p ON p.id = up.product_id
         WHERE up.user_id = @u
@@ -1844,10 +1852,10 @@ class UserProductRepository {
     );
     return r.map((row) {
       return ShelfItem(
-        product: ProductRow.fromRow(row.sublist(0, 14)),
-        status: row[14] as String,
-        addedAt: row[15] as DateTime,
-        notes: row[16] as String?,
+        product: ProductRow.fromRow(row.sublist(0, 24)),
+        status: row[24] as String,
+        addedAt: row[25] as DateTime,
+        notes: row[26] as String?,
       );
     }).toList();
   }
