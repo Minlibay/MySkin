@@ -263,3 +263,41 @@ export const api = {
     );
   },
 };
+
+// Option lists mirror the admin SPA so the catalog stays consistent.
+// PRODUCT_TAGS and SKIN_TYPES drive product↔profile matching, so the
+// partner form must offer the same set the admin does.
+export const PRODUCT_KINDS: Array<{ id: string; label: string }> = [
+  { id: 'cleanser', label: 'Очищение' },
+  { id: 'toner', label: 'Тоник' },
+  { id: 'essence', label: 'Эссенция' },
+  { id: 'serum', label: 'Сыворотка' },
+  { id: 'moisturizer', label: 'Крем' },
+  { id: 'spf', label: 'SPF' },
+  { id: 'mask', label: 'Маска' },
+  { id: 'eye_cream', label: 'Крем для глаз' },
+];
+
+export const PRODUCT_TAGS: Array<{ id: string; label: string }> = [
+  { id: 'acne', label: 'Акне' },
+  { id: 'pih', label: 'Постакне' },
+  { id: 'aging', label: 'Anti-age' },
+  { id: 'dullness', label: 'Тусклость' },
+  { id: 'redness', label: 'Покраснения' },
+  { id: 'dehydration', label: 'Обезвоженность' },
+];
+
+export const SKIN_TYPES: Array<{ id: string; label: string }> = [
+  { id: 'all', label: 'Все типы' },
+  { id: 'dry', label: 'Сухая' },
+  { id: 'oily', label: 'Жирная' },
+  { id: 'combo', label: 'Комбинированная' },
+  { id: 'normal', label: 'Нормальная' },
+  { id: 'sensitive', label: 'Чувствительная' },
+];
+
+export const ROUTINE_PHASES: Array<{ id: string; label: string }> = [
+  { id: 'any', label: 'Утром или вечером' },
+  { id: 'morning', label: 'Утром' },
+  { id: 'evening', label: 'Вечером' },
+];

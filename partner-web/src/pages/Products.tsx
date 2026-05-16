@@ -1,29 +1,16 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 import {
   api,
+  PRODUCT_KINDS,
+  PRODUCT_TAGS,
+  ROUTINE_PHASES,
+  SKIN_TYPES,
   type Brand,
   type DailyPoint,
   type Product,
   type ProductInput,
   type ProductStats,
 } from '../api';
-
-const KINDS = [
-  ['cleanser', 'Очищение'],
-  ['toner', 'Тоник'],
-  ['essence', 'Эссенция'],
-  ['serum', 'Сыворотка'],
-  ['moisturizer', 'Крем'],
-  ['spf', 'SPF'],
-  ['mask', 'Маска'],
-  ['eye_cream', 'Крем для глаз'],
-] as const;
-
-const PHASES = [
-  ['any', 'Утро и вечер'],
-  ['morning', 'Утро'],
-  ['evening', 'Вечер'],
-] as const;
 
 const STATUS_LABEL: Record<Product['moderation_status'], string> = {
   approved: 'Одобрен',
@@ -441,6 +428,14 @@ function ProductFormModal({
     initial?.routine_phase ?? 'any'
   );
   const [gentle, setGentle] = useState(initial?.gentle ?? false);
+  const [tags, setTags] = useState<string[]>(initial?.tags ?? []);
+  const [skinTypes, setSkinTypes] = useState<string[]>(
+    initial?.skin_types ?? []
+  );
+  const [ingredients, setIngredients] = useState<string[]>(
+    initial?.ingredients ?? []
+  );
+  const [ingInput, setIngInput] = useState('');
   const [buyUrl, setBuyUrl] = useState(initial?.buy_url ?? '');
   const [composition, setComposition] = useState(initial?.composition ?? '');
   const [precautions, setPrecautions] = useState(initial?.precautions ?? '');
@@ -544,6 +539,9 @@ function ProductFormModal({
         routine_phase: routinePhase,
         gentle,
         buy_url: buyUrl.trim() ? buyUrl.trim() : null,
+        tags,
+        skin_types: skinTypes,
+        ingredients,
         composition: composition.trim() ? composition.trim() : null,
         precautions: precautions.trim() ? precautions.trim() : null,
         usage: usage.trim() ? usage.trim() : null,
@@ -655,9 +653,9 @@ function ProductFormModal({
               value={kind}
               onChange={(e) => setKind(e.target.value)}
             >
-              {KINDS.map(([id, lbl]) => (
-                <option key={id} value={id}>
-                  {lbl}
+              {PRODUCT_KINDS.map((k) => (
+                <option key={k.id} value={k.id}>
+                  {k.label}
                 </option>
               ))}
             </select>
@@ -678,9 +676,9 @@ function ProductFormModal({
               value={routinePhase}
               onChange={(e) => setRoutinePhase(e.target.value)}
             >
-              {PHASES.map(([id, lbl]) => (
-                <option key={id} value={id}>
-                  {lbl}
+              {ROUTINE_PHASES.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {r.label}
                 </option>
               ))}
             </select>
@@ -732,6 +730,91 @@ function ProductFormModal({
             />
             <span className="text-sm">Подходит чувствительной коже</span>
           </label>
+
+          <Field
+            label="Помогает с (теги для подбора)"
+            className="col-span-2"
+            help="Лина использует эти теги, чтобы предлагать товар под конкретные цели пользователя."
+          >
+            <ChipGroup
+              options={PRODUCT_TAGS}
+              selected={tags}
+              onToggle={(v) => toggleStr(setTags, tags, v)}
+            />
+          </Field>
+
+          <Field
+            label="Подходит для типов кожи"
+            className="col-span-2"
+            help="Без типов кожи продукт не попадёт под профили пользователей."
+          >
+            <ChipGroup
+              options={SKIN_TYPES}
+              selected={skinTypes}
+              onToggle={(v) => toggleStr(setSkinTypes, skinTypes, v)}
+            />
+          </Field>
+
+          <Field
+            label="Ингредиенты (INCI)"
+            className="col-span-2"
+            help="Введите по одному и нажмите Enter. Лина видит этот список и проверяет аллергии."
+          >
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              {ingredients.length === 0 && (
+                <span className="text-xs text-ink2">Список пустой</span>
+              )}
+              {ingredients.map((ing) => (
+                <span
+                  key={ing}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-blush text-rose text-xs"
+                >
+                  {ing}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setIngredients(ingredients.filter((x) => x !== ing))
+                    }
+                    className="hover:text-ink leading-none"
+                    aria-label="Удалить"
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                className="input flex-1"
+                value={ingInput}
+                onChange={(e) => setIngInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    const v = ingInput.trim();
+                    if (v && !ingredients.includes(v)) {
+                      setIngredients([...ingredients, v]);
+                    }
+                    setIngInput('');
+                  }
+                }}
+                placeholder="Например, Niacinamide 10%"
+              />
+              <button
+                type="button"
+                className="btn-ghost h-11"
+                onClick={() => {
+                  const v = ingInput.trim();
+                  if (v && !ingredients.includes(v)) {
+                    setIngredients([...ingredients, v]);
+                  }
+                  setIngInput('');
+                }}
+              >
+                Добавить
+              </button>
+            </div>
+          </Field>
 
           <Field label="Фото (до 4 ракурсов)" className="col-span-2">
             <div className="grid grid-cols-4 gap-3">
@@ -851,6 +934,46 @@ function ProductFormModal({
         </div>
         </form>
       </div>
+    </div>
+  );
+}
+
+function toggleStr(
+  setFn: (a: string[]) => void,
+  arr: string[],
+  v: string
+) {
+  setFn(arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
+}
+
+function ChipGroup({
+  options,
+  selected,
+  onToggle,
+}: {
+  options: Array<{ id: string; label: string }>;
+  selected: string[];
+  onToggle: (id: string) => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {options.map((o) => {
+        const active = selected.includes(o.id);
+        return (
+          <button
+            key={o.id}
+            type="button"
+            onClick={() => onToggle(o.id)}
+            className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
+              active
+                ? 'bg-rose text-white border-rose'
+                : 'bg-white text-ink border-black/10 hover:border-rose/40'
+            }`}
+          >
+            {o.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
