@@ -440,49 +440,103 @@ class _HeatmapState extends ConsumerState<_Heatmap>
     final tmp =
         File('${Directory.systemTemp.path}/scan-${widget.scan.id}.jpg');
     await tmp.writeAsBytes(bytes, flush: true);
-    final detector = FaceDetector(
-      options: FaceDetectorOptions(
-        performanceMode: FaceDetectorMode.accurate,
-        enableContours: true,
-        enableLandmarks: true,
-        minFaceSize: 0.15,
-      ),
-    );
+    final s = size ?? await _decodeSize(Uint8List.fromList(bytes));
     try {
-      final input = InputImage.fromFilePath(tmp.path);
-      final faces = await detector.processImage(input);
-      if (faces.isEmpty || !mounted) {
-        // Fall back to whatever server gave us so the overlay still appears.
-        final fallback = widget.scan.face;
-        if (fallback != null && mounted) {
-          setState(() => _shape = _FaceShape.fromBbox(fallback));
-          _reveal.forward(from: 0);
-        }
+      // Pass 1: accurate detection with contours + landmarks. Best quality
+      // when it works (gives us the polygon).
+      var face = await _tryDetect(
+        tmp.path,
+        accurate: true,
+        contours: true,
+        minFaceSize: 0.15,
+      );
+      // Pass 2: same accuracy, smaller minFaceSize. Helps when the user
+      // composed the shot loosely or the face takes up <15% of the frame.
+      face ??= await _tryDetect(
+        tmp.path,
+        accurate: true,
+        contours: false,
+        minFaceSize: 0.08,
+      );
+      // Pass 3: fast mode as a last resort. iOS sometimes refuses borderline
+      // faces in accurate but accepts them in fast.
+      face ??= await _tryDetect(
+        tmp.path,
+        accurate: false,
+        contours: false,
+        minFaceSize: 0.08,
+      );
+
+      if (!mounted) return;
+      if (face != null && s != null && s.width > 0 && s.height > 0) {
+        final w = s.width, h = s.height;
+        final shape = _FaceShape.fromFace(face, w, h) ??
+            _FaceShape.fromBbox(FaceGeometry(bbox: [
+              (face.boundingBox.left / w).clamp(0.0, 1.0),
+              (face.boundingBox.top / h).clamp(0.0, 1.0),
+              (face.boundingBox.right / w).clamp(0.0, 1.0),
+              (face.boundingBox.bottom / h).clamp(0.0, 1.0),
+            ]));
+        setState(() => _shape = shape);
+        _reveal.forward(from: 0);
         return;
       }
-      faces.sort((a, b) =>
-          (b.boundingBox.width * b.boundingBox.height)
-              .compareTo(a.boundingBox.width * a.boundingBox.height));
-      final face = faces.first;
-      final s = size ?? await _decodeSize(Uint8List.fromList(bytes));
-      if (s == null || !mounted) return;
-      final w = s.width, h = s.height;
-      if (w <= 0 || h <= 0) return;
-      final shape = _FaceShape.fromFace(face, w, h) ??
-          _FaceShape.fromBbox(FaceGeometry(bbox: [
-            (face.boundingBox.left / w).clamp(0.0, 1.0),
-            (face.boundingBox.top / h).clamp(0.0, 1.0),
-            (face.boundingBox.right / w).clamp(0.0, 1.0),
-            (face.boundingBox.bottom / h).clamp(0.0, 1.0),
-          ]));
-      setState(() => _shape = shape);
-      _reveal.forward(from: 0);
+
+      // All ML Kit passes failed. Server bbox is the last fallback, but
+      // we use the version that auto-tightens loose head+shoulders boxes
+      // so the proportional layout doesn't spray cheek/chin dots onto
+      // the user's neck. If the bbox is so bad we can't even tighten it,
+      // we hide the overlay rather than mislead the user.
+      final fallback = widget.scan.face;
+      if (fallback != null && _looksUsable(fallback)) {
+        setState(() => _shape = _FaceShape.fromBbox(fallback));
+        _reveal.forward(from: 0);
+      }
     } finally {
-      await detector.close();
       try {
         await tmp.delete();
       } catch (_) {/* ignore */}
     }
+  }
+
+  Future<Face?> _tryDetect(
+    String path, {
+    required bool accurate,
+    required bool contours,
+    required double minFaceSize,
+  }) async {
+    final detector = FaceDetector(
+      options: FaceDetectorOptions(
+        performanceMode:
+            accurate ? FaceDetectorMode.accurate : FaceDetectorMode.fast,
+        enableContours: contours,
+        enableLandmarks: contours,
+        minFaceSize: minFaceSize,
+      ),
+    );
+    try {
+      final input = InputImage.fromFilePath(path);
+      final faces = await detector.processImage(input);
+      if (faces.isEmpty) return null;
+      faces.sort((a, b) =>
+          (b.boundingBox.width * b.boundingBox.height)
+              .compareTo(a.boundingBox.width * a.boundingBox.height));
+      return faces.first;
+    } catch (e) {
+      debugPrint('ML Kit detect failed (accurate=$accurate): $e');
+      return null;
+    } finally {
+      await detector.close();
+    }
+  }
+
+  /// Reject obviously useless bboxes — a server skin-colour heuristic that
+  /// fills the entire frame, or anything tiny enough to be a misfire.
+  bool _looksUsable(FaceGeometry f) {
+    final w = f.x1 - f.x0, h = f.y1 - f.y0;
+    if (w <= 0.12 || h <= 0.12) return false;
+    if (w >= 0.95 || h >= 0.95) return false;
+    return true;
   }
 
   Future<({double width, double height})?> _decodeSize(
@@ -760,29 +814,48 @@ class _FaceShape {
   }
 
   /// Last-resort fallback when contours weren't available — synthesises a
-  /// 48-point ellipse from the bbox and uses the old proportional layout.
+  /// 48-point ellipse and lays out 5 zone points by proportion.
+  ///
+  /// Crucially, we **tighten** the bbox here. The server's skin-colour
+  /// heuristic often catches the face plus neck and shoulders, producing
+  /// a bbox that's much taller than a real face (~1.8× width or more).
+  /// Applied as-is, the proportional layout (cheeks at 0.55 of bbox
+  /// height) then drops cheek markers onto the user's chest.
+  ///
+  /// Real human faces are roughly width:height ≈ 1:1.3. If we got a
+  /// taller bbox, we anchor at the top (face is in the upper portion of
+  /// a head+shoulders shot) and trim the bottom down to that ratio.
   factory _FaceShape.fromBbox(FaceGeometry f) {
-    final cx = (f.x0 + f.x1) / 2;
-    final cy = (f.y0 + f.y1) / 2;
-    final w = (f.x1 - f.x0) / 2;
-    final h = (f.y1 - f.y0) / 2;
+    double x0 = f.x0, y0 = f.y0, x1 = f.x1, y1 = f.y1;
+    final origW = x1 - x0;
+    final origH = y1 - y0;
+    const idealHToW = 1.3;
+    if (origW > 0 && origH > origW * (idealHToW + 0.15)) {
+      // Anchor face top at bbox top — torso/neck went below the face in
+      // the skin-colour heuristic, so trimming from below recovers the
+      // actual face area.
+      y1 = y0 + origW * idealHToW;
+    }
+
+    final cx = (x0 + x1) / 2;
+    final cy = (y0 + y1) / 2;
+    final rx = (x1 - x0) / 2;
+    final ry = (y1 - y0) / 2;
     const steps = 48;
     final contour = <Offset>[
       for (var i = 0; i < steps; i++)
         Offset(
-          cx + math.cos(i / steps * 2 * math.pi) * w,
-          cy + math.sin(i / steps * 2 * math.pi) * h,
+          cx + math.cos(i / steps * 2 * math.pi) * rx,
+          cy + math.sin(i / steps * 2 * math.pi) * ry,
         ),
     ];
     return _FaceShape(
       contour: contour,
-      forehead: Offset(cx, f.y0 + (f.y1 - f.y0) * 0.15),
-      tzone: Offset(cx, f.y0 + (f.y1 - f.y0) * 0.45),
-      leftCheek: Offset(f.x0 + (f.x1 - f.x0) * 0.25,
-          f.y0 + (f.y1 - f.y0) * 0.55),
-      rightCheek: Offset(f.x0 + (f.x1 - f.x0) * 0.75,
-          f.y0 + (f.y1 - f.y0) * 0.55),
-      chin: Offset(cx, f.y0 + (f.y1 - f.y0) * 0.86),
+      forehead: Offset(cx, y0 + (y1 - y0) * 0.15),
+      tzone: Offset(cx, y0 + (y1 - y0) * 0.45),
+      leftCheek: Offset(x0 + (x1 - x0) * 0.25, y0 + (y1 - y0) * 0.55),
+      rightCheek: Offset(x0 + (x1 - x0) * 0.75, y0 + (y1 - y0) * 0.55),
+      chin: Offset(cx, y0 + (y1 - y0) * 0.86),
     );
   }
 }

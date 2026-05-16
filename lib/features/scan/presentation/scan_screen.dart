@@ -506,26 +506,60 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   /// resulting rect lines up with how the photo is later displayed.
   Future<List<double>?> _faceBboxFromFile(
       String path, List<int> bytes) async {
+    final size = await _decodedImageSize(Uint8List.fromList(bytes));
+    if (size == null) return null;
+
+    // First try the shared accurate detector (already warm). Fallback to a
+    // more permissive one if it returns nothing — iOS in dim lighting often
+    // refuses borderline faces in accurate mode at minFaceSize=0.2.
+    final f = await _runDetector(_faceDetector, path) ??
+        await _runDetector(
+          FaceDetector(
+            options: FaceDetectorOptions(
+              performanceMode: FaceDetectorMode.accurate,
+              minFaceSize: 0.08,
+            ),
+          ),
+          path,
+          dispose: true,
+        ) ??
+        await _runDetector(
+          FaceDetector(
+            options: FaceDetectorOptions(
+              performanceMode: FaceDetectorMode.fast,
+              minFaceSize: 0.08,
+            ),
+          ),
+          path,
+          dispose: true,
+        );
+    if (f == null) return null;
+    return [
+      (f.left / size.width).clamp(0.0, 1.0),
+      (f.top / size.height).clamp(0.0, 1.0),
+      (f.right / size.width).clamp(0.0, 1.0),
+      (f.bottom / size.height).clamp(0.0, 1.0),
+    ];
+  }
+
+  Future<Rect?> _runDetector(
+    FaceDetector detector,
+    String path, {
+    bool dispose = false,
+  }) async {
     try {
       final input = InputImage.fromFilePath(path);
-      final faces = await _faceDetector.processImage(input);
+      final faces = await detector.processImage(input);
       if (faces.isEmpty) return null;
-      // Largest detected face — same convention as the live stream branch.
       faces.sort((a, b) =>
           (b.boundingBox.width * b.boundingBox.height)
               .compareTo(a.boundingBox.width * a.boundingBox.height));
-      final f = faces.first.boundingBox;
-      final size = await _decodedImageSize(Uint8List.fromList(bytes));
-      if (size == null) return null;
-      return [
-        (f.left / size.width).clamp(0.0, 1.0),
-        (f.top / size.height).clamp(0.0, 1.0),
-        (f.right / size.width).clamp(0.0, 1.0),
-        (f.bottom / size.height).clamp(0.0, 1.0),
-      ];
+      return faces.first.boundingBox;
     } catch (e) {
-      debugPrint('face bbox from photo failed: $e');
+      debugPrint('face bbox detect failed: $e');
       return null;
+    } finally {
+      if (dispose) await detector.close();
     }
   }
 
