@@ -144,18 +144,27 @@ function BrandQueue() {
 
 function ProductQueue() {
   const [items, setItems] = useState<AdminProduct[]>([]);
+  const [partners, setPartners] = useState<AdminPartner[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
   function load() {
     setLoading(true);
-    api
-      .listPendingProducts()
-      .then((r) => setItems(r.items))
+    Promise.all([api.listPendingProducts(), api.listPartners()])
+      .then(([prods, p]) => {
+        setItems(prods.items);
+        setPartners(p.items);
+      })
       .catch((e) => setErr(String(e)))
       .finally(() => setLoading(false));
   }
   useEffect(load, []);
+
+  function partnerLabel(id: string | null | undefined): string {
+    if (!id) return '—';
+    const p = partners.find((x) => x.id === id);
+    return p ? `${p.company_name} (${p.login})` : 'неизвестный';
+  }
 
   async function approve(p: AdminProduct) {
     await api.approveProductModeration(p.id);
@@ -188,6 +197,7 @@ function ProductQueue() {
       <table className="w-full text-sm">
         <thead className="bg-blush text-ink2">
           <tr>
+            <Th>Партнёр</Th>
             <Th>Бренд</Th>
             <Th>Название</Th>
             <Th>Тип</Th>
@@ -203,6 +213,9 @@ function ProductQueue() {
               key={p.id}
               className="border-t border-black/5 hover:bg-blush/40"
             >
+              <td className="px-4 py-3 text-ink2">
+                {partnerLabel(p.submitted_by_partner_id)}
+              </td>
               <td className="px-4 py-3">{p.brand}</td>
               <td className="px-4 py-3 font-medium">{p.name}</td>
               <td className="px-4 py-3 text-ink2">{p.kind}</td>

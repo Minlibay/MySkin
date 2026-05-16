@@ -549,6 +549,21 @@ class AdminRepository {
       parameters: {'id': adminId},
     );
   }
+
+  Future<String?> passwordHashFor(String adminId) async {
+    final r = await db.execute(
+      Sql.named('SELECT password_hash FROM admins WHERE id = @id'),
+      parameters: {'id': adminId},
+    );
+    return r.isEmpty ? null : r.first[0] as String;
+  }
+
+  Future<void> setPassword(String adminId, String passwordHash) async {
+    await db.execute(
+      Sql.named('UPDATE admins SET password_hash = @h WHERE id = @id'),
+      parameters: {'h': passwordHash, 'id': adminId},
+    );
+  }
 }
 
 class PartnerRow {
@@ -1125,6 +1140,7 @@ class ProductRow {
     this.buyUrl,
     this.moderationStatus = 'approved',
     this.moderationReason,
+    this.submittedByPartnerId,
   });
 
   final String id;
@@ -1146,6 +1162,7 @@ class ProductRow {
   final String? buyUrl;
   final String moderationStatus; // approved | pending | rejected
   final String? moderationReason;
+  final String? submittedByPartnerId;
 
   static ProductRow fromRow(List<dynamic> r) {
     List<String> arr(int i) =>
@@ -1171,6 +1188,7 @@ class ProductRow {
       moderationStatus:
           r.length > 17 ? (r[17] as String? ?? 'approved') : 'approved',
       moderationReason: r.length > 18 ? r[18] as String? : null,
+      submittedByPartnerId: r.length > 19 ? r[19] as String? : null,
     );
   }
 
@@ -1194,6 +1212,7 @@ class ProductRow {
         'buy_url': buyUrl,
         'moderation_status': moderationStatus,
         'moderation_reason': moderationReason,
+        'submitted_by_partner_id': submittedByPartnerId,
       };
 }
 
@@ -1205,7 +1224,7 @@ class ProductRepository {
       'id, slug, brand, name, kind, description, price_rub, accent_color, '
       'ingredients, tags, skin_types, is_active_ingredient, gentle, '
       'routine_phase, status, photo IS NOT NULL, buy_url, moderation_status, '
-      'moderation_reason';
+      'moderation_reason, submitted_by_partner_id';
 
   Future<List<ProductRow>> list({
     String? kind,
@@ -1438,6 +1457,25 @@ class ProductRepository {
       parameters: {'id': productId, 'partner': partnerId},
     );
     return r.isNotEmpty;
+  }
+
+  /// Flip a product back to the moderation queue. Used when a partner
+  /// changes a photo on a previously-approved product — the picture is
+  /// part of the listing, so it has to be re-reviewed.
+  Future<void> resubmitForModeration(String productId) async {
+    await db.execute(
+      Sql.named('''
+        UPDATE products SET
+          status = 'draft',
+          moderation_status = 'pending',
+          moderation_reason = NULL,
+          submitted_at = now(),
+          reviewed_at = NULL,
+          reviewed_by = NULL
+        WHERE id = @id
+      '''),
+      parameters: {'id': productId},
+    );
   }
 
   Future<void> deleteByPartner(String productId) async {

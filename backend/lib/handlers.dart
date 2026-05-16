@@ -282,7 +282,9 @@ class AdminHandlers {
     ..post('/admin/products/<id>/moderate/approve',
         _withAdmin(_approveProductModeration))
     ..post('/admin/products/<id>/moderate/reject',
-        _withAdmin(_rejectProductModeration));
+        _withAdmin(_rejectProductModeration))
+    // Self-service password change
+    ..post('/admin/change-password', _withAdmin(_changeOwnPassword));
 
   Handler _withAdmin(Handler inner) => (Request req) async {
         final token = _bearer(req);
@@ -721,6 +723,25 @@ class AdminHandlers {
       reason: (body['reason'] as String?)?.trim(),
       reviewerAdminId: adminId,
     );
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _changeOwnPassword(Request req) async {
+    final adminId = await _currentAdminId(req);
+    if (adminId == null) {
+      return jsonResponse(401, {'error': 'unauthorized'});
+    }
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final current = (body['current_password'] as String? ?? '');
+    final next = (body['new_password'] as String? ?? '');
+    if (next.length < 8) {
+      return jsonResponse(400, {'error': 'weak_password'});
+    }
+    final hash = await admins.passwordHashFor(adminId);
+    if (hash == null || !BCrypt.checkpw(current, hash)) {
+      return jsonResponse(403, {'error': 'wrong_current_password'});
+    }
+    await admins.setPassword(adminId, BCrypt.hashpw(next, BCrypt.gensalt()));
     return jsonResponse(200, {'ok': true});
   }
 
@@ -2128,8 +2149,13 @@ class PartnerHandlers {
     ..post('/partner/products', _withPartner(_createProduct))
     ..patch('/partner/products/<id>', _withPartner(_updateProduct))
     ..delete('/partner/products/<id>', _withPartner(_deleteProduct))
+    ..post('/partner/products/<id>/photo/<slot>',
+        _withPartner(_uploadProductPhoto))
+    ..delete('/partner/products/<id>/photo/<slot>',
+        _withPartner(_deleteProductPhoto))
     ..get('/partner/products/<id>/stats', _withPartner(_productStats))
-    ..get('/partner/stats/top', _withPartner(_topProducts));
+    ..get('/partner/stats/top', _withPartner(_topProducts))
+    ..post('/partner/change-password', _withPartner(_changeOwnPassword));
 
   Future<Response> _login(Request req) async {
     final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
@@ -2288,6 +2314,71 @@ class PartnerHandlers {
       return jsonResponse(409, {'error': 'cannot_delete_approved'});
     }
     await products.deleteByPartner(id);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _uploadProductPhoto(
+      Request req, PartnerRow partner) async {
+    final id = req.params['id']!;
+    final slot = int.tryParse(req.params['slot'] ?? '');
+    if (slot == null || slot < 1 || slot > 4) {
+      return jsonResponse(400, {'error': 'invalid_slot'});
+    }
+    if (!await products.isOwnedByPartner(id, partner.id)) {
+      return jsonResponse(403, {'error': 'not_owned'});
+    }
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final b64 = body['photo_b64'] as String?;
+    final mime = body['mime'] as String? ?? 'image/jpeg';
+    if (b64 == null || b64.isEmpty) {
+      return jsonResponse(400, {'error': 'no_photo'});
+    }
+    List<int> bytes;
+    try {
+      bytes = base64Decode(b64);
+    } catch (_) {
+      return jsonResponse(400, {'error': 'invalid_photo'});
+    }
+    if (bytes.length > 6 * 1024 * 1024) {
+      return jsonResponse(413, {'error': 'photo_too_large'});
+    }
+    await products.setPhoto(id: id, bytes: bytes, mime: mime, slot: slot);
+    // Photos are part of the listing — bounce back to moderation so admin
+    // can verify the picture too. New (already-pending) products stay
+    // pending; approved/rejected products flip back to pending.
+    await products.resubmitForModeration(id);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _deleteProductPhoto(
+      Request req, PartnerRow partner) async {
+    final id = req.params['id']!;
+    final slot = int.tryParse(req.params['slot'] ?? '');
+    if (slot == null || slot < 1 || slot > 4) {
+      return jsonResponse(400, {'error': 'invalid_slot'});
+    }
+    if (!await products.isOwnedByPartner(id, partner.id)) {
+      return jsonResponse(403, {'error': 'not_owned'});
+    }
+    await products.removePhoto(id: id, slot: slot);
+    await products.resubmitForModeration(id);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _changeOwnPassword(
+      Request req, PartnerRow partner) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final current = body['current_password'] as String? ?? '';
+    final next = body['new_password'] as String? ?? '';
+    if (next.length < 8) {
+      return jsonResponse(400, {'error': 'weak_password'});
+    }
+    final hash = await partners.passwordHashFor(partner.id);
+    if (hash.isEmpty || !BCrypt.checkpw(current, hash)) {
+      return jsonResponse(403, {'error': 'wrong_current_password'});
+    }
+    await partners.setPassword(
+        partner.id, BCrypt.hashpw(next, BCrypt.gensalt()));
     return jsonResponse(200, {'ok': true});
   }
 

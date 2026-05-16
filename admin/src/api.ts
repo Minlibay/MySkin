@@ -259,6 +259,16 @@ export const api = {
       body: JSON.stringify({ reason }),
     });
   },
+
+  changePassword(currentPassword: string, newPassword: string) {
+    return this.request<{ ok: boolean }>('/admin/change-password', {
+      method: 'POST',
+      body: JSON.stringify({
+        current_password: currentPassword,
+        new_password: newPassword,
+      }),
+    });
+  },
 };
 
 export type AdminPartner = {
@@ -395,6 +405,7 @@ export type AdminProduct = {
   buy_url?: string | null;
   moderation_status?: 'approved' | 'pending' | 'rejected';
   moderation_reason?: string | null;
+  submitted_by_partner_id?: string | null;
 };
 
 export type ProductInput = {

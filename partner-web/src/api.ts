@@ -202,6 +202,37 @@ export const api = {
     return req<void>('DELETE', `/partner/products/${id}`);
   },
 
+  uploadProductPhoto(
+    id: string,
+    slot: number,
+    photoB64: string,
+    mime: string
+  ) {
+    return req<{ ok: boolean }>(
+      'POST',
+      `/partner/products/${id}/photo/${slot}`,
+      { photo_b64: photoB64, mime }
+    );
+  },
+
+  deleteProductPhoto(id: string, slot: number) {
+    return req<{ ok: boolean }>(
+      'DELETE',
+      `/partner/products/${id}/photo/${slot}`
+    );
+  },
+
+  productPhotoUrl(id: string, slot = 1) {
+    return `${BASE_URL}/products/${id}/photo/${slot}`;
+  },
+
+  changePassword(currentPassword: string, newPassword: string) {
+    return req<{ ok: boolean }>('POST', '/partner/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    });
+  },
+
   productStats(productId: string, range: '7d' | '30d' | '90d' | 'all') {
     return req<ProductStats>(
       'GET',

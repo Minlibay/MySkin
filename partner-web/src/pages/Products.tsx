@@ -1,5 +1,12 @@
 import { FormEvent, useEffect, useMemo, useState } from 'react';
-import { api, type Brand, type Product, type ProductInput } from '../api';
+import {
+  api,
+  type Brand,
+  type DailyPoint,
+  type Product,
+  type ProductInput,
+  type ProductStats,
+} from '../api';
 
 const KINDS = [
   ['cleanser', 'Очищение'],
@@ -36,6 +43,7 @@ export default function ProductsPage() {
   const [err, setErr] = useState<string | null>(null);
   const [editing, setEditing] = useState<Product | null>(null);
   const [creating, setCreating] = useState(false);
+  const [stats, setStats] = useState<Product | null>(null);
 
   function load() {
     setLoading(true);
@@ -156,6 +164,14 @@ export default function ProductsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-3 text-right whitespace-nowrap">
+                    {p.moderation_status === 'approved' && (
+                      <button
+                        className="text-xs text-ink2 hover:text-ink hover:underline mr-3"
+                        onClick={() => setStats(p)}
+                      >
+                        Статистика
+                      </button>
+                    )}
                     <button
                       className="text-xs text-rose hover:underline mr-3"
                       onClick={() => setEditing(p)}
@@ -199,7 +215,187 @@ export default function ProductsPage() {
           }}
         />
       )}
+      {stats && (
+        <StatsModal product={stats} onClose={() => setStats(null)} />
+      )}
     </div>
+  );
+}
+
+function StatsModal({
+  product,
+  onClose,
+}: {
+  product: Product;
+  onClose: () => void;
+}) {
+  const [range, setRange] = useState<'7d' | '30d' | '90d' | 'all'>('7d');
+  const [data, setData] = useState<ProductStats | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    setLoading(true);
+    setErr(null);
+    api
+      .productStats(product.id, range)
+      .then(setData)
+      .catch((e) => setErr(String(e)))
+      .finally(() => setLoading(false));
+  }, [product.id, range]);
+
+  return (
+    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-auto">
+      <div className="card w-full max-w-3xl my-8 flex flex-col">
+        <div className="px-6 pt-5 pb-3 border-b border-black/5 flex items-start justify-between">
+          <div>
+            <div className="eyebrow text-rose mb-1">Статистика</div>
+            <div className="font-serif text-2xl">{product.name}</div>
+            <div className="text-xs text-ink2 mt-1">{product.brand}</div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-ink2 hover:text-ink text-lg leading-none"
+          >
+            ×
+          </button>
+        </div>
+        <div className="px-6 pt-4 flex gap-2 text-sm">
+          {(['7d', '30d', '90d', 'all'] as const).map((r) => (
+            <button
+              key={r}
+              type="button"
+              onClick={() => setRange(r)}
+              className={`px-3 py-1 rounded-full transition-colors ${
+                range === r
+                  ? 'bg-rose text-white'
+                  : 'bg-white border border-black/10 text-ink2 hover:text-ink'
+              }`}
+            >
+              {
+                {
+                  '7d': '7 дней',
+                  '30d': '30 дней',
+                  '90d': '90 дней',
+                  all: 'Всё время',
+                }[r]
+              }
+            </button>
+          ))}
+        </div>
+
+        {loading ? (
+          <div className="p-8 text-center text-ink2">Загрузка…</div>
+        ) : err ? (
+          <div className="m-6 p-4 text-warning bg-warning/10 rounded-xl">
+            {err}
+          </div>
+        ) : data ? (
+          <>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 px-6 pt-4">
+              <Stat label="Показы" value={data.totals.impressions} />
+              <Stat label="Открытия" value={data.totals.opens} />
+              <Stat label="Купить" value={data.totals.buy_clicks} />
+              <Stat
+                label="Уникальные"
+                value={data.totals.unique_openers}
+                hint="разные пользователи"
+              />
+            </div>
+            <div className="px-6 py-6">
+              <div className="eyebrow mb-3">По дням</div>
+              <DailyChart points={data.daily} />
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function Stat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: number;
+  hint?: string;
+}) {
+  return (
+    <div className="stat-tile">
+      <div className="eyebrow">{label}</div>
+      <div className="font-serif text-3xl leading-none">
+        {value.toLocaleString('ru-RU')}
+      </div>
+      {hint && <div className="text-[11px] text-ink2">{hint}</div>}
+    </div>
+  );
+}
+
+function DailyChart({ points }: { points: DailyPoint[] }) {
+  if (points.length === 0) {
+    return (
+      <div className="text-center text-ink2 py-6">
+        За период ничего не зафиксировано.
+      </div>
+    );
+  }
+  const max = Math.max(
+    ...points.map((p) =>
+      Math.max(p.impressions, p.opens, p.buy_clicks, 1)
+    )
+  );
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-end gap-1 h-40">
+        {points.map((p) => {
+          const ih = (p.impressions / max) * 100;
+          const oh = (p.opens / max) * 100;
+          const bh = (p.buy_clicks / max) * 100;
+          return (
+            <div
+              key={p.day}
+              className="flex-1 flex flex-col items-stretch gap-px"
+              title={`${p.day}\nПоказы: ${p.impressions}\nОткрытия: ${p.opens}\nКупить: ${p.buy_clicks}`}
+            >
+              <div className="flex-1 flex items-end gap-px">
+                <div
+                  className="flex-1 bg-blush-2 rounded-sm"
+                  style={{ height: `${ih}%` }}
+                />
+                <div
+                  className="flex-1 bg-accent/70 rounded-sm"
+                  style={{ height: `${oh}%` }}
+                />
+                <div
+                  className="flex-1 bg-rose rounded-sm"
+                  style={{ height: `${bh}%` }}
+                />
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div className="flex justify-between text-[10px] text-ink2 font-mono mt-1">
+        <span>{points[0].day}</span>
+        <span>{points[points.length - 1].day}</span>
+      </div>
+      <div className="flex gap-4 text-xs text-ink2 pt-1">
+        <Legend color="bg-blush-2" label="Показы" />
+        <Legend color="bg-accent/70" label="Открытия" />
+        <Legend color="bg-rose" label="Купить" />
+      </div>
+    </div>
+  );
+}
+
+function Legend({ color, label }: { color: string; label: string }) {
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className={`w-2.5 h-2.5 rounded-sm ${color}`} />
+      {label}
+    </span>
   );
 }
 
@@ -243,8 +439,32 @@ function ProductFormModal({
   );
   const [gentle, setGentle] = useState(initial?.gentle ?? false);
   const [buyUrl, setBuyUrl] = useState(initial?.buy_url ?? '');
+  const [photoUrl, setPhotoUrl] = useState<string | null>(
+    initial?.has_photo ? api.productPhotoUrl(initial.id) : null
+  );
+  const [photoFile, setPhotoFile] = useState<{
+    dataUrl: string;
+    mime: string;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 6 * 1024 * 1024) {
+      setErr('Фото слишком большое (>6MB)');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      setPhotoUrl(dataUrl);
+      setPhotoFile({ dataUrl, mime: file.type || 'image/jpeg' });
+      setErr(null);
+    };
+    reader.readAsDataURL(file);
+  }
 
   function autoSlug(v: string) {
     if (initial) return; // don't surprise the user on edit
@@ -277,10 +497,12 @@ function ProductFormModal({
         gentle,
         buy_url: buyUrl.trim() ? buyUrl.trim() : null,
       };
-      if (initial) {
-        await api.updateProduct(initial.id, input);
-      } else {
-        await api.createProduct(input);
+      const saved = initial
+        ? await api.updateProduct(initial.id, input)
+        : await api.createProduct(input);
+      if (photoFile) {
+        const b64 = photoFile.dataUrl.split(',')[1] ?? '';
+        await api.uploadProductPhoto(saved.id, 1, b64, photoFile.mime);
       }
       onSaved();
     } catch (e) {
@@ -447,6 +669,36 @@ function ProductFormModal({
             />
             <span className="text-sm">Подходит чувствительной коже</span>
           </label>
+
+          <Field label="Фото" className="col-span-2">
+            <div className="flex items-center gap-4">
+              <div className="w-24 h-24 rounded-xl border border-black/10 bg-blush/40 overflow-hidden flex items-center justify-center text-ink2 text-xs">
+                {photoUrl ? (
+                  <img
+                    src={photoUrl}
+                    alt=""
+                    className="w-full h-full object-cover"
+                  />
+                ) : (
+                  'Нет фото'
+                )}
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="btn-ghost text-sm h-9 cursor-pointer">
+                  {photoUrl ? 'Заменить' : 'Загрузить'}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={onPickFile}
+                  />
+                </label>
+                <div className="text-[11px] text-ink2">
+                  Изменение фото снова отправит товар на модерацию.
+                </div>
+              </div>
+            </div>
+          </Field>
         </div>
 
         {err && (
