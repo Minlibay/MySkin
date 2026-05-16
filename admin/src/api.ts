@@ -406,6 +406,10 @@ export type AdminProduct = {
   moderation_status?: 'approved' | 'pending' | 'rejected';
   moderation_reason?: string | null;
   submitted_by_partner_id?: string | null;
+  composition?: string | null;
+  precautions?: string | null;
+  usage?: string | null;
+  extra_info?: string | null;
 };
 
 export type ProductInput = {
@@ -424,6 +428,10 @@ export type ProductInput = {
   routine_phase?: string;
   status?: 'draft' | 'published';
   buy_url?: string | null;
+  composition?: string | null;
+  precautions?: string | null;
+  usage?: string | null;
+  extra_info?: string | null;
 };
 
 export const PRODUCT_KINDS: Array<{ id: string; label: string }> = [

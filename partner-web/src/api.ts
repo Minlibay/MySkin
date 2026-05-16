@@ -97,6 +97,10 @@ export type Product = {
   buy_url: string | null;
   moderation_status: 'approved' | 'pending' | 'rejected';
   moderation_reason: string | null;
+  composition: string | null;
+  precautions: string | null;
+  usage: string | null;
+  extra_info: string | null;
 };
 
 export type ProductInput = {
@@ -113,6 +117,10 @@ export type ProductInput = {
   skin_types?: string[];
   ingredients?: string[];
   buy_url?: string | null;
+  composition?: string | null;
+  precautions?: string | null;
+  usage?: string | null;
+  extra_info?: string | null;
 };
 
 export type StatTotals = {

@@ -47,6 +47,10 @@ export default function ProductForm({
     initial?.routine_phase ?? 'any'
   );
   const [buyUrl, setBuyUrl] = useState(initial?.buy_url ?? '');
+  const [composition, setComposition] = useState(initial?.composition ?? '');
+  const [precautions, setPrecautions] = useState(initial?.precautions ?? '');
+  const [usage, setUsage] = useState(initial?.usage ?? '');
+  const [extraInfo, setExtraInfo] = useState(initial?.extra_info ?? '');
   const [isActive, setIsActive] = useState(initial?.is_active ?? false);
   const [gentle, setGentle] = useState(initial?.gentle ?? false);
   const [tags, setTags] = useState<string[]>(initial?.tags ?? []);
@@ -164,6 +168,10 @@ export default function ProductForm({
           ingredients,
           status,
           buy_url: buyUrl.trim() ? buyUrl.trim() : null,
+          composition: composition.trim() ? composition.trim() : null,
+          precautions: precautions.trim() ? precautions.trim() : null,
+          usage: usage.trim() ? usage.trim() : null,
+          extra_info: extraInfo.trim() ? extraInfo.trim() : null,
         },
         photo,
         extraPhotos,
@@ -355,6 +363,44 @@ export default function ProductForm({
               value={buyUrl}
               onChange={(e) => setBuyUrl(e.target.value)}
               placeholder="https://"
+            />
+          </Field>
+
+          <Field
+            label="О составе"
+            help="Развёрнутый текст о составе. Лина использует это для подбора и объяснений."
+          >
+            <textarea
+              className="input min-h-[100px] py-2"
+              value={composition}
+              onChange={(e) => setComposition(e.target.value)}
+            />
+          </Field>
+
+          <Field
+            label="Меры предосторожности"
+            help="Противопоказания, аллергии, беременность, тест на запястье и т.п. Лина учитывает их при рекомендациях."
+          >
+            <textarea
+              className="input min-h-[80px] py-2"
+              value={precautions}
+              onChange={(e) => setPrecautions(e.target.value)}
+            />
+          </Field>
+
+          <Field label="Как пользоваться">
+            <textarea
+              className="input min-h-[80px] py-2"
+              value={usage}
+              onChange={(e) => setUsage(e.target.value)}
+            />
+          </Field>
+
+          <Field label="Дополнительная информация">
+            <textarea
+              className="input min-h-[60px] py-2"
+              value={extraInfo}
+              onChange={(e) => setExtraInfo(e.target.value)}
             />
           </Field>
 

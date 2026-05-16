@@ -439,17 +439,42 @@ function ProductFormModal({
   );
   const [gentle, setGentle] = useState(initial?.gentle ?? false);
   const [buyUrl, setBuyUrl] = useState(initial?.buy_url ?? '');
-  const [photoUrl, setPhotoUrl] = useState<string | null>(
-    initial?.has_photo ? api.productPhotoUrl(initial.id) : null
-  );
-  const [photoFile, setPhotoFile] = useState<{
-    dataUrl: string;
+  const [composition, setComposition] = useState(initial?.composition ?? '');
+  const [precautions, setPrecautions] = useState(initial?.precautions ?? '');
+  const [usage, setUsage] = useState(initial?.usage ?? '');
+  const [extraInfo, setExtraInfo] = useState(initial?.extra_info ?? '');
+
+  // Slot 1 = primary photo (drives has_photo). Slots 2-4 are additional
+  // angles. For each: dataUrl is what we show, mime + changed track whether
+  // the user actually picked a new file (so we don't re-upload untouched
+  // slots on save).
+  type SlotState = {
+    dataUrl: string | null;
     mime: string;
-  } | null>(null);
+    changed: boolean;
+    removed: boolean;
+  };
+  const initialPhoto = initial?.has_photo
+    ? api.productPhotoUrl(initial.id, 1)
+    : null;
+  const [slots, setSlots] = useState<SlotState[]>(() =>
+    [1, 2, 3, 4].map((slot) => ({
+      dataUrl:
+        slot === 1
+          ? initialPhoto
+          : initial?.has_photo
+          ? null
+          : null, // slot >=2 are loaded lazily — leave null; partner UI shows "Нет фото"
+      mime: 'image/jpeg',
+      changed: false,
+      removed: false,
+    }))
+  );
+
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
+  function onPickFile(slot: number, e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 6 * 1024 * 1024) {
@@ -459,11 +484,31 @@ function ProductFormModal({
     const reader = new FileReader();
     reader.onload = () => {
       const dataUrl = reader.result as string;
-      setPhotoUrl(dataUrl);
-      setPhotoFile({ dataUrl, mime: file.type || 'image/jpeg' });
+      setSlots((prev) =>
+        prev.map((s, i) =>
+          i === slot - 1
+            ? {
+                dataUrl,
+                mime: file.type || 'image/jpeg',
+                changed: true,
+                removed: false,
+              }
+            : s
+        )
+      );
       setErr(null);
     };
     reader.readAsDataURL(file);
+  }
+
+  function onRemoveSlot(slot: number) {
+    setSlots((prev) =>
+      prev.map((s, i) =>
+        i === slot - 1
+          ? { dataUrl: null, mime: 'image/jpeg', changed: false, removed: true }
+          : s
+      )
+    );
   }
 
   function autoSlug(v: string) {
@@ -496,13 +541,26 @@ function ProductFormModal({
         routine_phase: routinePhase,
         gentle,
         buy_url: buyUrl.trim() ? buyUrl.trim() : null,
+        composition: composition.trim() ? composition.trim() : null,
+        precautions: precautions.trim() ? precautions.trim() : null,
+        usage: usage.trim() ? usage.trim() : null,
+        extra_info: extraInfo.trim() ? extraInfo.trim() : null,
       };
       const saved = initial
         ? await api.updateProduct(initial.id, input)
         : await api.createProduct(input);
-      if (photoFile) {
-        const b64 = photoFile.dataUrl.split(',')[1] ?? '';
-        await api.uploadProductPhoto(saved.id, 1, b64, photoFile.mime);
+      // Upload only the slots the user actually changed; delete those they
+      // explicitly removed. Sequentially to keep error reporting simple —
+      // the photo set is at most four files.
+      for (let i = 0; i < slots.length; i++) {
+        const s = slots[i];
+        const slot = i + 1;
+        if (s.changed && s.dataUrl) {
+          const b64 = s.dataUrl.split(',')[1] ?? '';
+          await api.uploadProductPhoto(saved.id, slot, b64, s.mime);
+        } else if (s.removed) {
+          await api.deleteProductPhoto(saved.id, slot);
+        }
       }
       onSaved();
     } catch (e) {
@@ -670,34 +728,101 @@ function ProductFormModal({
             <span className="text-sm">Подходит чувствительной коже</span>
           </label>
 
-          <Field label="Фото" className="col-span-2">
-            <div className="flex items-center gap-4">
-              <div className="w-24 h-24 rounded-xl border border-black/10 bg-blush/40 overflow-hidden flex items-center justify-center text-ink2 text-xs">
-                {photoUrl ? (
-                  <img
-                    src={photoUrl}
-                    alt=""
-                    className="w-full h-full object-cover"
-                  />
-                ) : (
-                  'Нет фото'
-                )}
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="btn-ghost text-sm h-9 cursor-pointer">
-                  {photoUrl ? 'Заменить' : 'Загрузить'}
-                  <input
-                    type="file"
-                    accept="image/*"
-                    className="hidden"
-                    onChange={onPickFile}
-                  />
-                </label>
-                <div className="text-[11px] text-ink2">
-                  Изменение фото снова отправит товар на модерацию.
-                </div>
-              </div>
+          <Field label="Фото (до 4 ракурсов)" className="col-span-2">
+            <div className="grid grid-cols-4 gap-3">
+              {slots.map((s, i) => {
+                const slot = i + 1;
+                const src =
+                  s.dataUrl ??
+                  (initial?.has_photo && slot >= 2 && !s.removed
+                    ? api.productPhotoUrl(initial.id, slot)
+                    : null);
+                return (
+                  <div
+                    key={slot}
+                    className="flex flex-col gap-1.5 items-stretch"
+                  >
+                    <div className="aspect-square rounded-xl border border-black/10 bg-blush/40 overflow-hidden flex items-center justify-center text-ink2 text-xs relative">
+                      {src ? (
+                        // Hide on image load error — slot 2-4 may not exist
+                        // on the server, the <img> 404s silently.
+                        <img
+                          src={src}
+                          alt=""
+                          className="w-full h-full object-cover"
+                          onError={(e) =>
+                            (e.currentTarget.style.display = 'none')
+                          }
+                        />
+                      ) : (
+                        <span>Слот {slot}</span>
+                      )}
+                    </div>
+                    <label className="text-xs text-center text-rose cursor-pointer hover:underline">
+                      {src ? 'Заменить' : 'Загрузить'}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => onPickFile(slot, e)}
+                      />
+                    </label>
+                    {src && (
+                      <button
+                        type="button"
+                        onClick={() => onRemoveSlot(slot)}
+                        className="text-[11px] text-ink2 hover:text-warning"
+                      >
+                        Удалить
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
             </div>
+            <div className="text-[11px] text-ink2 mt-2">
+              Любая правка фото снова отправит товар на модерацию.
+            </div>
+          </Field>
+
+          <Field
+            label="О составе"
+            className="col-span-2"
+            help="Развёрнутый текст о составе. Лина использует это для подбора и объяснений."
+          >
+            <textarea
+              className="input min-h-[100px] py-2"
+              value={composition}
+              onChange={(e) => setComposition(e.target.value)}
+            />
+          </Field>
+
+          <Field
+            label="Меры предосторожности"
+            className="col-span-2"
+            help="Противопоказания, аллергии, беременность и т.п. Лина учтёт при рекомендациях."
+          >
+            <textarea
+              className="input min-h-[80px] py-2"
+              value={precautions}
+              onChange={(e) => setPrecautions(e.target.value)}
+            />
+          </Field>
+
+          <Field label="Как пользоваться" className="col-span-2">
+            <textarea
+              className="input min-h-[80px] py-2"
+              value={usage}
+              onChange={(e) => setUsage(e.target.value)}
+            />
+          </Field>
+
+          <Field label="Дополнительная информация" className="col-span-2">
+            <textarea
+              className="input min-h-[60px] py-2"
+              value={extraInfo}
+              onChange={(e) => setExtraInfo(e.target.value)}
+            />
           </Field>
         </div>
 
@@ -728,15 +853,20 @@ function Field({
   label,
   children,
   className,
+  help,
 }: {
   label: string;
   children: React.ReactNode;
   className?: string;
+  help?: string;
 }) {
   return (
     <label className={`block ${className ?? ''}`}>
       <div className="eyebrow mb-1.5">{label}</div>
       {children}
+      {help && (
+        <div className="text-[11px] text-ink2 mt-1.5">{help}</div>
+      )}
     </label>
   );
 }

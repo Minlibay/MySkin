@@ -519,6 +519,18 @@ class AdminHandlers {
       buyUrl: (body['buy_url'] as String?)?.trim().isNotEmpty == true
           ? (body['buy_url'] as String).trim()
           : null,
+      composition: (body['composition'] as String?)?.trim().isNotEmpty == true
+          ? (body['composition'] as String).trim()
+          : null,
+      precautions: (body['precautions'] as String?)?.trim().isNotEmpty == true
+          ? (body['precautions'] as String).trim()
+          : null,
+      usage: (body['usage'] as String?)?.trim().isNotEmpty == true
+          ? (body['usage'] as String).trim()
+          : null,
+      extraInfo: (body['extra_info'] as String?)?.trim().isNotEmpty == true
+          ? (body['extra_info'] as String).trim()
+          : null,
     );
     await products.upsert(p);
     return jsonResponse(200, p.toJson());
@@ -866,6 +878,15 @@ class AiHandlers {
               'kind': e.p.kind,
               'tags': e.p.tags,
               'match_score': e.score,
+              // Long-form fields Лина leans on for ingredient-aware advice
+              // and contraindication warnings. Omitted when empty so the
+              // model doesn't waste tokens on "null"s.
+              if (e.p.composition != null && e.p.composition!.isNotEmpty)
+                'composition': e.p.composition,
+              if (e.p.precautions != null && e.p.precautions!.isNotEmpty)
+                'precautions': e.p.precautions,
+              if (e.p.usage != null && e.p.usage!.isNotEmpty)
+                'usage': e.p.usage,
             })
         .toList();
     final recentScans = await scans.listForUser(user.id, limit: 1);
@@ -901,7 +922,12 @@ class AiHandlers {
       jsonEncode(catalogHint),
       '',
       'Когда уместно, упоминай эти продукты по бренду и названию. '
-          'Не выдумывай продукты, которых нет в списке.',
+          'Не выдумывай продукты, которых нет в списке. '
+          'Если у продукта есть поле precautions — обязательно учитывай '
+          'противопоказания, прежде чем рекомендовать (беременность, '
+          'аллергии, чувствительная кожа и т.п.). Поле composition можешь '
+          'использовать, чтобы объяснить, почему продукт подходит; поле '
+          'usage — чтобы кратко напомнить, как применять.',
     ].join('\n');
 
     try {
@@ -2283,6 +2309,18 @@ class PartnerHandlers {
           ((body['skin_types'] as List?) ?? const []).cast<String>(),
       ingredients:
           ((body['ingredients'] as List?) ?? const []).cast<String>(),
+      composition: (body['composition'] as String?)?.trim().isNotEmpty == true
+          ? (body['composition'] as String).trim()
+          : null,
+      precautions: (body['precautions'] as String?)?.trim().isNotEmpty == true
+          ? (body['precautions'] as String).trim()
+          : null,
+      usage: (body['usage'] as String?)?.trim().isNotEmpty == true
+          ? (body['usage'] as String).trim()
+          : null,
+      extraInfo: (body['extra_info'] as String?)?.trim().isNotEmpty == true
+          ? (body['extra_info'] as String).trim()
+          : null,
     );
     if (created == null) {
       return jsonResponse(409, {'error': 'slug_taken'});

@@ -25,6 +25,10 @@ class Product {
     this.isFavorite = false,
     this.photoSlots = const [],
     this.buyUrl,
+    this.composition,
+    this.precautions,
+    this.usage,
+    this.extraInfo,
   });
 
   final String id;
@@ -68,6 +72,14 @@ class Product {
   /// hidden — works as a graceful fallback for legacy/admin-managed
   /// products that aren't owned by a partner.
   final String? buyUrl;
+
+  /// Long-form product copy filled in by the partner (or admin). All four
+  /// are optional — empty sections hide in the detail screen, and Лина
+  /// only sees them when they have content.
+  final String? composition;
+  final String? precautions;
+  final String? usage;
+  final String? extraInfo;
 
   factory Product.fromJson(Map<String, dynamic> j) {
     Color parseColor(String hex) {
@@ -115,7 +127,17 @@ class Product {
       buyUrl: (j['buy_url'] as String?)?.trim().isNotEmpty == true
           ? (j['buy_url'] as String).trim()
           : null,
+      composition: _stringOrNull(j['composition']),
+      precautions: _stringOrNull(j['precautions']),
+      usage: _stringOrNull(j['usage']),
+      extraInfo: _stringOrNull(j['extra_info']),
     );
+  }
+
+  static String? _stringOrNull(Object? v) {
+    if (v is! String) return null;
+    final t = v.trim();
+    return t.isEmpty ? null : t;
   }
 
   String get kindLabel => switch (kind) {

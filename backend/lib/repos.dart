@@ -1141,6 +1141,10 @@ class ProductRow {
     this.moderationStatus = 'approved',
     this.moderationReason,
     this.submittedByPartnerId,
+    this.composition,
+    this.precautions,
+    this.usage,
+    this.extraInfo,
   });
 
   final String id;
@@ -1163,6 +1167,10 @@ class ProductRow {
   final String moderationStatus; // approved | pending | rejected
   final String? moderationReason;
   final String? submittedByPartnerId;
+  final String? composition;
+  final String? precautions;
+  final String? usage;
+  final String? extraInfo;
 
   static ProductRow fromRow(List<dynamic> r) {
     List<String> arr(int i) =>
@@ -1189,6 +1197,10 @@ class ProductRow {
           r.length > 17 ? (r[17] as String? ?? 'approved') : 'approved',
       moderationReason: r.length > 18 ? r[18] as String? : null,
       submittedByPartnerId: r.length > 19 ? r[19] as String? : null,
+      composition: r.length > 20 ? r[20] as String? : null,
+      precautions: r.length > 21 ? r[21] as String? : null,
+      usage: r.length > 22 ? r[22] as String? : null,
+      extraInfo: r.length > 23 ? r[23] as String? : null,
     );
   }
 
@@ -1213,6 +1225,10 @@ class ProductRow {
         'moderation_status': moderationStatus,
         'moderation_reason': moderationReason,
         'submitted_by_partner_id': submittedByPartnerId,
+        'composition': composition,
+        'precautions': precautions,
+        'usage': usage,
+        'extra_info': extraInfo,
       };
 }
 
@@ -1224,7 +1240,8 @@ class ProductRepository {
       'id, slug, brand, name, kind, description, price_rub, accent_color, '
       'ingredients, tags, skin_types, is_active_ingredient, gentle, '
       'routine_phase, status, photo IS NOT NULL, buy_url, moderation_status, '
-      'moderation_reason, submitted_by_partner_id';
+      'moderation_reason, submitted_by_partner_id, composition, precautions, '
+      'usage_instructions, extra_info';
 
   Future<List<ProductRow>> list({
     String? kind,
@@ -1302,6 +1319,10 @@ class ProductRepository {
     List<String> tags = const [],
     List<String> skinTypes = const [],
     List<String> ingredients = const [],
+    String? composition,
+    String? precautions,
+    String? usage,
+    String? extraInfo,
   }) async {
     final id = _uuid.v4();
     try {
@@ -1311,11 +1332,13 @@ class ProductRepository {
             id, slug, brand, name, kind, description, price_rub, accent_color,
             ingredients, tags, skin_types, is_active_ingredient, gentle,
             routine_phase, status, buy_url, brand_id, submitted_by_partner_id,
-            moderation_status, submitted_at
+            moderation_status, submitted_at, composition, precautions,
+            usage_instructions, extra_info
           ) VALUES (
             @id, @slug, @brand, @name, @kind, @desc, @price, @ac,
             @ing::jsonb, @tags::jsonb, @st::jsonb, @ai, @g, @rp, 'draft',
-            @buy_url, @brand_id, @partner, 'pending', now()
+            @buy_url, @brand_id, @partner, 'pending', now(),
+            @comp, @prec, @use, @extra
           )
         '''),
         parameters: {
@@ -1336,6 +1359,10 @@ class ProductRepository {
           'buy_url': buyUrl,
           'brand_id': brandId,
           'partner': partnerId,
+          'comp': composition,
+          'prec': precautions,
+          'use': usage,
+          'extra': extraInfo,
         },
       );
       return findById(id);
@@ -1382,6 +1409,19 @@ class ProductRepository {
           ? patch['buy_url'] as String?
           : existing.buyUrl,
     );
+    // Long-form fields use patch.containsKey so passing null explicitly
+    // clears them, while omitting the key keeps the prior value.
+    final composition = patch.containsKey('composition')
+        ? patch['composition'] as String?
+        : existing.composition;
+    final precautions = patch.containsKey('precautions')
+        ? patch['precautions'] as String?
+        : existing.precautions;
+    final usage =
+        patch.containsKey('usage') ? patch['usage'] as String? : existing.usage;
+    final extraInfo = patch.containsKey('extra_info')
+        ? patch['extra_info'] as String?
+        : existing.extraInfo;
     await db.execute(
       Sql.named('''
         UPDATE products SET
@@ -1391,6 +1431,10 @@ class ProductRepository {
           skin_types = @st::jsonb,
           gentle = @g, routine_phase = @rp,
           buy_url = @buy_url,
+          composition = @comp,
+          precautions = @prec,
+          usage_instructions = @use,
+          extra_info = @extra,
           status = 'draft',
           moderation_status = 'pending',
           moderation_reason = NULL,
@@ -1412,6 +1456,10 @@ class ProductRepository {
         'g': patched.gentle,
         'rp': patched.routinePhase,
         'buy_url': patched.buyUrl,
+        'comp': composition,
+        'prec': precautions,
+        'use': usage,
+        'extra': extraInfo,
       },
     );
   }
@@ -1662,6 +1710,17 @@ class ProductRepository {
           ? patch['buy_url'] as String?
           : existing.buyUrl,
     );
+    final composition = patch.containsKey('composition')
+        ? patch['composition'] as String?
+        : existing.composition;
+    final precautions = patch.containsKey('precautions')
+        ? patch['precautions'] as String?
+        : existing.precautions;
+    final usage =
+        patch.containsKey('usage') ? patch['usage'] as String? : existing.usage;
+    final extraInfo = patch.containsKey('extra_info')
+        ? patch['extra_info'] as String?
+        : existing.extraInfo;
     await db.execute(
       Sql.named('''
         UPDATE products SET
@@ -1670,7 +1729,9 @@ class ProductRepository {
           ingredients = @ing::jsonb, tags = @tags::jsonb,
           skin_types = @st::jsonb,
           is_active_ingredient = @ai, gentle = @g, routine_phase = @rp,
-          status = @status, buy_url = @buy_url
+          status = @status, buy_url = @buy_url,
+          composition = @comp, precautions = @prec,
+          usage_instructions = @use, extra_info = @extra
         WHERE id = @id
       '''),
       parameters: {
@@ -1689,6 +1750,10 @@ class ProductRepository {
         'rp': updated.routinePhase,
         'status': updated.status,
         'buy_url': updated.buyUrl,
+        'comp': composition,
+        'prec': precautions,
+        'use': usage,
+        'extra': extraInfo,
       },
     );
     return updated;
@@ -1700,11 +1765,12 @@ class ProductRepository {
         INSERT INTO products (
           id, slug, brand, name, kind, description, price_rub, accent_color,
           ingredients, tags, skin_types, is_active_ingredient, gentle,
-          routine_phase, status, buy_url
+          routine_phase, status, buy_url, composition, precautions,
+          usage_instructions, extra_info
         ) VALUES (
           @id, @slug, @brand, @name, @kind, @desc, @price, @ac,
           @ing::jsonb, @tags::jsonb, @st::jsonb, @ai, @g, @rp, @status,
-          @buy_url
+          @buy_url, @comp, @prec, @use, @extra
         )
         ON CONFLICT (slug) DO UPDATE SET
           brand = EXCLUDED.brand, name = EXCLUDED.name, kind = EXCLUDED.kind,
@@ -1713,7 +1779,11 @@ class ProductRepository {
           tags = EXCLUDED.tags, skin_types = EXCLUDED.skin_types,
           is_active_ingredient = EXCLUDED.is_active_ingredient,
           gentle = EXCLUDED.gentle, routine_phase = EXCLUDED.routine_phase,
-          status = EXCLUDED.status, buy_url = EXCLUDED.buy_url
+          status = EXCLUDED.status, buy_url = EXCLUDED.buy_url,
+          composition = EXCLUDED.composition,
+          precautions = EXCLUDED.precautions,
+          usage_instructions = EXCLUDED.usage_instructions,
+          extra_info = EXCLUDED.extra_info
       '''),
       parameters: {
         'id': p.id,
@@ -1732,6 +1802,10 @@ class ProductRepository {
         'rp': p.routinePhase,
         'status': p.status,
         'buy_url': p.buyUrl,
+        'comp': p.composition,
+        'prec': p.precautions,
+        'use': p.usage,
+        'extra': p.extraInfo,
       },
     );
   }

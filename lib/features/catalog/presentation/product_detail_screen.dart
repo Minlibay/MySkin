@@ -249,6 +249,35 @@ class _Body extends StatelessWidget {
               const SizedBox(height: 8),
               Text(product.description, style: AppTypography.body),
             ],
+            if (product.composition != null) ...[
+              const SizedBox(height: AppSpacing.lg),
+              _LongFormSection(
+                title: 'О составе',
+                body: product.composition!,
+              ),
+            ],
+            if (product.usage != null) ...[
+              const SizedBox(height: AppSpacing.lg),
+              _LongFormSection(
+                title: 'Как пользоваться',
+                body: product.usage!,
+              ),
+            ],
+            if (product.precautions != null) ...[
+              const SizedBox(height: AppSpacing.lg),
+              _LongFormSection(
+                title: 'Меры предосторожности',
+                body: product.precautions!,
+                emphasis: true,
+              ),
+            ],
+            if (product.extraInfo != null) ...[
+              const SizedBox(height: AppSpacing.lg),
+              _LongFormSection(
+                title: 'Дополнительно',
+                body: product.extraInfo!,
+              ),
+            ],
           ],
         ),
         Positioned(
@@ -662,6 +691,46 @@ class _FitRow extends StatelessWidget {
               ),
             ),
           ),
+        ],
+      ),
+    );
+  }
+}
+
+/// One of the long-form sections (composition / usage / precautions /
+/// extra). Plain card; the precautions variant uses the warning palette
+/// so users actually notice contraindications.
+class _LongFormSection extends StatelessWidget {
+  const _LongFormSection({
+    required this.title,
+    required this.body,
+    this.emphasis = false,
+  });
+  final String title;
+  final String body;
+  final bool emphasis;
+
+  @override
+  Widget build(BuildContext context) {
+    final bg = emphasis ? AppColors.warning.withOpacity(0.08) : AppColors.surface;
+    final border = emphasis
+        ? AppColors.warning.withOpacity(0.3)
+        : AppColors.divider;
+    final eyebrow = emphasis ? AppColors.warning : null;
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 18),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          EyebrowText(title, color: eyebrow),
+          const SizedBox(height: 8),
+          Text(body, style: AppTypography.body.copyWith(height: 1.5)),
         ],
       ),
     );
