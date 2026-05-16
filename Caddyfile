@@ -21,10 +21,10 @@ admin.xn--80allhkb1j.xn--p1ai {
     reverse_proxy admin:80
 }
 
-# partner.моякожа.рф — partner SPA. Punycode below; кириллица в браузере
-# отображается автоматически. Replace this hostname if the apex domain
-# of the project differs.
-partner.xn--80aafdpbnbtbcvu1f.xn--p1ai {
+# partner.моякожа.рф — partner SPA. Caddy 2 accepts raw IDN in the site
+# address and converts to punycode internally, so we keep the human form
+# to avoid Punycode-mismatch bugs.
+partner.моякожа.рф {
     encode zstd gzip
     reverse_proxy partner:80
 }
