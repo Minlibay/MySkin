@@ -36,6 +36,9 @@ void main(List<String> args) async {
   final appSettings = AppSettingsRepository(pool);
   final notifications = NotificationRepository(pool);
   final chatMessages = ChatMessageRepository(pool);
+  final partners = PartnerRepository(pool);
+  final brands = BrandRepository(pool);
+  final productEvents = ProductEventRepository(pool);
 
   final auth = AuthHandlers(
     users: users,
@@ -53,6 +56,14 @@ void main(List<String> args) async {
     products: products,
     otps: otps,
     appSettings: appSettings,
+    partners: partners,
+    brands: brands,
+  );
+  final partner = PartnerHandlers(
+    partners: partners,
+    brands: brands,
+    products: products,
+    events: productEvents,
   );
   final me = MeHandlers(
     sessions: sessions,
@@ -63,6 +74,7 @@ void main(List<String> args) async {
     users: users,
     scans: scans,
     chatMessages: chatMessages,
+    events: productEvents,
   );
   final catalog = CatalogHandlers(
     sessions: sessions,
@@ -112,7 +124,8 @@ void main(List<String> args) async {
     ..mount('/', catalog.router().call)
     ..mount('/', scanHandlers.router().call)
     ..mount('/', notificationHandlers.router().call)
-    ..mount('/', legalHandlers.router().call);
+    ..mount('/', legalHandlers.router().call)
+    ..mount('/', partner.router().call);
   if (ai != null) root.mount('/', ai.router().call);
 
   final allowedOrigins = (env['CORS_ALLOWED_ORIGINS'] ?? '*')

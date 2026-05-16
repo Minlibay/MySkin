@@ -46,6 +46,7 @@ export default function ProductForm({
   const [routinePhase, setRoutinePhase] = useState(
     initial?.routine_phase ?? 'any'
   );
+  const [buyUrl, setBuyUrl] = useState(initial?.buy_url ?? '');
   const [isActive, setIsActive] = useState(initial?.is_active ?? false);
   const [gentle, setGentle] = useState(initial?.gentle ?? false);
   const [tags, setTags] = useState<string[]>(initial?.tags ?? []);
@@ -162,6 +163,7 @@ export default function ProductForm({
           skin_types: skinTypes,
           ingredients,
           status,
+          buy_url: buyUrl.trim() ? buyUrl.trim() : null,
         },
         photo,
         extraPhotos,
@@ -341,6 +343,19 @@ export default function ProductForm({
                 placeholder="#D98FA3"
               />
             </div>
+          </Field>
+
+          <Field
+            label="Ссылка «Купить»"
+            help="Куда вести пользователя из приложения по кнопке Купить. Можно оставить пустым."
+          >
+            <input
+              type="url"
+              className="input"
+              value={buyUrl}
+              onChange={(e) => setBuyUrl(e.target.value)}
+              placeholder="https://"
+            />
           </Field>
 
           <Field label="Помогает с (теги для подбора)">
@@ -581,15 +596,20 @@ function ExtraPhotosRow({
 
 function Field({
   label,
+  help,
   children,
 }: {
   label: string;
+  help?: string;
   children: React.ReactNode;
 }) {
   return (
     <label className="block">
       <div className="eyebrow mb-1.5">{label}</div>
       {children}
+      {help && (
+        <div className="text-[11px] text-ink2 mt-1.5">{help}</div>
+      )}
     </label>
   );
 }

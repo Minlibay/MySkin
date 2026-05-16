@@ -24,6 +24,7 @@ class Product {
     this.status = 'published',
     this.isFavorite = false,
     this.photoSlots = const [],
+    this.buyUrl,
   });
 
   final String id;
@@ -62,6 +63,11 @@ class Product {
   /// means the product has no photos yet; one slot means single classic
   /// photo. Only present on /catalog/<slug> detail responses.
   final List<int> photoSlots;
+
+  /// External "Купить" URL for the in-app CTA. When null the button is
+  /// hidden — works as a graceful fallback for legacy/admin-managed
+  /// products that aren't owned by a partner.
+  final String? buyUrl;
 
   factory Product.fromJson(Map<String, dynamic> j) {
     Color parseColor(String hex) {
@@ -106,6 +112,9 @@ class Product {
       isFavorite: j['is_favorite'] as bool? ?? false,
       photoSlots:
           ((j['photo_slots'] as List?) ?? const []).map((e) => (e as num).toInt()).toList(),
+      buyUrl: (j['buy_url'] as String?)?.trim().isNotEmpty == true
+          ? (j['buy_url'] as String).trim()
+          : null,
     );
   }
 

@@ -281,6 +281,18 @@ class BackendApi {
 
   String scanPhotoUrl(String id) => '$baseUrl/me/scans/$id/photo';
 
+  /// Fire-and-forget catalog telemetry. Server validates kinds/surfaces and
+  /// dedups impressions by (product, session_key). Failures are caller's
+  /// problem to ignore — see ProductTelemetry.
+  Future<void> logProductEvents(List<Map<String, dynamic>> events) async {
+    if (events.isEmpty) return;
+    await _dio.post(
+      '$baseUrl/events/product',
+      data: {'events': events},
+      options: _auth(),
+    );
+  }
+
   /// Per-zone drill-down — Лина's take on a single face zone of one scan.
   /// `zone` is one of: forehead | tzone | left_cheek | right_cheek | chin.
   Future<ZoneInsight> fetchZoneInsight(String scanId, String zone) async {

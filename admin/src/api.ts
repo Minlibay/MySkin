@@ -298,6 +298,7 @@ export type AdminProduct = {
   status: 'draft' | 'published';
   has_photo: boolean;
   photo_slots?: number[];
+  buy_url?: string | null;
 };
 
 export type ProductInput = {
@@ -315,6 +316,7 @@ export type ProductInput = {
   gentle?: boolean;
   routine_phase?: string;
   status?: 'draft' | 'published';
+  buy_url?: string | null;
 };
 
 export const PRODUCT_KINDS: Array<{ id: string; label: string }> = [

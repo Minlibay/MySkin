@@ -7,6 +7,7 @@ import '../../../core/widgets/app_chip.dart';
 import '../../../core/widgets/eyebrow_text.dart';
 import '../../../core/widgets/feedback_state.dart';
 import '../../../core/widgets/glow_background.dart';
+import '../../../core/telemetry/product_telemetry.dart';
 import '../../api/backend_api.dart';
 import '../domain/product.dart';
 import 'product_bottle.dart';
@@ -109,10 +110,20 @@ class _CatalogScreenState extends ConsumerState<CatalogScreen> {
                           childAspectRatio: 0.62,
                         ),
                         itemCount: items.length,
-                        itemBuilder: (_, i) => _ProductCard(
-                          product: items[i],
-                          onTap: () => widget.onOpen(items[i]),
-                        ),
+                        itemBuilder: (_, i) {
+                          final p = items[i];
+                          final telemetry =
+                              ref.read(productTelemetryProvider);
+                          telemetry.impression(
+                              p.id, ProductSurface.catalog);
+                          return _ProductCard(
+                            product: p,
+                            onTap: () {
+                              telemetry.open(p.id, ProductSurface.catalog);
+                              widget.onOpen(p);
+                            },
+                          );
+                        },
                       );
                     },
                   ),

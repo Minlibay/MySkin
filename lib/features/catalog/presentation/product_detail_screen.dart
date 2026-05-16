@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
@@ -7,6 +8,7 @@ import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/eyebrow_text.dart';
 import '../../../core/widgets/feedback_state.dart';
 import '../../../core/widgets/glow_background.dart';
+import '../../../core/telemetry/product_telemetry.dart';
 import '../../api/backend_api.dart';
 import '../domain/product.dart';
 import 'product_bottle.dart';
@@ -38,6 +40,12 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
     _future = ref.read(backendApiProvider).getProduct(widget.slug).then((p) {
       // Seed favourite state from the server response once.
       if (mounted) setState(() => _favourite ??= p.isFavorite);
+      // Detail open is the strongest signal a partner has — fire impression
+      // + open the moment we have the resolved product id. Surfaces as
+      // product_detail so it's distinguishable from a catalog tap-through.
+      ref
+          .read(productTelemetryProvider)
+          .open(p.id, ProductSurface.productDetail);
       return p;
     });
   }
@@ -59,6 +67,26 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
         SnackBar(content: Text('Не получилось сохранить: $e')),
       );
     }
+  }
+
+  Future<void> _openBuyUrl(Product p) async {
+    final raw = p.buyUrl;
+    if (raw == null || raw.isEmpty) return;
+    // Fire buy_click before launching — leaving the app pauses the timer
+    // queue, so we flush right after to make sure the partner sees the
+    // event even if the user never comes back.
+    final telemetry = ref.read(productTelemetryProvider);
+    telemetry.buyClick(p.id, ProductSurface.productDetail);
+    await telemetry.flush();
+    final uri = Uri.tryParse(raw);
+    if (uri == null || !await canLaunchUrl(uri)) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Не удалось открыть ссылку')),
+      );
+      return;
+    }
+    await launchUrl(uri, mode: LaunchMode.externalApplication);
   }
 
   Future<void> _addToShelf(Product p) async {
@@ -113,6 +141,9 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
                       : () => _addToShelf(p),
                   addingToShelf: _addingToShelf,
                   onShelf: _onShelf,
+                  onBuy: (p.buyUrl != null && p.buyUrl!.isNotEmpty)
+                      ? () => _openBuyUrl(p)
+                      : null,
                   favourite: _favourite ?? p.isFavorite,
                   onToggleFavourite: () => _toggleFavourite(p),
                   expandedInci: _expandedInci,
@@ -139,6 +170,7 @@ class _Body extends StatelessWidget {
     required this.onToggleFavourite,
     required this.expandedInci,
     required this.onToggleInci,
+    this.onBuy,
   });
 
   final Product product;
@@ -150,6 +182,7 @@ class _Body extends StatelessWidget {
   final VoidCallback onToggleFavourite;
   final bool expandedInci;
   final VoidCallback onToggleInci;
+  final VoidCallback? onBuy;
 
   @override
   Widget build(BuildContext context) {
@@ -227,6 +260,7 @@ class _Body extends StatelessWidget {
             onShelf: onShelf,
             onAdd: onAdd,
             adding: addingToShelf,
+            onBuy: onBuy,
           ),
         ),
       ],
@@ -786,12 +820,17 @@ class _StickyBar extends StatelessWidget {
     required this.onShelf,
     required this.onAdd,
     required this.adding,
+    this.onBuy,
   });
 
   final int price;
   final bool onShelf;
   final VoidCallback? onAdd;
   final bool adding;
+
+  /// External-store CTA. When null we hide the "Купить" button entirely —
+  /// products without a buy URL just keep the shelf flow.
+  final VoidCallback? onBuy;
 
   String _formatPrice(int p) {
     final s = p.toString();
@@ -831,58 +870,135 @@ class _StickyBar extends StatelessWidget {
             ],
           ),
           const SizedBox(width: AppSpacing.md),
-          Expanded(
-            child: Material(
-              color: onShelf
-                  ? AppColors.primary
-                  : (onAdd == null
-                      ? AppColors.roseDeep.withOpacity(0.6)
-                      : AppColors.roseDeep),
-              borderRadius: BorderRadius.circular(99),
-              child: InkWell(
+          // When a buy URL exists, Купить is the primary action and "На полку"
+          // shrinks to a circular icon button to keep both reachable.
+          if (onBuy != null) ...[
+            _ShelfIconButton(
+              onAdd: onAdd,
+              onShelf: onShelf,
+              adding: adding,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Material(
+                color: AppColors.roseDeep,
                 borderRadius: BorderRadius.circular(99),
-                onTap: onAdd,
-                child: Container(
-                  height: 52,
-                  alignment: Alignment.center,
-                  child: adding
-                      ? const SizedBox(
-                          width: 22,
-                          height: 22,
-                          child: CircularProgressIndicator(
-                            color: Colors.white,
-                            strokeWidth: 2.4,
-                          ),
-                        )
-                      : Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Icon(
-                              onShelf
-                                  ? Icons.check_rounded
-                                  : Icons.add_rounded,
-                              size: 18,
-                              color: onShelf
-                                  ? AppColors.roseDeep
-                                  : Colors.white,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(99),
+                  onTap: onBuy,
+                  child: Container(
+                    height: 52,
+                    alignment: Alignment.center,
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text('Купить',
+                            style: AppTypography.button
+                                .copyWith(color: Colors.white)),
+                        const SizedBox(width: 8),
+                        const Icon(Icons.north_east_rounded,
+                            size: 18, color: Colors.white),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ] else
+            Expanded(
+              child: Material(
+                color: onShelf
+                    ? AppColors.primary
+                    : (onAdd == null
+                        ? AppColors.roseDeep.withOpacity(0.6)
+                        : AppColors.roseDeep),
+                borderRadius: BorderRadius.circular(99),
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(99),
+                  onTap: onAdd,
+                  child: Container(
+                    height: 52,
+                    alignment: Alignment.center,
+                    child: adding
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              color: Colors.white,
+                              strokeWidth: 2.4,
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              onShelf ? 'На полке' : 'На полку',
-                              style: AppTypography.button.copyWith(
+                          )
+                        : Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                onShelf
+                                    ? Icons.check_rounded
+                                    : Icons.add_rounded,
+                                size: 18,
                                 color: onShelf
                                     ? AppColors.roseDeep
                                     : Colors.white,
                               ),
-                            ),
-                          ],
-                        ),
+                              const SizedBox(width: 8),
+                              Text(
+                                onShelf ? 'На полке' : 'На полку',
+                                style: AppTypography.button.copyWith(
+                                  color: onShelf
+                                      ? AppColors.roseDeep
+                                      : Colors.white,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
                 ),
               ),
             ),
-          ),
         ],
+      ),
+    );
+  }
+}
+
+class _ShelfIconButton extends StatelessWidget {
+  const _ShelfIconButton({
+    required this.onAdd,
+    required this.onShelf,
+    required this.adding,
+  });
+  final VoidCallback? onAdd;
+  final bool onShelf;
+  final bool adding;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 52,
+      height: 52,
+      child: Material(
+        color: onShelf ? AppColors.primary : Colors.white,
+        shape: CircleBorder(
+          side: BorderSide(
+            color: onShelf ? AppColors.roseDeep : AppColors.divider,
+          ),
+        ),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onAdd,
+          child: adding
+              ? const Padding(
+                  padding: EdgeInsets.all(14),
+                  child: CircularProgressIndicator(strokeWidth: 2.2),
+                )
+              : Icon(
+                  onShelf ? Icons.check_rounded : Icons.add_rounded,
+                  color: AppColors.roseDeep,
+                  size: 22,
+                ),
+        ),
       ),
     );
   }

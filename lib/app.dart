@@ -418,6 +418,11 @@ class _AppShellState extends ConsumerState<_AppShell> {
         return ChatScreen(
           onBack: () => setState(() => _view = _Shell.home),
           onOpenScan: () => setState(() => _view = _Shell.scan),
+          onOpenProduct: (Product p) => setState(() {
+            _previousView = _Shell.chat;
+            _openProductSlug = p.slug;
+            _view = _Shell.productDetail;
+          }),
         );
       case _Shell.notifications:
         return NotificationsScreen(

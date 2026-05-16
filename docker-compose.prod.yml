@@ -18,6 +18,9 @@ services:
   admin:
     ports: !reset []
 
+  partner:
+    ports: !reset []
+
   adminer:
     profiles: ["disabled"]            # don't start in prod
 
@@ -28,6 +31,7 @@ services:
     depends_on:
       - backend
       - admin
+      - partner
     ports:
       - "80:80"
       - "443:443"

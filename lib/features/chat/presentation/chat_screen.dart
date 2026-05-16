@@ -4,6 +4,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
+import '../../../core/telemetry/product_telemetry.dart';
 import '../../../core/widgets/lina_avatar.dart';
 import '../../catalog/domain/product.dart';
 import '../../catalog/presentation/product_bottle.dart';
@@ -11,9 +12,18 @@ import '../domain/chat_message.dart';
 import 'chat_controller.dart';
 
 class ChatScreen extends ConsumerStatefulWidget {
-  const ChatScreen({super.key, required this.onBack, this.onOpenScan});
+  const ChatScreen({
+    super.key,
+    required this.onBack,
+    this.onOpenScan,
+    this.onOpenProduct,
+  });
   final VoidCallback onBack;
   final VoidCallback? onOpenScan;
+
+  /// Called when the user taps a Лина-recommended product card. Optional
+  /// — when null, the cards stay non-interactive (legacy behaviour).
+  final void Function(Product product)? onOpenProduct;
 
   @override
   ConsumerState<ChatScreen> createState() => _ChatScreenState();
@@ -235,6 +245,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       _Bubble(
                         message: state.messages[i],
                         onAction: _onActionTap,
+                        onOpenProduct: widget.onOpenProduct,
                       ),
                     ],
                   );
@@ -242,6 +253,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                 return _Bubble(
                   message: state.messages[i],
                   onAction: _onActionTap,
+                  onOpenProduct: widget.onOpenProduct,
                 );
               },
             ),
@@ -384,9 +396,14 @@ class _DayDivider extends StatelessWidget {
 }
 
 class _Bubble extends StatelessWidget {
-  const _Bubble({required this.message, required this.onAction});
+  const _Bubble({
+    required this.message,
+    required this.onAction,
+    this.onOpenProduct,
+  });
   final ChatMessage message;
   final ValueChanged<String> onAction;
+  final void Function(Product product)? onOpenProduct;
 
   @override
   Widget build(BuildContext context) {
@@ -431,7 +448,10 @@ class _Bubble extends StatelessWidget {
             if (message.card != null)
               _PlanCard(card: message.card!, onApply: onAction),
             if (message.products.isNotEmpty)
-              _ProductStrip(products: message.products),
+              _ProductStrip(
+                products: message.products,
+                onOpen: onOpenProduct,
+              ),
           ],
         ),
       ),
@@ -439,12 +459,14 @@ class _Bubble extends StatelessWidget {
   }
 }
 
-class _ProductStrip extends StatelessWidget {
-  const _ProductStrip({required this.products});
+class _ProductStrip extends ConsumerWidget {
+  const _ProductStrip({required this.products, this.onOpen});
   final List<Product> products;
+  final void Function(Product product)? onOpen;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final telemetry = ref.read(productTelemetryProvider);
     return Padding(
       padding: const EdgeInsets.only(top: 4, bottom: 12),
       child: Column(
@@ -465,7 +487,19 @@ class _ProductStrip extends StatelessWidget {
               padding: EdgeInsets.zero,
               itemCount: products.length,
               separatorBuilder: (_, __) => const SizedBox(width: 10),
-              itemBuilder: (_, i) => _ProductChipCard(product: products[i]),
+              itemBuilder: (_, i) {
+                final p = products[i];
+                telemetry.impression(p.id, ProductSurface.chat);
+                return _ProductChipCard(
+                  product: p,
+                  onTap: onOpen == null
+                      ? null
+                      : () {
+                          telemetry.open(p.id, ProductSurface.chat);
+                          onOpen!(p);
+                        },
+                );
+              },
             ),
           ),
         ],
@@ -475,12 +509,13 @@ class _ProductStrip extends StatelessWidget {
 }
 
 class _ProductChipCard extends StatelessWidget {
-  const _ProductChipCard({required this.product});
+  const _ProductChipCard({required this.product, this.onTap});
   final Product product;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final card = Container(
       width: 132,
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
@@ -533,6 +568,16 @@ class _ProductChipCard extends StatelessWidget {
               ),
             ),
         ],
+      ),
+    );
+    if (onTap == null) return card;
+    return Material(
+      color: Colors.transparent,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: card,
       ),
     );
   }

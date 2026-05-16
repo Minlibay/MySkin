@@ -224,6 +224,8 @@ class AdminHandlers {
     required this.products,
     required this.otps,
     required this.appSettings,
+    required this.partners,
+    required this.brands,
   });
 
   final AdminRepository admins;
@@ -235,6 +237,8 @@ class AdminHandlers {
   final ProductRepository products;
   final OtpRepository otps;
   final AppSettingsRepository appSettings;
+  final PartnerRepository partners;
+  final BrandRepository brands;
 
   static const _uuid = Uuid();
 
@@ -260,7 +264,20 @@ class AdminHandlers {
     ..get('/admin/settings/gigachat', _withAdmin(_getGigaSettings))
     ..put('/admin/settings/gigachat', _withAdmin(_setGigaSettings))
     ..get('/admin/settings/legal', _withAdmin(_getLegal))
-    ..put('/admin/settings/legal', _withAdmin(_setLegal));
+    ..put('/admin/settings/legal', _withAdmin(_setLegal))
+    // Partner accounts (admin manages — partner cannot self-register)
+    ..get('/admin/partners', _withAdmin(_listPartners))
+    ..post('/admin/partners', _withAdmin(_createPartner))
+    ..post('/admin/partners/<id>/block', _withAdmin(_blockPartner))
+    ..post('/admin/partners/<id>/unblock', _withAdmin(_unblockPartner))
+    ..post('/admin/partners/<id>/reset-password',
+        _withAdmin(_resetPartnerPassword))
+    // Brand moderation + ownership
+    ..get('/admin/brands', _withAdmin(_listBrands))
+    ..post('/admin/brands', _withAdmin(_createBrandAdmin))
+    ..post('/admin/brands/<id>/approve', _withAdmin(_approveBrand))
+    ..post('/admin/brands/<id>/reject', _withAdmin(_rejectBrand))
+    ..post('/admin/brands/<id>/assign', _withAdmin(_assignBrand));
 
   Handler _withAdmin(Handler inner) => (Request req) async {
         final token = _bearer(req);
@@ -269,6 +286,15 @@ class AdminHandlers {
         }
         return inner(req);
       };
+
+  /// Look up the admin id from the request's bearer token. Handlers that
+  /// need to record who moderated something call this — it's intentionally
+  /// a separate trip so [_withAdmin] stays a cheap allow/deny gate.
+  Future<String?> _currentAdminId(Request req) async {
+    final token = _bearer(req);
+    if (token == null) return null;
+    return admins.adminIdForToken(token);
+  }
 
   Future<Response> _login(Request req) async {
     final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
@@ -482,6 +508,9 @@ class AdminHandlers {
       routinePhase:
           (body['routine_phase'] as String?)?.trim() ?? 'any',
       status: (body['status'] as String?)?.trim() ?? 'draft',
+      buyUrl: (body['buy_url'] as String?)?.trim().isNotEmpty == true
+          ? (body['buy_url'] as String).trim()
+          : null,
     );
     await products.upsert(p);
     return jsonResponse(200, p.toJson());
@@ -548,6 +577,135 @@ class AdminHandlers {
     await products.delete(id);
     return jsonResponse(200, {'ok': true});
   }
+
+  // ===== Partner accounts =====
+
+  Future<Response> _listPartners(Request req) async {
+    final list = await partners.list();
+    return jsonResponse(
+        200, {'items': list.map((p) => p.toAdminJson()).toList()});
+  }
+
+  Future<Response> _createPartner(Request req) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final login = (body['login'] as String? ?? '').trim().toLowerCase();
+    final password = (body['password'] as String? ?? '');
+    final company = (body['company_name'] as String? ?? '').trim();
+    if (login.length < 3 || password.length < 8 || company.isEmpty) {
+      return jsonResponse(400, {'error': 'invalid_request'});
+    }
+    if (await partners.findByLogin(login) != null) {
+      return jsonResponse(409, {'error': 'login_taken'});
+    }
+    final hash = BCrypt.hashpw(password, BCrypt.gensalt());
+    final created = await partners.create(
+      login: login,
+      passwordHash: hash,
+      companyName: company,
+      contactEmail: (body['contact_email'] as String?)?.trim(),
+      contactPhone: (body['contact_phone'] as String?)?.trim(),
+      note: (body['note'] as String?)?.trim(),
+    );
+    return jsonResponse(201, created.toAdminJson());
+  }
+
+  Future<Response> _blockPartner(Request req) async {
+    await partners.setBlocked(req.params['id']!, true);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _unblockPartner(Request req) async {
+    await partners.setBlocked(req.params['id']!, false);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _resetPartnerPassword(Request req) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final password = body['password'] as String? ?? '';
+    if (password.length < 8) {
+      return jsonResponse(400, {'error': 'invalid_password'});
+    }
+    final hash = BCrypt.hashpw(password, BCrypt.gensalt());
+    await partners.setPassword(req.params['id']!, hash);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  // ===== Brand moderation =====
+
+  Future<Response> _listBrands(Request req) async {
+    final status = req.url.queryParameters['status']; // optional filter
+    final list = await brands.list(status: status);
+    return jsonResponse(
+        200, {'items': list.map((b) => b.toJson()).toList()});
+  }
+
+  Future<Response> _createBrandAdmin(Request req) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final name = (body['name'] as String? ?? '').trim();
+    if (name.isEmpty) {
+      return jsonResponse(400, {'error': 'invalid_request'});
+    }
+    final slug = _slugify(name);
+    // Admin-created brands skip the moderation queue.
+    final created = await brands.create(
+      name: name,
+      slug: slug,
+      ownerPartnerId: body['owner_partner_id'] as String?,
+      status: 'approved',
+    );
+    if (created == null) {
+      return jsonResponse(409, {'error': 'brand_name_taken'});
+    }
+    return jsonResponse(201, created.toJson());
+  }
+
+  Future<Response> _approveBrand(Request req) async {
+    final adminId = await _currentAdminId(req);
+    if (adminId == null) {
+      return jsonResponse(401, {'error': 'unauthorized'});
+    }
+    await brands.moderate(
+      brandId: req.params['id']!,
+      status: 'approved',
+      reviewerAdminId: adminId,
+    );
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _rejectBrand(Request req) async {
+    final adminId = await _currentAdminId(req);
+    if (adminId == null) {
+      return jsonResponse(401, {'error': 'unauthorized'});
+    }
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    await brands.moderate(
+      brandId: req.params['id']!,
+      status: 'rejected',
+      reason: (body['reason'] as String?)?.trim(),
+      reviewerAdminId: adminId,
+    );
+    return jsonResponse(200, {'ok': true});
+  }
+
+  /// Re-assigns a brand to a partner — also transfers every existing
+  /// product under that brand. Lets admin onboard a partner with the catalog
+  /// they already had in the system.
+  Future<Response> _assignBrand(Request req) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final partnerId = body['partner_id'] as String?;
+    if (partnerId != null && await partners.findById(partnerId) == null) {
+      return jsonResponse(404, {'error': 'partner_not_found'});
+    }
+    await brands.setOwner(req.params['id']!, partnerId);
+    return jsonResponse(200, {'ok': true});
+  }
+}
+
+String _slugify(String s) {
+  final lower = s.toLowerCase().trim();
+  return lower
+      .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
 }
 
 class AiHandlers {
@@ -1423,6 +1581,7 @@ class MeHandlers {
     required this.users,
     required this.scans,
     required this.chatMessages,
+    required this.events,
   });
 
   final SessionRepository sessions;
@@ -1433,6 +1592,7 @@ class MeHandlers {
   final UserRepository users;
   final ScanRepository scans;
   final ChatMessageRepository chatMessages;
+  final ProductEventRepository events;
 
   Router router() => Router()
     ..get('/me/profile', _withUser(_getProfile))
@@ -1452,7 +1612,26 @@ class MeHandlers {
     ..delete('/me/chat', _withUser(_clearChat))
     ..get('/me/avatar', _withUser(_getAvatar))
     ..put('/me/avatar', _withUser(_setAvatar))
-    ..delete('/me/avatar', _withUser(_removeAvatar));
+    ..delete('/me/avatar', _withUser(_removeAvatar))
+    // Catalog interaction telemetry. Batched, fire-and-forget from the app.
+    ..post('/events/product', _withUser(_logProductEvents));
+
+  Future<Response> _logProductEvents(Request req, UserRow user) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final raw = body['events'];
+    if (raw is! List) {
+      return jsonResponse(400, {'error': 'invalid_request'});
+    }
+    if (raw.length > 100) {
+      // Anti-spam cap. App will batch in chunks well below this.
+      return jsonResponse(413, {'error': 'batch_too_large'});
+    }
+    final written = await events.insertBatch(
+      events: raw.whereType<Map>().map((e) => e.cast<String, dynamic>()).toList(),
+      userId: user.id,
+    );
+    return jsonResponse(200, {'written': written});
+  }
 
   Handler _withUser(Future<Response> Function(Request, UserRow) inner) =>
       (Request req) async {
@@ -1877,4 +2056,173 @@ Middleware rateLimitMiddleware({
         }
         return inner(req);
       };
+}
+
+/// Handlers powering partner.моякожа.рф — the brand/manufacturer SPA.
+///
+/// Partners can't self-register: an admin provisions their account via
+/// /admin/partners and hands over login + password. Once in, the partner
+/// manages their own brands and products (products land in the moderation
+/// queue and only go live after admin approval).
+class PartnerHandlers {
+  PartnerHandlers({
+    required this.partners,
+    required this.brands,
+    required this.products,
+    required this.events,
+  });
+
+  final PartnerRepository partners;
+  final BrandRepository brands;
+  final ProductRepository products;
+  final ProductEventRepository events;
+
+  Router router() => Router()
+    ..post('/partner/login', _login)
+    ..post('/partner/logout', _withPartner((req, p) async {
+      final token = _bearer(req);
+      if (token != null) await partners.deleteSession(token);
+      return jsonResponse(200, {'ok': true});
+    }))
+    ..get('/partner/me', _withPartner((req, p) async {
+      return jsonResponse(200, {'partner': p.toClientJson()});
+    }))
+    ..get('/partner/brands', _withPartner(_listBrands))
+    ..post('/partner/brands', _withPartner(_createBrand))
+    ..get('/partner/products/<id>/stats', _withPartner(_productStats))
+    ..get('/partner/stats/top', _withPartner(_topProducts));
+
+  Future<Response> _login(Request req) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final login = (body['login'] as String? ?? '').trim().toLowerCase();
+    final password = body['password'] as String? ?? '';
+    if (login.isEmpty || password.isEmpty) {
+      return jsonResponse(400, {'error': 'invalid_request'});
+    }
+    final partner = await partners.findByLogin(login);
+    if (partner == null) {
+      return jsonResponse(401, {'error': 'invalid_credentials'});
+    }
+    final hash = await partners.passwordHashFor(partner.id);
+    if (hash.isEmpty || !BCrypt.checkpw(password, hash)) {
+      return jsonResponse(401, {'error': 'invalid_credentials'});
+    }
+    if (partner.isBlocked) {
+      return jsonResponse(403, {'error': 'partner_blocked'});
+    }
+    await partners.markLogin(partner.id);
+    final token = await partners.createSession(
+      partner.id,
+      userAgent: req.headers['user-agent'],
+    );
+    return jsonResponse(200, {
+      'token': token,
+      'partner': partner.toClientJson(),
+    });
+  }
+
+  Handler _withPartner(
+          Future<Response> Function(Request, PartnerRow) inner) =>
+      (Request req) async {
+        final token = _bearer(req);
+        if (token == null) return jsonResponse(401, {'error': 'unauthorized'});
+        final partner = await partners.partnerForToken(token);
+        if (partner == null) {
+          return jsonResponse(401, {'error': 'unauthorized'});
+        }
+        if (partner.isBlocked) {
+          return jsonResponse(403, {'error': 'partner_blocked'});
+        }
+        return inner(req, partner);
+      };
+
+  Future<Response> _listBrands(Request req, PartnerRow partner) async {
+    final list = await brands.list(ownerPartnerId: partner.id);
+    return jsonResponse(
+        200, {'items': list.map((b) => b.toJson()).toList()});
+  }
+
+  Future<Response> _createBrand(Request req, PartnerRow partner) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final name = (body['name'] as String? ?? '').trim();
+    if (name.length < 2) {
+      return jsonResponse(400, {'error': 'invalid_name'});
+    }
+    final slug = _slugify(name);
+    if (slug.isEmpty) {
+      return jsonResponse(400, {'error': 'invalid_name'});
+    }
+    final created = await brands.create(
+      name: name,
+      slug: slug,
+      ownerPartnerId: partner.id,
+      status: 'pending',
+    );
+    if (created == null) {
+      // Either name or slug clashes — both mean the brand exists in some
+      // form. Surface the same error so partners can't fingerprint catalog
+      // contents.
+      return jsonResponse(409, {'error': 'brand_name_taken'});
+    }
+    return jsonResponse(201, created.toJson());
+  }
+
+  Future<Response> _productStats(Request req, PartnerRow partner) async {
+    final productId = req.params['id']!;
+    final product = await products.findById(productId);
+    if (product == null) return jsonResponse(404, {'error': 'not_found'});
+    // Authorise: the brand of this product must belong to the calling
+    // partner. One DB hop instead of two.
+    final ownerId = await products.ownerPartnerId(productId);
+    if (ownerId != partner.id) {
+      return jsonResponse(403, {'error': 'forbidden'});
+    }
+    final since = _rangeSince(req.url.queryParameters['range']);
+    final summary = await events.productSummary(
+      productId: productId,
+      since: since,
+    );
+    final daily = await events.productDaily(
+      productId: productId,
+      since: since,
+    );
+    return jsonResponse(200, {
+      'product_id': productId,
+      'product_name': product.name,
+      'range_from': since.toUtc().toIso8601String(),
+      'totals': summary,
+      'daily': daily,
+    });
+  }
+
+  Future<Response> _topProducts(Request req, PartnerRow partner) async {
+    final qp = req.url.queryParameters;
+    final metric = qp['metric'] ?? 'open';
+    final limit = (int.tryParse(qp['limit'] ?? '') ?? 10).clamp(1, 50);
+    final since = _rangeSince(qp['range']);
+    final list = await events.topForPartner(
+      partnerId: partner.id,
+      metric: metric,
+      since: since,
+      limit: limit,
+    );
+    return jsonResponse(200, {
+      'metric': metric,
+      'range_from': since.toUtc().toIso8601String(),
+      'items': list,
+    });
+  }
+}
+
+/// Maps a friendly range token ("7d", "30d", "90d", "all") to a UTC cutoff.
+/// Unknown tokens default to last 7 days — the most useful "is my product
+/// doing anything" window for a new partner.
+DateTime _rangeSince(String? token) {
+  final now = DateTime.now().toUtc();
+  return switch (token) {
+    '30d' => now.subtract(const Duration(days: 30)),
+    '90d' => now.subtract(const Duration(days: 90)),
+    'all' => DateTime.utc(2020),
+    _ => now.subtract(const Duration(days: 7)),
+  };
 }

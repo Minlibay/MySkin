@@ -532,11 +532,550 @@ class AdminRepository {
     return r.isNotEmpty;
   }
 
+  /// Returns the admin id behind a session token, or null if expired/unknown.
+  /// Used by moderation endpoints that need to stamp `reviewed_by`.
+  Future<String?> adminIdForToken(String token) async {
+    final r = await db.execute(
+      Sql.named(
+          'SELECT admin_id FROM admin_sessions WHERE token = @t AND expires_at > now()'),
+      parameters: {'t': token},
+    );
+    return r.isEmpty ? null : r.first[0] as String;
+  }
+
   Future<void> markLogin(String adminId) async {
     await db.execute(
       Sql.named('UPDATE admins SET last_login_at = now() WHERE id = @id'),
       parameters: {'id': adminId},
     );
+  }
+}
+
+class PartnerRow {
+  PartnerRow({
+    required this.id,
+    required this.login,
+    required this.companyName,
+    this.contactEmail,
+    this.contactPhone,
+    this.note,
+    required this.isBlocked,
+    required this.createdAt,
+    this.lastLoginAt,
+  });
+  final String id;
+  final String login;
+  final String companyName;
+  final String? contactEmail;
+  final String? contactPhone;
+  final String? note;
+  final bool isBlocked;
+  final DateTime createdAt;
+  final DateTime? lastLoginAt;
+
+  /// Shape used by the partner's own SPA — no internal flags exposed.
+  Map<String, dynamic> toClientJson() => {
+        'id': id,
+        'login': login,
+        'company_name': companyName,
+        'contact_email': contactEmail,
+        'contact_phone': contactPhone,
+      };
+
+  /// Shape used by the admin panel — sees everything.
+  Map<String, dynamic> toAdminJson() => {
+        'id': id,
+        'login': login,
+        'company_name': companyName,
+        'contact_email': contactEmail,
+        'contact_phone': contactPhone,
+        'note': note,
+        'is_blocked': isBlocked,
+        'created_at': createdAt.toUtc().toIso8601String(),
+        'last_login_at': lastLoginAt?.toUtc().toIso8601String(),
+      };
+}
+
+class PartnerRepository {
+  PartnerRepository(this.db);
+  final Pool db;
+
+  Future<PartnerRow?> findById(String id) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT id, login, company_name, contact_email, contact_phone, note,
+               is_blocked, created_at, last_login_at
+        FROM partners WHERE id = @id
+      '''),
+      parameters: {'id': id},
+    );
+    return r.isEmpty ? null : _fromRow(r.first);
+  }
+
+  Future<PartnerRow?> findByLogin(String login) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT id, login, company_name, contact_email, contact_phone, note,
+               is_blocked, created_at, last_login_at
+        FROM partners WHERE login = @l
+      '''),
+      parameters: {'l': login},
+    );
+    return r.isEmpty ? null : _fromRow(r.first);
+  }
+
+  Future<String> passwordHashFor(String partnerId) async {
+    final r = await db.execute(
+      Sql.named('SELECT password_hash FROM partners WHERE id = @id'),
+      parameters: {'id': partnerId},
+    );
+    return r.isEmpty ? '' : r.first[0] as String;
+  }
+
+  Future<PartnerRow> create({
+    required String login,
+    required String passwordHash,
+    required String companyName,
+    String? contactEmail,
+    String? contactPhone,
+    String? note,
+  }) async {
+    final id = _uuid.v4();
+    await db.execute(
+      Sql.named('''
+        INSERT INTO partners
+          (id, login, password_hash, company_name, contact_email,
+           contact_phone, note)
+        VALUES (@id, @l, @h, @cn, @ce, @cp, @n)
+      '''),
+      parameters: {
+        'id': id,
+        'l': login,
+        'h': passwordHash,
+        'cn': companyName,
+        'ce': contactEmail,
+        'cp': contactPhone,
+        'n': note,
+      },
+    );
+    return (await findById(id))!;
+  }
+
+  Future<void> setPassword(String partnerId, String passwordHash) async {
+    await db.execute(
+      Sql.named('UPDATE partners SET password_hash = @h WHERE id = @id'),
+      parameters: {'h': passwordHash, 'id': partnerId},
+    );
+  }
+
+  Future<void> setBlocked(String partnerId, bool blocked) async {
+    await db.execute(
+      Sql.named('UPDATE partners SET is_blocked = @b WHERE id = @id'),
+      parameters: {'id': partnerId, 'b': blocked},
+    );
+  }
+
+  Future<void> markLogin(String partnerId) async {
+    await db.execute(
+      Sql.named('UPDATE partners SET last_login_at = now() WHERE id = @id'),
+      parameters: {'id': partnerId},
+    );
+  }
+
+  Future<List<PartnerRow>> list({int limit = 200}) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT id, login, company_name, contact_email, contact_phone, note,
+               is_blocked, created_at, last_login_at
+        FROM partners ORDER BY created_at DESC LIMIT @lim
+      '''),
+      parameters: {'lim': limit},
+    );
+    return r.map(_fromRow).toList();
+  }
+
+  Future<String> createSession(String partnerId,
+      {String? userAgent}) async {
+    final token = _uuid.v4();
+    await db.execute(
+      Sql.named('''
+        INSERT INTO partner_sessions
+          (token, partner_id, user_agent, expires_at)
+        VALUES (@t, @p, @ua, now() + INTERVAL '12 hours')
+      '''),
+      parameters: {'t': token, 'p': partnerId, 'ua': userAgent},
+    );
+    return token;
+  }
+
+  Future<PartnerRow?> partnerForToken(String token) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT p.id, p.login, p.company_name, p.contact_email, p.contact_phone,
+               p.note, p.is_blocked, p.created_at, p.last_login_at
+        FROM partner_sessions s JOIN partners p ON p.id = s.partner_id
+        WHERE s.token = @t AND s.expires_at > now()
+      '''),
+      parameters: {'t': token},
+    );
+    return r.isEmpty ? null : _fromRow(r.first);
+  }
+
+  Future<void> deleteSession(String token) async {
+    await db.execute(
+      Sql.named('DELETE FROM partner_sessions WHERE token = @t'),
+      parameters: {'t': token},
+    );
+  }
+
+  PartnerRow _fromRow(List<dynamic> r) => PartnerRow(
+        id: r[0] as String,
+        login: r[1] as String,
+        companyName: r[2] as String,
+        contactEmail: r[3] as String?,
+        contactPhone: r[4] as String?,
+        note: r[5] as String?,
+        isBlocked: r[6] as bool,
+        createdAt: r[7] as DateTime,
+        lastLoginAt: r[8] as DateTime?,
+      );
+}
+
+class BrandRow {
+  BrandRow({
+    required this.id,
+    required this.name,
+    required this.slug,
+    this.ownerPartnerId,
+    required this.status,
+    this.moderationReason,
+    this.submittedAt,
+    this.reviewedAt,
+    required this.createdAt,
+  });
+  final String id;
+  final String name;
+  final String slug;
+  final String? ownerPartnerId;
+
+  /// approved | pending | rejected
+  final String status;
+  final String? moderationReason;
+  final DateTime? submittedAt;
+  final DateTime? reviewedAt;
+  final DateTime createdAt;
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'slug': slug,
+        'owner_partner_id': ownerPartnerId,
+        'status': status,
+        'moderation_reason': moderationReason,
+        'submitted_at': submittedAt?.toUtc().toIso8601String(),
+        'reviewed_at': reviewedAt?.toUtc().toIso8601String(),
+        'created_at': createdAt.toUtc().toIso8601String(),
+      };
+}
+
+class BrandRepository {
+  BrandRepository(this.db);
+  final Pool db;
+
+  static const _cols =
+      'id, name::text, slug, owner_partner_id, status, moderation_reason, '
+      'submitted_at, reviewed_at, created_at';
+
+  Future<BrandRow?> findById(String id) async {
+    final r = await db.execute(
+      Sql.named('SELECT $_cols FROM brands WHERE id = @id'),
+      parameters: {'id': id},
+    );
+    return r.isEmpty ? null : _fromRow(r.first);
+  }
+
+  Future<BrandRow?> findByName(String name) async {
+    final r = await db.execute(
+      Sql.named('SELECT $_cols FROM brands WHERE name = @n'),
+      parameters: {'n': name},
+    );
+    return r.isEmpty ? null : _fromRow(r.first);
+  }
+
+  /// Lists brands. Filter by [ownerPartnerId] for the partner SPA, by
+  /// [status] for the admin moderation queue, or pass nothing for "all".
+  Future<List<BrandRow>> list({
+    String? ownerPartnerId,
+    String? status,
+    int limit = 200,
+  }) async {
+    final where = <String>[];
+    final params = <String, Object?>{'lim': limit};
+    if (ownerPartnerId != null) {
+      where.add('owner_partner_id = @owner');
+      params['owner'] = ownerPartnerId;
+    }
+    if (status != null) {
+      where.add('status = @st');
+      params['st'] = status;
+    }
+    final w = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final r = await db.execute(
+      Sql.named(
+          'SELECT $_cols FROM brands $w ORDER BY created_at DESC LIMIT @lim'),
+      parameters: params,
+    );
+    return r.map(_fromRow).toList();
+  }
+
+  /// Creates a brand. Returns null if the name is already taken (case-
+  /// insensitively — that's the CITEXT unique constraint doing its job).
+  /// New brands from a partner come in as 'pending' and need admin review;
+  /// brands created by admin can be passed [status]='approved' to skip the
+  /// queue.
+  Future<BrandRow?> create({
+    required String name,
+    required String slug,
+    String? ownerPartnerId,
+    required String status,
+  }) async {
+    try {
+      final id = _uuid.v4();
+      await db.execute(
+        Sql.named('''
+          INSERT INTO brands
+            (id, name, slug, owner_partner_id, status, submitted_at)
+          VALUES
+            (@id, @n, @s, @o, @st,
+             CASE WHEN @st = 'pending' THEN now() ELSE NULL END)
+        '''),
+        parameters: {
+          'id': id,
+          'n': name,
+          's': slug,
+          'o': ownerPartnerId,
+          'st': status,
+        },
+      );
+      return (await findById(id))!;
+    } on ServerException catch (e) {
+      // 23505 = unique_violation (either name or slug already taken).
+      if (e.code == '23505') return null;
+      rethrow;
+    }
+  }
+
+  Future<void> setOwner(String brandId, String? partnerId) async {
+    await db.execute(
+      Sql.named(
+          'UPDATE brands SET owner_partner_id = @o WHERE id = @id'),
+      parameters: {'id': brandId, 'o': partnerId},
+    );
+  }
+
+  Future<void> moderate({
+    required String brandId,
+    required String status, // 'approved' | 'rejected'
+    String? reason,
+    required String reviewerAdminId,
+  }) async {
+    await db.execute(
+      Sql.named('''
+        UPDATE brands
+          SET status = @st,
+              moderation_reason = @r,
+              reviewed_at = now(),
+              reviewed_by = @adm
+        WHERE id = @id
+      '''),
+      parameters: {
+        'id': brandId,
+        'st': status,
+        'r': reason,
+        'adm': reviewerAdminId,
+      },
+    );
+  }
+
+  BrandRow _fromRow(List<dynamic> r) => BrandRow(
+        id: r[0] as String,
+        name: r[1] as String,
+        slug: r[2] as String,
+        ownerPartnerId: r[3] as String?,
+        status: r[4] as String,
+        moderationReason: r[5] as String?,
+        submittedAt: r[6] as DateTime?,
+        reviewedAt: r[7] as DateTime?,
+        createdAt: r[8] as DateTime,
+      );
+}
+
+/// Raw catalog interaction events from the mobile app. We never aggregate
+/// at write time — partners see real numbers, the SQL does the work on
+/// read. Impressions dedup per (product, session) via a partial unique
+/// index, so scrolling the same card back and forth doesn't inflate counts.
+class ProductEventRepository {
+  ProductEventRepository(this.db);
+  final Pool db;
+
+  static const _validKinds = {'impression', 'open', 'buy_click'};
+  static const _validSurfaces = {
+    'catalog',
+    'recommendation',
+    'chat',
+    'shelf',
+    'scan_result',
+    'product_detail',
+    'favorites',
+  };
+
+  /// Bulk-insert a batch coming from the client. Returns the count we
+  /// actually wrote — duplicate impressions in the same session are
+  /// silently dropped by the partial unique index.
+  Future<int> insertBatch({
+    required List<Map<String, dynamic>> events,
+    required String? userId,
+  }) async {
+    if (events.isEmpty) return 0;
+    var written = 0;
+    // One statement per event keeps the code dumb and the ON CONFLICT
+    // semantics simple. Volume here is tiny (a handful per scroll) — if it
+    // ever isn't we can switch to COPY or a single multi-row insert.
+    for (final e in events) {
+      final productId = e['product_id'];
+      final kind = e['kind'];
+      final surface = e['surface'];
+      final session = e['session_key'];
+      if (productId is! String || productId.isEmpty) continue;
+      if (kind is! String || !_validKinds.contains(kind)) continue;
+      if (surface is! String || !_validSurfaces.contains(surface)) continue;
+      try {
+        final r = await db.execute(
+          Sql.named('''
+            INSERT INTO product_events
+              (product_id, user_id, kind, surface, session_key)
+            VALUES
+              (@p, @u, @k, @s, @sk)
+            ON CONFLICT DO NOTHING
+          '''),
+          parameters: {
+            'p': productId,
+            'u': userId,
+            'k': kind,
+            's': surface,
+            'sk': session is String ? session : null,
+          },
+        );
+        written += r.affectedRows;
+      } catch (e) {
+        // Foreign key violation (product_id no longer exists) — silently
+        // skip rather than 500ing the whole batch.
+      }
+    }
+    return written;
+  }
+
+  /// Per-product totals for a partner's drill-down screen. Filters on the
+  /// time range; partner ownership is verified by the caller via the
+  /// brand→partner join.
+  Future<Map<String, dynamic>> productSummary({
+    required String productId,
+    required DateTime since,
+  }) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT
+          COUNT(*) FILTER (WHERE kind = 'impression')::int,
+          COUNT(*) FILTER (WHERE kind = 'open')::int,
+          COUNT(*) FILTER (WHERE kind = 'buy_click')::int,
+          COUNT(DISTINCT user_id) FILTER (WHERE kind = 'open')::int
+        FROM product_events
+        WHERE product_id = @p AND created_at >= @since
+      '''),
+      parameters: {'p': productId, 'since': since},
+    );
+    final row = r.first;
+    return {
+      'impressions': row[0] as int,
+      'opens': row[1] as int,
+      'buy_clicks': row[2] as int,
+      'unique_openers': row[3] as int,
+    };
+  }
+
+  /// Daily breakdown for the partner's chart. Returns one row per day in
+  /// the range — including days with zero so the chart line stays continuous.
+  Future<List<Map<String, dynamic>>> productDaily({
+    required String productId,
+    required DateTime since,
+  }) async {
+    final r = await db.execute(
+      Sql.named('''
+        WITH days AS (
+          SELECT generate_series(@since::date, CURRENT_DATE, INTERVAL '1 day')::date AS day
+        )
+        SELECT
+          d.day,
+          COALESCE(SUM(CASE WHEN e.kind = 'impression' THEN 1 END), 0)::int,
+          COALESCE(SUM(CASE WHEN e.kind = 'open' THEN 1 END), 0)::int,
+          COALESCE(SUM(CASE WHEN e.kind = 'buy_click' THEN 1 END), 0)::int
+        FROM days d
+        LEFT JOIN product_events e
+          ON e.product_id = @p
+         AND e.created_at::date = d.day
+        GROUP BY d.day
+        ORDER BY d.day
+      '''),
+      parameters: {'p': productId, 'since': since},
+    );
+    return r
+        .map((row) => {
+              'day': (row[0] as DateTime).toIso8601String().substring(0, 10),
+              'impressions': row[1] as int,
+              'opens': row[2] as int,
+              'buy_clicks': row[3] as int,
+            })
+        .toList();
+  }
+
+  /// Top products for a partner across all their brands. `metric` selects
+  /// which kind to sort by.
+  Future<List<Map<String, dynamic>>> topForPartner({
+    required String partnerId,
+    required String metric, // impression | open | buy_click
+    required DateTime since,
+    int limit = 10,
+  }) async {
+    if (!_validKinds.contains(metric)) return const [];
+    final r = await db.execute(
+      Sql.named('''
+        SELECT p.id, p.slug, p.name, b.name::text, COUNT(*)::int AS c
+        FROM product_events e
+        JOIN products p ON p.id = e.product_id
+        JOIN brands b ON b.id = p.brand_id
+        WHERE b.owner_partner_id = @partner
+          AND e.kind = @kind
+          AND e.created_at >= @since
+        GROUP BY p.id, p.slug, p.name, b.name
+        ORDER BY c DESC
+        LIMIT @lim
+      '''),
+      parameters: {
+        'partner': partnerId,
+        'kind': metric,
+        'since': since,
+        'lim': limit,
+      },
+    );
+    return r
+        .map((row) => {
+              'product_id': row[0] as String,
+              'slug': row[1] as String,
+              'name': row[2] as String,
+              'brand': row[3] as String,
+              'count': row[4] as int,
+            })
+        .toList();
   }
 }
 
@@ -583,6 +1122,7 @@ class ProductRow {
     required this.routinePhase,
     this.status = 'draft',
     this.hasPhoto = false,
+    this.buyUrl,
   });
 
   final String id;
@@ -601,6 +1141,7 @@ class ProductRow {
   final String routinePhase;
   final String status; // draft | published
   final bool hasPhoto;
+  final String? buyUrl;
 
   static ProductRow fromRow(List<dynamic> r) {
     List<String> arr(int i) =>
@@ -622,6 +1163,7 @@ class ProductRow {
       routinePhase: r[13] as String,
       status: r.length > 14 ? (r[14] as String? ?? 'draft') : 'draft',
       hasPhoto: r.length > 15 ? (r[15] as bool? ?? false) : false,
+      buyUrl: r.length > 16 ? r[16] as String? : null,
     );
   }
 
@@ -642,6 +1184,7 @@ class ProductRow {
         'routine_phase': routinePhase,
         'status': status,
         'has_photo': hasPhoto,
+        'buy_url': buyUrl,
       };
 }
 
@@ -652,7 +1195,7 @@ class ProductRepository {
   static const _cols =
       'id, slug, brand, name, kind, description, price_rub, accent_color, '
       'ingredients, tags, skin_types, is_active_ingredient, gentle, '
-      'routine_phase, status, photo IS NOT NULL';
+      'routine_phase, status, photo IS NOT NULL, buy_url';
 
   Future<List<ProductRow>> list({
     String? kind,
@@ -707,6 +1250,21 @@ class ProductRepository {
       parameters: {'id': id},
     );
     return r.isEmpty ? null : ProductRow.fromRow(r.first);
+  }
+
+  /// Partner id that currently owns the brand of this product, or null if
+  /// the brand has no owner (legacy admin-managed). Used by partner stats
+  /// endpoints to authorise drill-down access.
+  Future<String?> ownerPartnerId(String productId) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT b.owner_partner_id
+        FROM products p JOIN brands b ON b.id = p.brand_id
+        WHERE p.id = @id
+      '''),
+      parameters: {'id': productId},
+    );
+    return r.isEmpty ? null : r.first[0] as String?;
   }
 
   Future<({List<int> bytes, String mime})?> getPhoto(String id,
@@ -843,6 +1401,11 @@ class ProductRepository {
           (patch['routine_phase'] as String?) ?? existing.routinePhase,
       status: (patch['status'] as String?) ?? existing.status,
       hasPhoto: existing.hasPhoto,
+      // patch.containsKey lets admin clear the buy URL by sending null
+      // explicitly; otherwise we keep what was there before.
+      buyUrl: patch.containsKey('buy_url')
+          ? patch['buy_url'] as String?
+          : existing.buyUrl,
     );
     await db.execute(
       Sql.named('''
@@ -852,7 +1415,7 @@ class ProductRepository {
           ingredients = @ing::jsonb, tags = @tags::jsonb,
           skin_types = @st::jsonb,
           is_active_ingredient = @ai, gentle = @g, routine_phase = @rp,
-          status = @status
+          status = @status, buy_url = @buy_url
         WHERE id = @id
       '''),
       parameters: {
@@ -870,6 +1433,7 @@ class ProductRepository {
         'g': updated.gentle,
         'rp': updated.routinePhase,
         'status': updated.status,
+        'buy_url': updated.buyUrl,
       },
     );
     return updated;
@@ -881,10 +1445,11 @@ class ProductRepository {
         INSERT INTO products (
           id, slug, brand, name, kind, description, price_rub, accent_color,
           ingredients, tags, skin_types, is_active_ingredient, gentle,
-          routine_phase, status
+          routine_phase, status, buy_url
         ) VALUES (
           @id, @slug, @brand, @name, @kind, @desc, @price, @ac,
-          @ing::jsonb, @tags::jsonb, @st::jsonb, @ai, @g, @rp, @status
+          @ing::jsonb, @tags::jsonb, @st::jsonb, @ai, @g, @rp, @status,
+          @buy_url
         )
         ON CONFLICT (slug) DO UPDATE SET
           brand = EXCLUDED.brand, name = EXCLUDED.name, kind = EXCLUDED.kind,
@@ -893,7 +1458,7 @@ class ProductRepository {
           tags = EXCLUDED.tags, skin_types = EXCLUDED.skin_types,
           is_active_ingredient = EXCLUDED.is_active_ingredient,
           gentle = EXCLUDED.gentle, routine_phase = EXCLUDED.routine_phase,
-          status = EXCLUDED.status
+          status = EXCLUDED.status, buy_url = EXCLUDED.buy_url
       '''),
       parameters: {
         'id': p.id,
@@ -911,6 +1476,7 @@ class ProductRepository {
         'g': p.gentle,
         'rp': p.routinePhase,
         'status': p.status,
+        'buy_url': p.buyUrl,
       },
     );
   }
