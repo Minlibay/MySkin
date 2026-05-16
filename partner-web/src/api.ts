@@ -77,6 +77,44 @@ export type Brand = {
   created_at: string;
 };
 
+export type Product = {
+  id: string;
+  slug: string;
+  brand: string;
+  name: string;
+  kind: string;
+  description: string;
+  price_rub: number;
+  accent_color: string;
+  ingredients: string[];
+  tags: string[];
+  skin_types: string[];
+  routine_phase: string;
+  gentle: boolean;
+  is_active: boolean;
+  status: 'draft' | 'published';
+  has_photo: boolean;
+  buy_url: string | null;
+  moderation_status: 'approved' | 'pending' | 'rejected';
+  moderation_reason: string | null;
+};
+
+export type ProductInput = {
+  slug: string;
+  brand_id: string;
+  name: string;
+  kind: string;
+  description?: string;
+  price_rub?: number;
+  accent_color?: string;
+  routine_phase?: string;
+  gentle?: boolean;
+  tags?: string[];
+  skin_types?: string[];
+  ingredients?: string[];
+  buy_url?: string | null;
+};
+
 export type StatTotals = {
   impressions: number;
   opens: number;
@@ -143,6 +181,25 @@ export const api = {
 
   createBrand(name: string) {
     return req<Brand>('POST', '/partner/brands', { name });
+  },
+
+  listProducts(status?: 'approved' | 'pending' | 'rejected') {
+    const qs = status ? `?moderation_status=${status}` : '';
+    return req<{ items: Product[] }>('GET', `/partner/products${qs}`).then(
+      (r) => r.items
+    );
+  },
+
+  createProduct(input: ProductInput) {
+    return req<Product>('POST', '/partner/products', input);
+  },
+
+  updateProduct(id: string, patch: Partial<ProductInput>) {
+    return req<Product>('PATCH', `/partner/products/${id}`, patch);
+  },
+
+  deleteProduct(id: string) {
+    return req<void>('DELETE', `/partner/products/${id}`);
   },
 
   productStats(productId: string, range: '7d' | '30d' | '90d' | 'all') {

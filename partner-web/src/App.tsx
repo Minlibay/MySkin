@@ -9,6 +9,7 @@ import {
 import { api, getToken, type Partner } from './api';
 import LoginPage from './pages/Login';
 import BrandsPage from './pages/Brands';
+import ProductsPage from './pages/Products';
 import TopPage from './pages/Top';
 import { Shell } from './components/Shell';
 
@@ -72,6 +73,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/brands" replace />} />
         <Route path="/brands" element={<BrandsPage />} />
+        <Route path="/products" element={<ProductsPage />} />
         <Route path="/top" element={<TopPage />} />
         <Route path="/login" element={<Navigate to="/brands" replace />} />
         <Route

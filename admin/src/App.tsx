@@ -5,6 +5,8 @@ import Codes from './pages/Codes';
 import Dashboard from './pages/Dashboard';
 import Legal from './pages/Legal';
 import Login from './pages/Login';
+import Moderation from './pages/Moderation';
+import Partners from './pages/Partners';
 import Products from './pages/Products';
 import Settings from './pages/Settings';
 import UserDetail from './pages/UserDetail';
@@ -29,6 +31,8 @@ export default function App() {
         <Route path="/users" element={<Users />} />
         <Route path="/users/:id" element={<UserDetail />} />
         <Route path="/products" element={<Products />} />
+        <Route path="/partners" element={<Partners />} />
+        <Route path="/moderation" element={<Moderation />} />
         <Route path="/codes" element={<Codes />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/legal" element={<Legal />} />

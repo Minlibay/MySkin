@@ -1123,6 +1123,8 @@ class ProductRow {
     this.status = 'draft',
     this.hasPhoto = false,
     this.buyUrl,
+    this.moderationStatus = 'approved',
+    this.moderationReason,
   });
 
   final String id;
@@ -1142,6 +1144,8 @@ class ProductRow {
   final String status; // draft | published
   final bool hasPhoto;
   final String? buyUrl;
+  final String moderationStatus; // approved | pending | rejected
+  final String? moderationReason;
 
   static ProductRow fromRow(List<dynamic> r) {
     List<String> arr(int i) =>
@@ -1164,6 +1168,9 @@ class ProductRow {
       status: r.length > 14 ? (r[14] as String? ?? 'draft') : 'draft',
       hasPhoto: r.length > 15 ? (r[15] as bool? ?? false) : false,
       buyUrl: r.length > 16 ? r[16] as String? : null,
+      moderationStatus:
+          r.length > 17 ? (r[17] as String? ?? 'approved') : 'approved',
+      moderationReason: r.length > 18 ? r[18] as String? : null,
     );
   }
 
@@ -1185,6 +1192,8 @@ class ProductRow {
         'status': status,
         'has_photo': hasPhoto,
         'buy_url': buyUrl,
+        'moderation_status': moderationStatus,
+        'moderation_reason': moderationReason,
       };
 }
 
@@ -1195,13 +1204,17 @@ class ProductRepository {
   static const _cols =
       'id, slug, brand, name, kind, description, price_rub, accent_color, '
       'ingredients, tags, skin_types, is_active_ingredient, gentle, '
-      'routine_phase, status, photo IS NOT NULL, buy_url';
+      'routine_phase, status, photo IS NOT NULL, buy_url, moderation_status, '
+      'moderation_reason';
 
   Future<List<ProductRow>> list({
     String? kind,
     String? concern,
     String? query,
     String? status,
+    String? moderationStatus,
+    String? submittedByPartnerId,
+    bool publicCatalogOnly = false,
     int limit = 60,
     int offset = 0,
   }) async {
@@ -1226,6 +1239,21 @@ class ProductRepository {
       where.add('status = @status');
       params['status'] = status;
     }
+    if (moderationStatus != null && moderationStatus.isNotEmpty) {
+      where.add('moderation_status = @mstatus');
+      params['mstatus'] = moderationStatus;
+    }
+    if (submittedByPartnerId != null && submittedByPartnerId.isNotEmpty) {
+      where.add('submitted_by_partner_id = @partner');
+      params['partner'] = submittedByPartnerId;
+    }
+    if (publicCatalogOnly) {
+      // Mobile catalog hides anything that isn't both published AND moderation-
+      // approved — covers legacy admin-managed products (moderation_status
+      // defaults to approved) and partner products only after admin sign-off.
+      where.add("status = 'published'");
+      where.add("moderation_status = 'approved'");
+    }
     final clause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
     final rows = await db.execute(
       Sql.named(
@@ -1233,6 +1261,195 @@ class ProductRepository {
       parameters: params,
     );
     return rows.map(ProductRow.fromRow).toList();
+  }
+
+  /// Create a new product on behalf of a partner. Lands in the moderation
+  /// queue (`moderation_status='pending'`) and `status='draft'` so the
+  /// mobile catalog never sees it before admin sign-off.
+  Future<ProductRow?> createForPartner({
+    required String partnerId,
+    required String brandId,
+    required String slug,
+    required String brandName,
+    required String name,
+    required String kind,
+    required String description,
+    required int priceRub,
+    required String accentColor,
+    String? buyUrl,
+    String routinePhase = 'any',
+    bool gentle = false,
+    bool isActive = false,
+    List<String> tags = const [],
+    List<String> skinTypes = const [],
+    List<String> ingredients = const [],
+  }) async {
+    final id = _uuid.v4();
+    try {
+      await db.execute(
+        Sql.named('''
+          INSERT INTO products (
+            id, slug, brand, name, kind, description, price_rub, accent_color,
+            ingredients, tags, skin_types, is_active_ingredient, gentle,
+            routine_phase, status, buy_url, brand_id, submitted_by_partner_id,
+            moderation_status, submitted_at
+          ) VALUES (
+            @id, @slug, @brand, @name, @kind, @desc, @price, @ac,
+            @ing::jsonb, @tags::jsonb, @st::jsonb, @ai, @g, @rp, 'draft',
+            @buy_url, @brand_id, @partner, 'pending', now()
+          )
+        '''),
+        parameters: {
+          'id': id,
+          'slug': slug,
+          'brand': brandName,
+          'name': name,
+          'kind': kind,
+          'desc': description,
+          'price': priceRub,
+          'ac': accentColor,
+          'ing': jsonEncode(ingredients),
+          'tags': jsonEncode(tags),
+          'st': jsonEncode(skinTypes),
+          'ai': isActive,
+          'g': gentle,
+          'rp': routinePhase,
+          'buy_url': buyUrl,
+          'brand_id': brandId,
+          'partner': partnerId,
+        },
+      );
+      return findById(id);
+    } on ServerException catch (e) {
+      if (e.code == '23505') return null; // slug taken
+      rethrow;
+    }
+  }
+
+  /// Apply a patch from a partner. Caller must verify ownership first.
+  /// Editing any product field resets moderation to pending so the admin
+  /// re-reviews — straight-through edits would let a partner sneak content
+  /// past moderation post-approval.
+  Future<void> updateByPartner({
+    required String productId,
+    required Map<String, dynamic> patch,
+  }) async {
+    final existing = await findById(productId);
+    if (existing == null) return;
+    final patched = ProductRow(
+      id: existing.id,
+      slug: existing.slug,
+      brand: existing.brand,
+      name: (patch['name'] as String?) ?? existing.name,
+      kind: (patch['kind'] as String?) ?? existing.kind,
+      description:
+          (patch['description'] as String?) ?? existing.description,
+      priceRub:
+          (patch['price_rub'] as num?)?.toInt() ?? existing.priceRub,
+      accentColor:
+          (patch['accent_color'] as String?) ?? existing.accentColor,
+      ingredients: (patch['ingredients'] as List?)?.cast<String>() ??
+          existing.ingredients,
+      tags: (patch['tags'] as List?)?.cast<String>() ?? existing.tags,
+      skinTypes: (patch['skin_types'] as List?)?.cast<String>() ??
+          existing.skinTypes,
+      isActive: existing.isActive,
+      gentle: (patch['gentle'] as bool?) ?? existing.gentle,
+      routinePhase:
+          (patch['routine_phase'] as String?) ?? existing.routinePhase,
+      status: 'draft',
+      hasPhoto: existing.hasPhoto,
+      buyUrl: patch.containsKey('buy_url')
+          ? patch['buy_url'] as String?
+          : existing.buyUrl,
+    );
+    await db.execute(
+      Sql.named('''
+        UPDATE products SET
+          name = @name, kind = @kind, description = @desc,
+          price_rub = @price, accent_color = @ac,
+          ingredients = @ing::jsonb, tags = @tags::jsonb,
+          skin_types = @st::jsonb,
+          gentle = @g, routine_phase = @rp,
+          buy_url = @buy_url,
+          status = 'draft',
+          moderation_status = 'pending',
+          moderation_reason = NULL,
+          submitted_at = now(),
+          reviewed_at = NULL,
+          reviewed_by = NULL
+        WHERE id = @id
+      '''),
+      parameters: {
+        'id': productId,
+        'name': patched.name,
+        'kind': patched.kind,
+        'desc': patched.description,
+        'price': patched.priceRub,
+        'ac': patched.accentColor,
+        'ing': jsonEncode(patched.ingredients),
+        'tags': jsonEncode(patched.tags),
+        'st': jsonEncode(patched.skinTypes),
+        'g': patched.gentle,
+        'rp': patched.routinePhase,
+        'buy_url': patched.buyUrl,
+      },
+    );
+  }
+
+  /// Admin moderation verdict. Approved → also flip status to published
+  /// so the catalog picks it up immediately. Rejected keeps it hidden and
+  /// stores the reason for the partner to read.
+  Future<void> moderate({
+    required String productId,
+    required String moderationStatus, // 'approved' | 'rejected'
+    String? reason,
+    required String reviewerAdminId,
+  }) async {
+    final makeLive = moderationStatus == 'approved';
+    await db.execute(
+      Sql.named('''
+        UPDATE products SET
+          moderation_status = @ms,
+          moderation_reason = @reason,
+          reviewed_at = now(),
+          reviewed_by = @admin,
+          status = CASE WHEN @live THEN 'published' ELSE status END
+        WHERE id = @id
+      '''),
+      parameters: {
+        'id': productId,
+        'ms': moderationStatus,
+        'reason': reason,
+        'admin': reviewerAdminId,
+        'live': makeLive,
+      },
+    );
+  }
+
+  /// Verify a product belongs to one of [partnerId]'s brands. Used by
+  /// partner endpoints before edits/deletes.
+  Future<bool> isOwnedByPartner(String productId, String partnerId) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT 1 FROM products p JOIN brands b ON b.id = p.brand_id
+        WHERE p.id = @id AND b.owner_partner_id = @partner
+      '''),
+      parameters: {'id': productId, 'partner': partnerId},
+    );
+    return r.isNotEmpty;
+  }
+
+  Future<void> deleteByPartner(String productId) async {
+    // Allowed only when not yet approved — repo-layer guard, handler also
+    // double-checks before invoking.
+    await db.execute(
+      Sql.named('''
+        DELETE FROM products
+        WHERE id = @id AND moderation_status IN ('pending', 'rejected')
+      '''),
+      parameters: {'id': productId},
+    );
   }
 
   Future<ProductRow?> findBySlug(String slug, {bool publishedOnly = false}) async {

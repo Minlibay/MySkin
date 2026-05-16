@@ -189,6 +189,100 @@ export const api = {
       body: JSON.stringify(input),
     });
   },
+
+  // ===== Partners =====
+  listPartners() {
+    return this.request<{ items: AdminPartner[] }>('/admin/partners');
+  },
+  createPartner(input: {
+    login: string;
+    password: string;
+    company_name: string;
+    contact_email?: string;
+    contact_phone?: string;
+    note?: string;
+  }) {
+    return this.request<AdminPartner>('/admin/partners', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+  blockPartner(id: string) {
+    return this.request(`/admin/partners/${id}/block`, { method: 'POST' });
+  },
+  unblockPartner(id: string) {
+    return this.request(`/admin/partners/${id}/unblock`, { method: 'POST' });
+  },
+  resetPartnerPassword(id: string, password: string) {
+    return this.request(`/admin/partners/${id}/reset-password`, {
+      method: 'POST',
+      body: JSON.stringify({ password }),
+    });
+  },
+
+  // ===== Brands moderation =====
+  listBrands(status?: 'pending' | 'approved' | 'rejected') {
+    return this.request<{ items: AdminBrand[] }>(
+      `/admin/brands${status ? `?status=${status}` : ''}`
+    );
+  },
+  approveBrand(id: string) {
+    return this.request(`/admin/brands/${id}/approve`, { method: 'POST' });
+  },
+  rejectBrand(id: string, reason: string) {
+    return this.request(`/admin/brands/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+  assignBrand(id: string, partnerId: string | null) {
+    return this.request(`/admin/brands/${id}/assign`, {
+      method: 'POST',
+      body: JSON.stringify({ partner_id: partnerId }),
+    });
+  },
+
+  // ===== Product moderation =====
+  listPendingProducts() {
+    return this.request<{ items: AdminProduct[] }>(
+      '/admin/products?moderation_status=pending&limit=200'
+    );
+  },
+  approveProductModeration(id: string) {
+    return this.request(`/admin/products/${id}/moderate/approve`, {
+      method: 'POST',
+    });
+  },
+  rejectProductModeration(id: string, reason: string) {
+    return this.request(`/admin/products/${id}/moderate/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+};
+
+export type AdminPartner = {
+  id: string;
+  login: string;
+  company_name: string;
+  contact_email: string | null;
+  contact_phone: string | null;
+  note: string | null;
+  is_blocked: boolean;
+  created_at: string;
+  last_login_at: string | null;
+};
+
+export type AdminBrand = {
+  id: string;
+  name: string;
+  slug: string;
+  owner_partner_id: string | null;
+  status: 'approved' | 'pending' | 'rejected';
+  moderation_reason: string | null;
+  submitted_at: string | null;
+  reviewed_at: string | null;
+  created_at: string;
 };
 
 export type LegalDocs = {
@@ -299,6 +393,8 @@ export type AdminProduct = {
   has_photo: boolean;
   photo_slots?: number[];
   buy_url?: string | null;
+  moderation_status?: 'approved' | 'pending' | 'rejected';
+  moderation_reason?: string | null;
 };
 
 export type ProductInput = {

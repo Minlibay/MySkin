@@ -9,6 +9,7 @@ type Props = {
 
 const NAV = [
   { to: '/brands', label: 'Мои бренды' },
+  { to: '/products', label: 'Мои товары' },
   { to: '/top', label: 'Топ товаров' },
 ];
 

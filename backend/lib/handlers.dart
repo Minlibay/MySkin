@@ -277,7 +277,12 @@ class AdminHandlers {
     ..post('/admin/brands', _withAdmin(_createBrandAdmin))
     ..post('/admin/brands/<id>/approve', _withAdmin(_approveBrand))
     ..post('/admin/brands/<id>/reject', _withAdmin(_rejectBrand))
-    ..post('/admin/brands/<id>/assign', _withAdmin(_assignBrand));
+    ..post('/admin/brands/<id>/assign', _withAdmin(_assignBrand))
+    // Product moderation queue (separate from publish status)
+    ..post('/admin/products/<id>/moderate/approve',
+        _withAdmin(_approveProductModeration))
+    ..post('/admin/products/<id>/moderate/reject',
+        _withAdmin(_rejectProductModeration));
 
   Handler _withAdmin(Handler inner) => (Request req) async {
         final token = _bearer(req);
@@ -463,6 +468,7 @@ class AdminHandlers {
     final items = await products.list(
       kind: qp['kind'],
       query: qp['q'],
+      moderationStatus: qp['moderation_status'],
       limit: int.tryParse(qp['limit'] ?? '') ?? 200,
       offset: int.tryParse(qp['offset'] ?? '') ?? 0,
     );
@@ -690,6 +696,34 @@ class AdminHandlers {
   /// Re-assigns a brand to a partner — also transfers every existing
   /// product under that brand. Lets admin onboard a partner with the catalog
   /// they already had in the system.
+  Future<Response> _approveProductModeration(Request req) async {
+    final adminId = await _currentAdminId(req);
+    if (adminId == null) {
+      return jsonResponse(401, {'error': 'unauthorized'});
+    }
+    await products.moderate(
+      productId: req.params['id']!,
+      moderationStatus: 'approved',
+      reviewerAdminId: adminId,
+    );
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _rejectProductModeration(Request req) async {
+    final adminId = await _currentAdminId(req);
+    if (adminId == null) {
+      return jsonResponse(401, {'error': 'unauthorized'});
+    }
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    await products.moderate(
+      productId: req.params['id']!,
+      moderationStatus: 'rejected',
+      reason: (body['reason'] as String?)?.trim(),
+      reviewerAdminId: adminId,
+    );
+    return jsonResponse(200, {'ok': true});
+  }
+
   Future<Response> _assignBrand(Request req) async {
     final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
     final partnerId = body['partner_id'] as String?;
@@ -794,8 +828,7 @@ class AiHandlers {
     // Pre-compute top-matched products for this user so Лина can mention
     // them and the frontend can render them as a strip beside her reply.
     final profile = await profiles.get(user.id) ?? <String, dynamic>{};
-    final catalog =
-        await products.list(status: 'published', limit: 200);
+    final catalog = await products.list(publicCatalogOnly: true, limit: 200);
     final scored = <({ProductRow p, int score, List<String> reasons})>[];
     for (final p in catalog) {
       final m = computeMatch(profile: profile, product: p);
@@ -1425,7 +1458,9 @@ class CatalogHandlers {
       kind: qp['kind'],
       concern: qp['concern'],
       query: qp['q'],
-      status: 'published',
+      // Mobile catalog must only show items that are both published AND
+      // moderation-approved. Backed by index `products_moderation_status_idx`.
+      publicCatalogOnly: true,
       limit: int.tryParse(qp['limit'] ?? '') ?? 60,
       offset: int.tryParse(qp['offset'] ?? '') ?? 0,
     );
@@ -2089,6 +2124,10 @@ class PartnerHandlers {
     }))
     ..get('/partner/brands', _withPartner(_listBrands))
     ..post('/partner/brands', _withPartner(_createBrand))
+    ..get('/partner/products', _withPartner(_listProducts))
+    ..post('/partner/products', _withPartner(_createProduct))
+    ..patch('/partner/products/<id>', _withPartner(_updateProduct))
+    ..delete('/partner/products/<id>', _withPartner(_deleteProduct))
     ..get('/partner/products/<id>/stats', _withPartner(_productStats))
     ..get('/partner/stats/top', _withPartner(_topProducts));
 
@@ -2165,6 +2204,91 @@ class PartnerHandlers {
       return jsonResponse(409, {'error': 'brand_name_taken'});
     }
     return jsonResponse(201, created.toJson());
+  }
+
+  Future<Response> _listProducts(Request req, PartnerRow partner) async {
+    final status = req.url.queryParameters['moderation_status'];
+    final items = await products.list(
+      submittedByPartnerId: partner.id,
+      moderationStatus: status,
+      limit: 200,
+    );
+    return jsonResponse(
+        200, {'items': items.map((p) => p.toJson()).toList()});
+  }
+
+  Future<Response> _createProduct(Request req, PartnerRow partner) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final missing = ['slug', 'brand_id', 'name', 'kind']
+        .where((f) => (body[f] as String?)?.trim().isEmpty ?? true)
+        .toList();
+    if (missing.isNotEmpty) {
+      return jsonResponse(
+          400, {'error': 'missing_fields', 'fields': missing});
+    }
+    final brandId = (body['brand_id'] as String).trim();
+    final brand = await brands.findById(brandId);
+    if (brand == null || brand.ownerPartnerId != partner.id) {
+      return jsonResponse(403, {'error': 'brand_not_owned'});
+    }
+    if (brand.status != 'approved') {
+      return jsonResponse(
+          409, {'error': 'brand_not_approved'});
+    }
+    final created = await products.createForPartner(
+      partnerId: partner.id,
+      brandId: brandId,
+      brandName: brand.name,
+      slug: (body['slug'] as String).trim(),
+      name: (body['name'] as String).trim(),
+      kind: (body['kind'] as String).trim(),
+      description: (body['description'] as String?)?.trim() ?? '',
+      priceRub: (body['price_rub'] as num?)?.toInt() ?? 0,
+      accentColor:
+          (body['accent_color'] as String?)?.trim() ?? '#D98FA3',
+      buyUrl: (body['buy_url'] as String?)?.trim().isNotEmpty == true
+          ? (body['buy_url'] as String).trim()
+          : null,
+      routinePhase:
+          (body['routine_phase'] as String?)?.trim() ?? 'any',
+      gentle: body['gentle'] as bool? ?? false,
+      tags: ((body['tags'] as List?) ?? const []).cast<String>(),
+      skinTypes:
+          ((body['skin_types'] as List?) ?? const []).cast<String>(),
+      ingredients:
+          ((body['ingredients'] as List?) ?? const []).cast<String>(),
+    );
+    if (created == null) {
+      return jsonResponse(409, {'error': 'slug_taken'});
+    }
+    return jsonResponse(201, created.toJson());
+  }
+
+  Future<Response> _updateProduct(Request req, PartnerRow partner) async {
+    final id = req.params['id']!;
+    if (!await products.isOwnedByPartner(id, partner.id)) {
+      return jsonResponse(403, {'error': 'not_owned'});
+    }
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    await products.updateByPartner(productId: id, patch: body);
+    final updated = await products.findById(id);
+    return jsonResponse(200, updated!.toJson());
+  }
+
+  Future<Response> _deleteProduct(Request req, PartnerRow partner) async {
+    final id = req.params['id']!;
+    if (!await products.isOwnedByPartner(id, partner.id)) {
+      return jsonResponse(403, {'error': 'not_owned'});
+    }
+    final p = await products.findById(id);
+    if (p == null) return jsonResponse(404, {'error': 'not_found'});
+    if (p.moderationStatus == 'approved') {
+      // Approved products are live — partner asks admin to unlist, not the
+      // other way around. Avoids surprise gaps in the catalog.
+      return jsonResponse(409, {'error': 'cannot_delete_approved'});
+    }
+    await products.deleteByPartner(id);
+    return jsonResponse(200, {'ok': true});
   }
 
   Future<Response> _productStats(Request req, PartnerRow partner) async {
