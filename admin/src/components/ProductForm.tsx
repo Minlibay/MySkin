@@ -184,12 +184,13 @@ export default function ProductForm({
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-auto">
-      <form
-        onSubmit={(e) => submit(e, pendingStatus)}
-        className="bg-white rounded-3xl shadow-lift w-full max-w-2xl my-8"
-      >
-        <div className="p-6 border-b border-black/5 flex items-start justify-between">
+    <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm overflow-y-auto">
+      <div className="min-h-full flex items-start sm:items-center justify-center p-4">
+        <form
+          onSubmit={(e) => submit(e, pendingStatus)}
+          className="bg-white rounded-3xl shadow-lift w-full max-w-2xl my-4 sm:my-8"
+        >
+        <div className="p-6 border-b border-black/5 flex items-start justify-between gap-3 sticky top-0 bg-white rounded-t-3xl z-10">
           <div>
             <div className="eyebrow text-rose">
               {initial ? 'Редактирование' : 'Новый продукт'}
@@ -198,19 +199,29 @@ export default function ProductForm({
               {initial ? initial.name : 'Добавить продукт'}
             </h2>
           </div>
-          {initial && (
-            <span
-              className={`px-3 py-1 rounded-full text-xs font-medium ${
-                initial.status === 'published'
-                  ? 'bg-success/15 text-success'
-                  : 'bg-ink2/15 text-ink2'
-              }`}
+          <div className="flex items-center gap-3">
+            {initial && (
+              <span
+                className={`px-3 py-1 rounded-full text-xs font-medium ${
+                  initial.status === 'published'
+                    ? 'bg-success/15 text-success'
+                    : 'bg-ink2/15 text-ink2'
+                }`}
+              >
+                {initial.status === 'published'
+                  ? '● опубликован'
+                  : '○ черновик'}
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={onCancel}
+              className="text-ink2 hover:text-ink text-2xl leading-none px-2"
+              aria-label="Закрыть"
             >
-              {initial.status === 'published'
-                ? '● опубликован'
-                : '○ черновик'}
-            </span>
-          )}
+              ×
+            </button>
+          </div>
         </div>
         <div className="p-6 space-y-4">
           <PhotoBlock
@@ -507,7 +518,8 @@ export default function ProductForm({
               : 'Опубликовать'}
           </button>
         </div>
-      </form>
+        </form>
+      </div>
     </div>
   );
 }

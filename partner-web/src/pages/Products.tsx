@@ -245,9 +245,10 @@ function StatsModal({
   }, [product.id, range]);
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-auto">
-      <div className="card w-full max-w-3xl my-8 flex flex-col">
-        <div className="px-6 pt-5 pb-3 border-b border-black/5 flex items-start justify-between">
+    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm overflow-y-auto">
+      <div className="min-h-full flex items-start sm:items-center justify-center p-4">
+      <div className="card w-full max-w-3xl my-4 sm:my-8 flex flex-col">
+        <div className="px-6 pt-5 pb-3 border-b border-black/5 flex items-start justify-between sticky top-0 bg-white rounded-t-2xl z-10">
           <div>
             <div className="eyebrow text-rose mb-1">Статистика</div>
             <div className="font-serif text-2xl">{product.name}</div>
@@ -255,7 +256,8 @@ function StatsModal({
           </div>
           <button
             onClick={onClose}
-            className="text-ink2 hover:text-ink text-lg leading-none"
+            className="text-ink2 hover:text-ink text-2xl leading-none px-2"
+            aria-label="Закрыть"
           >
             ×
           </button>
@@ -308,6 +310,7 @@ function StatsModal({
             </div>
           </>
         ) : null}
+      </div>
       </div>
     </div>
   );
@@ -580,12 +583,13 @@ function ProductFormModal({
   }
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 overflow-auto">
-      <form
-        onSubmit={submit}
-        className="card w-full max-w-2xl my-8 flex flex-col"
-      >
-        <div className="px-6 pt-5 pb-3 border-b border-black/5 flex items-start justify-between">
+    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm overflow-y-auto">
+      <div className="min-h-full flex items-start sm:items-center justify-center p-4">
+        <form
+          onSubmit={submit}
+          className="card w-full max-w-2xl my-4 sm:my-8 flex flex-col"
+        >
+        <div className="px-6 pt-5 pb-3 border-b border-black/5 flex items-start justify-between sticky top-0 bg-white rounded-t-2xl z-10">
           <div>
             <div className="eyebrow text-rose mb-1">
               {initial ? 'Редактирование' : 'Новый товар'}
@@ -602,7 +606,8 @@ function ProductFormModal({
           <button
             type="button"
             onClick={onClose}
-            className="text-ink2 hover:text-ink text-lg leading-none"
+            className="text-ink2 hover:text-ink text-2xl leading-none px-2"
+            aria-label="Закрыть"
           >
             ×
           </button>
@@ -844,7 +849,8 @@ function ProductFormModal({
               : 'Подать на модерацию'}
           </button>
         </div>
-      </form>
+        </form>
+      </div>
     </div>
   );
 }

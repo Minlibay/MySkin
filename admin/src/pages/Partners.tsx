@@ -317,18 +317,21 @@ function Modal({
   children: React.ReactNode;
 }) {
   return (
-    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <div className="card w-full max-w-md">
-        <div className="px-6 pt-5 pb-3 border-b border-black/5 flex items-start justify-between">
-          <div className="font-serif text-xl">{title}</div>
-          <button
-            onClick={onClose}
-            className="text-ink2 hover:text-ink text-lg leading-none"
-          >
-            ×
-          </button>
+    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm overflow-y-auto">
+      <div className="min-h-full flex items-start sm:items-center justify-center p-4">
+        <div className="card w-full max-w-md my-4">
+          <div className="px-6 pt-5 pb-3 border-b border-black/5 flex items-start justify-between sticky top-0 bg-white rounded-t-2xl z-10">
+            <div className="font-serif text-xl">{title}</div>
+            <button
+              onClick={onClose}
+              className="text-ink2 hover:text-ink text-2xl leading-none px-2"
+              aria-label="Закрыть"
+            >
+              ×
+            </button>
+          </div>
+          {children}
         </div>
-        {children}
       </div>
     </div>
   );

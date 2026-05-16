@@ -141,11 +141,12 @@ function CreateBrandModal({
   }
 
   return (
-    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4">
-      <form
-        onSubmit={submit}
-        className="card w-full max-w-md p-6 flex flex-col gap-4"
-      >
+    <div className="fixed inset-0 z-40 bg-black/40 backdrop-blur-sm overflow-y-auto">
+      <div className="min-h-full flex items-start sm:items-center justify-center p-4">
+        <form
+          onSubmit={submit}
+          className="card w-full max-w-md p-6 flex flex-col gap-4 my-4"
+        >
         <div>
           <div className="eyebrow text-rose mb-1">Новый бренд</div>
           <div className="font-serif text-2xl">Подать на модерацию</div>
@@ -178,7 +179,8 @@ function CreateBrandModal({
             {busy ? 'Отправляем…' : 'Отправить на модерацию'}
           </button>
         </div>
-      </form>
+        </form>
+      </div>
     </div>
   );
 }
