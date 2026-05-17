@@ -8,6 +8,28 @@ import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_button.dart';
 import 'auth_controller.dart';
 
+/// 4-digit OTP screen.
+///
+/// Design notes — fixed from the previous per-cell TextField implementation:
+///
+/// 1. **One hidden TextField backs four visual cells.** The old version
+///    used four separate TextFields. Each digit triggered a focus change,
+///    and on iOS/Android the soft keyboard briefly tore down and re-opened
+///    on every focus shift — so the user couldn't type the code without
+///    the keyboard blinking. A single field with `maxLength: 4` keeps the
+///    keyboard attached for the entire entry and lets the OS autofill bar
+///    paste a 4-digit SMS code in one tap.
+///
+/// 2. **Autofill.** `AutofillHints.oneTimeCode` + `keyboardType.number`
+///    + `textContentType` (handled by Flutter on iOS automatically given
+///    the hint) lets iOS surface the OTP from the most recent SMS on the
+///    keyboard suggestion strip, and on Android the IME's OTP detection
+///    populates the field. Wrapped in `AutofillGroup`.
+///
+/// 3. **Error feedback.** Wrong code shakes the cells, fires a haptic,
+///    and clears the field so the user can re-enter without manual tap.
+const _codeLength = 4;
+
 class CodeInputScreen extends ConsumerStatefulWidget {
   const CodeInputScreen({super.key, required this.phone});
   final String phone;
@@ -16,22 +38,38 @@ class CodeInputScreen extends ConsumerStatefulWidget {
   ConsumerState<CodeInputScreen> createState() => _CodeInputScreenState();
 }
 
-class _CodeInputScreenState extends ConsumerState<CodeInputScreen> {
-  static const _length = 4;
-  late final List<TextEditingController> _cellCtrls =
-      List.generate(_length, (_) => TextEditingController());
-  late final List<FocusNode> _cellNodes =
-      List.generate(_length, (_) => FocusNode());
-
+class _CodeInputScreenState extends ConsumerState<CodeInputScreen>
+    with SingleTickerProviderStateMixin {
+  final _controller = TextEditingController();
+  final _focus = FocusNode();
   Timer? _resendTimer;
   int _resendIn = 60;
+
+  late final AnimationController _shakeCtrl;
+  late final Animation<double> _shake;
+
+  // Mirror of `auth.errorCode` from the previous build so we can detect a
+  // freshly-arrived error and shake exactly once instead of on every
+  // rebuild while the same error sits in state.
+  String? _lastErrorCode;
 
   @override
   void initState() {
     super.initState();
     _startResendTimer();
+    _shakeCtrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 420),
+    );
+    _shake = TweenSequence<double>([
+      TweenSequenceItem(tween: Tween(begin: 0.0, end: -10.0), weight: 1),
+      TweenSequenceItem(tween: Tween(begin: -10.0, end: 10.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: 10.0, end: -8.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: -8.0, end: 6.0), weight: 2),
+      TweenSequenceItem(tween: Tween(begin: 6.0, end: 0.0), weight: 1),
+    ]).animate(_shakeCtrl);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _cellNodes.first.requestFocus();
+      _focus.requestFocus();
     });
   }
 
@@ -52,67 +90,79 @@ class _CodeInputScreenState extends ConsumerState<CodeInputScreen> {
   @override
   void dispose() {
     _resendTimer?.cancel();
-    for (final c in _cellCtrls) {
-      c.dispose();
-    }
-    for (final n in _cellNodes) {
-      n.dispose();
-    }
+    _controller.dispose();
+    _focus.dispose();
+    _shakeCtrl.dispose();
     super.dispose();
   }
 
-  String get _code => _cellCtrls.map((c) => c.text).join();
+  String get _code => _controller.text;
 
-  void _onChanged(int i, String v) {
-    if (v.length > 1) {
-      // pasted whole code
-      final digits = v.replaceAll(RegExp(r'\D'), '');
-      for (var k = 0; k < _length; k++) {
-        _cellCtrls[k].text = k < digits.length ? digits[k] : '';
-      }
-      _cellNodes[(_length - 1)].requestFocus();
-      setState(() {});
-      if (_code.length == _length) _submit();
-      return;
-    }
-    if (v.isNotEmpty && i < _length - 1) {
-      _cellNodes[i + 1].requestFocus();
+  void _onChanged(String v) {
+    // Strip any non-digit the IME might inject (rare, but autofill can pass
+    // spaces or hyphens from SMS bodies like "Your code is 1 2 3 4").
+    final digits = v.replaceAll(RegExp(r'\D'), '');
+    if (digits != v) {
+      _controller.value = TextEditingValue(
+        text: digits,
+        selection: TextSelection.collapsed(offset: digits.length),
+      );
     }
     setState(() {});
-    if (_code.length == _length) _submit();
-  }
-
-  void _onKey(int i, KeyEvent event) {
-    if (event is KeyDownEvent &&
-        event.logicalKey == LogicalKeyboardKey.backspace &&
-        _cellCtrls[i].text.isEmpty &&
-        i > 0) {
-      _cellCtrls[i - 1].clear();
-      _cellNodes[i - 1].requestFocus();
-      setState(() {});
+    if (digits.length == _codeLength) {
+      _submit();
     }
   }
 
   Future<void> _submit() async {
-    final code = _code;
-    if (code.length != _length) return;
-    await ref.read(authControllerProvider.notifier).verify(code);
+    if (_code.length != _codeLength) return;
+    HapticFeedback.lightImpact();
+    await ref.read(authControllerProvider.notifier).verify(_code);
   }
 
   Future<void> _resend() async {
     if (_resendIn > 0) return;
+    HapticFeedback.selectionClick();
     await ref.read(authControllerProvider.notifier).resend();
     _startResendTimer();
+  }
+
+  void _triggerErrorFeedback() {
+    HapticFeedback.heavyImpact();
+    _shakeCtrl.forward(from: 0);
+    // Clear the field so the user just retypes — saves a manual long-press.
+    _controller.clear();
+    setState(() {});
+    Future.delayed(const Duration(milliseconds: 420), () {
+      if (mounted) _focus.requestFocus();
+    });
+  }
+
+  String _resendLabel() {
+    if (_resendIn <= 0) return '';
+    final m = _resendIn ~/ 60;
+    final s = _resendIn % 60;
+    return '0:${s.toString().padLeft(2, '0')}'.replaceFirst('0:', '$m:');
   }
 
   @override
   Widget build(BuildContext context) {
     final state = ref.watch(authControllerProvider);
+    // Detect a freshly-arrived error and trigger shake once.
+    if (state.errorCode != null && state.errorCode != _lastErrorCode) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _triggerErrorFeedback();
+      });
+    }
+    _lastErrorCode = state.errorCode;
     final hasError = state.errorCode == 'wrong_code';
 
     return Scaffold(
       backgroundColor: AppColors.background,
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back_ios_new, size: 18),
           onPressed: () =>
@@ -120,58 +170,129 @@ class _CodeInputScreenState extends ConsumerState<CodeInputScreen> {
         ),
       ),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(AppSpacing.lg),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text('Введи код', style: AppTypography.h1),
-              const SizedBox(height: AppSpacing.xs),
-              Text(
-                'Отправили на ${widget.phone}',
-                style: AppTypography.bodySecondary,
-              ),
-              const SizedBox(height: AppSpacing.xl),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: List.generate(
-                    _length, (i) => _Cell(index: i, hasError: hasError, state: this)),
-              ),
-              if (state.errorCode != null) ...[
-                const SizedBox(height: AppSpacing.md),
+        child: AutofillGroup(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(
+                AppSpacing.lg, 0, AppSpacing.lg, AppSpacing.md),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Введи код', style: AppTypography.h1),
+                const SizedBox(height: AppSpacing.xs),
                 Text(
-                  _errorText(state.errorCode!),
-                  style:
-                      AppTypography.caption.copyWith(color: AppColors.danger),
+                  'Отправили на ${widget.phone}',
+                  style: AppTypography.bodySecondary,
                 ),
-              ],
-              const SizedBox(height: AppSpacing.xl),
-              Center(
-                child: _resendIn > 0
-                    ? Text('Отправить код снова через $_resendIn с',
-                        style: AppTypography.caption)
-                    : TextButton(
-                        onPressed: _resend,
-                        child: const Text('Отправить ещё раз'),
-                      ),
-              ),
-              const Spacer(),
-              if (state.busy)
-                const Center(
-                  child: Padding(
-                    padding: EdgeInsets.all(AppSpacing.md),
-                    child: CircularProgressIndicator(
-                      color: AppColors.primaryAccent,
-                    ),
+                const SizedBox(height: AppSpacing.xl),
+
+                // Stack: the real (invisible) TextField sits underneath
+                // the visual cells. We could hide the field with size: 0,
+                // but Flutter ignores zero-sized fields for focus on some
+                // platforms — full-sized + transparent is the proven
+                // pattern (pinput, otp_text_field use the same trick).
+                AnimatedBuilder(
+                  animation: _shake,
+                  builder: (_, child) => Transform.translate(
+                    offset: Offset(_shake.value, 0),
+                    child: child,
                   ),
-                )
-              else
+                  child: LayoutBuilder(
+                    builder: (ctx, c) {
+                      final w = ((c.maxWidth - 12.0 * (_codeLength - 1)) /
+                              _codeLength)
+                          .clamp(48.0, 72.0);
+                      final cellHeight = w * 1.12;
+                      return SizedBox(
+                        height: cellHeight,
+                        child: Stack(
+                          children: [
+                            // Invisible TextField, full row, takes focus &
+                            // surface the keyboard / OTP autofill.
+                            Opacity(
+                              opacity: 0.0,
+                              child: SizedBox(
+                                height: cellHeight,
+                                child: TextField(
+                                  controller: _controller,
+                                  focusNode: _focus,
+                                  autofocus: true,
+                                  keyboardType: TextInputType.number,
+                                  textInputAction: TextInputAction.done,
+                                  maxLength: _codeLength,
+                                  showCursor: false,
+                                  autofillHints: const [
+                                    AutofillHints.oneTimeCode
+                                  ],
+                                  enableIMEPersonalizedLearning: false,
+                                  inputFormatters: [
+                                    FilteringTextInputFormatter.digitsOnly,
+                                    LengthLimitingTextInputFormatter(
+                                        _codeLength),
+                                  ],
+                                  onChanged: _onChanged,
+                                  onSubmitted: (_) => _submit(),
+                                  decoration: const InputDecoration(
+                                    counterText: '',
+                                    border: InputBorder.none,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            // Visual cells. IgnorePointer so taps fall
+                            // through to the TextField underneath and the
+                            // OS keyboard pops up naturally.
+                            IgnorePointer(
+                              child: Row(
+                                mainAxisAlignment:
+                                    MainAxisAlignment.spaceBetween,
+                                children: List.generate(_codeLength, (i) {
+                                  final filled = i < _code.length;
+                                  final isCurrent = i == _code.length &&
+                                      _focus.hasFocus;
+                                  return _CodeCell(
+                                    width: w,
+                                    height: cellHeight,
+                                    digit: filled ? _code[i] : '',
+                                    focused: isCurrent,
+                                    error: hasError,
+                                  );
+                                }),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+                ),
+
+                if (state.errorCode != null) ...[
+                  const SizedBox(height: AppSpacing.md),
+                  Text(
+                    _errorText(state.errorCode!),
+                    style: AppTypography.caption
+                        .copyWith(color: AppColors.danger),
+                  ),
+                ],
+                const SizedBox(height: AppSpacing.xl),
+                Center(
+                  child: _resendIn > 0
+                      ? Text('Отправить код снова через ${_resendLabel()}',
+                          style: AppTypography.caption)
+                      : TextButton(
+                          onPressed: _resend,
+                          child: const Text('Отправить ещё раз'),
+                        ),
+                ),
+                const Spacer(),
                 AppButton(
                   label: 'Подтвердить',
-                  onPressed: _code.length == _length ? _submit : null,
+                  loading: state.busy,
+                  onPressed:
+                      _code.length == _codeLength && !state.busy ? _submit : null,
                 ),
-              const SizedBox(height: AppSpacing.md),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -188,77 +309,94 @@ class _CodeInputScreenState extends ConsumerState<CodeInputScreen> {
       };
 }
 
-class _Cell extends StatefulWidget {
-  const _Cell({required this.index, required this.hasError, required this.state});
-  final int index;
-  final bool hasError;
-  final _CodeInputScreenState state;
-
-  @override
-  State<_Cell> createState() => _CellState();
-}
-
-class _CellState extends State<_Cell> {
-  // Hidden focus node for the KeyboardListener. Owned by this state so it's
-  // created once per cell instead of every rebuild.
-  late final FocusNode _kbNode = FocusNode(skipTraversal: true, debugLabel: 'cell-${widget.index}-kb');
-
-  @override
-  void initState() {
-    super.initState();
-    widget.state._cellNodes[widget.index].addListener(_repaint);
-  }
-
-  @override
-  void dispose() {
-    widget.state._cellNodes[widget.index].removeListener(_repaint);
-    _kbNode.dispose();
-    super.dispose();
-  }
-
-  void _repaint() {
-    if (mounted) setState(() {});
-  }
+class _CodeCell extends StatelessWidget {
+  const _CodeCell({
+    required this.width,
+    required this.height,
+    required this.digit,
+    required this.focused,
+    required this.error,
+  });
+  final double width;
+  final double height;
+  final String digit;
+  final bool focused;
+  final bool error;
 
   @override
   Widget build(BuildContext context) {
-    final ctrl = widget.state._cellCtrls[widget.index];
-    final node = widget.state._cellNodes[widget.index];
-    final filled = ctrl.text.isNotEmpty;
+    final filled = digit.isNotEmpty;
     return AnimatedContainer(
       duration: const Duration(milliseconds: 180),
-      width: 64,
-      height: 72,
+      width: width,
+      height: height,
       decoration: BoxDecoration(
         color: filled ? AppColors.primary : AppColors.surface,
         borderRadius: BorderRadius.circular(AppRadius.md),
         border: Border.all(
-          color: widget.hasError
+          color: error
               ? AppColors.danger
-              : (node.hasFocus
-                  ? AppColors.primaryAccent
-                  : AppColors.divider),
-          width: node.hasFocus ? 1.5 : 1,
+              : (focused ? AppColors.primaryAccent : AppColors.divider),
+          width: focused ? 1.5 : 1,
         ),
       ),
       alignment: Alignment.center,
-      child: KeyboardListener(
-        focusNode: _kbNode,
-        onKeyEvent: (e) => widget.state._onKey(widget.index, e),
-        child: TextField(
-          controller: ctrl,
-          focusNode: node,
-          textAlign: TextAlign.center,
-          keyboardType: TextInputType.number,
-          maxLength: 1,
-          style: AppTypography.h1.copyWith(fontSize: 32),
-          inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-          decoration: const InputDecoration(
-            counterText: '',
-            border: InputBorder.none,
-          ),
-          onChanged: (v) => widget.state._onChanged(widget.index, v),
+      child: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 140),
+        transitionBuilder: (child, anim) => ScaleTransition(
+          scale: Tween<double>(begin: 0.6, end: 1.0)
+              .animate(CurvedAnimation(
+                  parent: anim, curve: Curves.easeOutBack)),
+          child: FadeTransition(opacity: anim, child: child),
         ),
+        child: filled
+            ? Text(
+                digit,
+                key: ValueKey(digit + width.toString()),
+                style: AppTypography.h1.copyWith(fontSize: 32),
+              )
+            : focused
+                ? const _Caret(key: ValueKey('caret'))
+                : const SizedBox.shrink(key: ValueKey('empty')),
+      ),
+    );
+  }
+}
+
+class _Caret extends StatefulWidget {
+  const _Caret({super.key});
+
+  @override
+  State<_Caret> createState() => _CaretState();
+}
+
+class _CaretState extends State<_Caret>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _ctrl,
+      child: Container(
+        width: 2,
+        height: 28,
+        color: AppColors.roseDeep,
       ),
     );
   }

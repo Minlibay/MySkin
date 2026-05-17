@@ -5,8 +5,8 @@ import '../domain/onboarding_step.dart';
 class OnboardingState {
   const OnboardingState({
     this.profile = const SkinProfile(),
-    this.currentStep = OnboardingStepId.name,
-    this.history = const [OnboardingStepId.name],
+    this.currentStep = OnboardingFlow.firstStep,
+    this.history = const [OnboardingFlow.firstStep],
   });
 
   final SkinProfile profile;

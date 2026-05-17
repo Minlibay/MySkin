@@ -153,13 +153,19 @@ class OnboardingFlow {
   // of onboarding. SkinProfile.budget stays on the model and in the DB as a
   // nullable field so existing rows aren't migrated.
 
+  /// First step the user actually sees. Used by the controller's initial
+  /// state — kept as a constant so it stays in sync with [next()] / the
+  /// total-step estimator below.
+  static const OnboardingStepId firstStep = OnboardingStepId.skinType;
+
   /// Computes the next step from current profile + previously asked id.
+  ///
+  /// Order rationale: skin-related questions first (they're easy answers
+  /// that immediately feel like the app is "learning the skin"), then
+  /// gender (only affects messaging tone), then name (lowest-friction once
+  /// the user is already invested — better than asking up front).
   static OnboardingStepId next(SkinProfile profile, OnboardingStepId current) {
     switch (current) {
-      case OnboardingStepId.name:
-        return OnboardingStepId.gender;
-      case OnboardingStepId.gender:
-        return OnboardingStepId.skinType;
       case OnboardingStepId.skinType:
         if (profile.skinType == 'unknown') {
           return OnboardingStepId.skinTypeHelp;
@@ -180,12 +186,33 @@ class OnboardingFlow {
         if (profile.sensitivity == 'yes') {
           return OnboardingStepId.sensitivityReaction;
         }
-        return OnboardingStepId.done;
+        return OnboardingStepId.gender;
       case OnboardingStepId.sensitivityReaction:
+        return OnboardingStepId.gender;
+      case OnboardingStepId.gender:
+        return OnboardingStepId.name;
+      case OnboardingStepId.name:
         return OnboardingStepId.done;
       case OnboardingStepId.done:
         return OnboardingStepId.done;
     }
+  }
+
+  /// Total step count for the current branch — used by the progress bar
+  /// to avoid the hard-coded "6" that broke when the flow branched. Walks
+  /// the [next()] graph from [firstStep] using the running profile to
+  /// resolve the same conditionals the user will hit.
+  static int totalStepsFor(SkinProfile profile) {
+    var count = 0;
+    var step = firstStep;
+    while (step != OnboardingStepId.done) {
+      count++;
+      step = next(profile, step);
+      // Safety: every branch eventually reaches done; cap to avoid an
+      // infinite loop if a future edit introduces a cycle.
+      if (count > 20) break;
+    }
+    return count;
   }
 
   static OnboardingStepId _afterSkinType(SkinProfile profile) {
@@ -214,6 +241,7 @@ class OnboardingFlow {
       case OnboardingStepId.sensitivity:
         return sensitivityStep;
       case OnboardingStepId.sensitivityReaction:
+        return sensitivityReactionStep;
       case OnboardingStepId.done:
         return sensitivityReactionStep;
     }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
@@ -69,7 +70,11 @@ class OnboardingScreen extends ConsumerWidget {
                               horizontal: AppSpacing.sm),
                           child: _ProgressDots(
                             current: state.history.length - 1,
-                            total: 6,
+                            // Branch-aware: total depends on which path the
+                            // running profile takes. Avoids the hard-coded
+                            // "6" that under/over-counted depending on
+                            // sensitivity / acne branches.
+                            total: OnboardingFlow.totalStepsFor(state.profile),
                           ),
                         ),
                       ),
@@ -96,6 +101,7 @@ class OnboardingScreen extends ConsumerWidget {
                 step: step,
                 profile: state.profile,
                 controller: ctrl,
+                stepNumber: state.history.length,
               ),
             ),
           ),
@@ -141,11 +147,13 @@ class _StepView extends StatelessWidget {
     required this.step,
     required this.profile,
     required this.controller,
+    required this.stepNumber,
   });
 
   final OnboardingStep step;
   final SkinProfile profile;
   final OnboardingController controller;
+  final int stepNumber;
 
   String? get _selectedSingle {
     switch (step.id) {
@@ -167,17 +175,21 @@ class _StepView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final stepNum = _stepNumberFor(step.id);
+    final total = OnboardingFlow.totalStepsFor(profile);
+    final showCounter = step.id != OnboardingStepId.done;
     return Padding(
       padding: const EdgeInsets.fromLTRB(
           AppSpacing.lg, AppSpacing.xl, AppSpacing.lg, AppSpacing.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          if (stepNum != null)
-            EyebrowText('Шаг $stepNum · из 06', color: AppColors.roseDeep),
-          // total = 6 steps after budget removal — counter renumbered below
-          if (stepNum != null) const SizedBox(height: 10),
+          if (showCounter) ...[
+            EyebrowText(
+              'Шаг $stepNumber · из ${total.toString().padLeft(2, '0')}',
+              color: AppColors.roseDeep,
+            ),
+            const SizedBox(height: 10),
+          ],
           _StepTitle(title: step.title),
           if (step.subtitle != null) ...[
             const SizedBox(height: AppSpacing.sm),
@@ -199,25 +211,15 @@ class _StepView extends StatelessWidget {
               label: 'Продолжить',
               onPressed: profile.concerns.isEmpty
                   ? null
-                  : controller.confirmMulti,
+                  : () {
+                      HapticFeedback.lightImpact();
+                      controller.confirmMulti();
+                    },
             ),
         ],
       ),
     );
   }
-
-  int? _stepNumberFor(OnboardingStepId id) => switch (id) {
-        OnboardingStepId.name => 1,
-        OnboardingStepId.gender => 2,
-        OnboardingStepId.skinType => 3,
-        OnboardingStepId.skinTypeHelp => 3,
-        OnboardingStepId.pores => 4,
-        OnboardingStepId.concerns => 4,
-        OnboardingStepId.acneType => 5,
-        OnboardingStepId.sensitivity => 5,
-        OnboardingStepId.sensitivityReaction => 6,
-        OnboardingStepId.done => null,
-      };
 
   Widget _buildSingle() {
     final selected = _selectedSingle;
@@ -241,7 +243,10 @@ class _StepView extends StatelessWidget {
             subtitle: opt.subtitle,
             emoji: opt.emoji,
             selected: selected == opt.id,
-            onTap: () => controller.selectSingle(opt.id),
+            onTap: () {
+              HapticFeedback.selectionClick();
+              controller.selectSingle(opt.id);
+            },
           ),
         );
       },
@@ -258,7 +263,10 @@ class _StepView extends StatelessWidget {
           return AppChip(
             label: opt.title,
             selected: selected,
-            onTap: () => controller.toggleMulti(opt.id),
+            onTap: () {
+              HapticFeedback.selectionClick();
+              controller.toggleMulti(opt.id);
+            },
           );
         }).toList(),
       ),
@@ -365,14 +373,21 @@ class _TextInputStepState extends State<_TextInputStep> {
           ),
           onChanged: (_) => setState(() {}),
           onSubmitted: (v) {
-            if (canSubmit) widget.controller.submitText(v);
+            if (canSubmit) {
+              HapticFeedback.lightImpact();
+              widget.controller.submitText(v);
+            }
           },
         ),
         const Spacer(),
         AppButton(
           label: 'Продолжить',
-          onPressed:
-              canSubmit ? () => widget.controller.submitText(_ctrl.text) : null,
+          onPressed: canSubmit
+              ? () {
+                  HapticFeedback.lightImpact();
+                  widget.controller.submitText(_ctrl.text);
+                }
+              : null,
         ),
       ],
     );
