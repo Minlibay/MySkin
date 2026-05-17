@@ -7,6 +7,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
+import '../../../core/telemetry/telemetry.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
@@ -516,22 +517,30 @@ class _HeatmapState extends ConsumerState<_Heatmap>
       await tmp.writeAsBytes(bytes, flush: true);
       Face? face = await _tryDetect(
         tmp.path,
+        pass: 'safety_accurate_contours_015',
         accurate: true,
         contours: true,
         minFaceSize: 0.15,
       );
       face ??= await _tryDetect(
         tmp.path,
+        pass: 'safety_accurate_landmarks_008',
         accurate: true,
-        contours: true,
+        contours: false,
+        landmarks: true,
         minFaceSize: 0.08,
       );
       face ??= await _tryDetect(
         tmp.path,
+        pass: 'safety_fast_005',
         accurate: false,
         contours: false,
-        minFaceSize: 0.08,
+        landmarks: false,
+        minFaceSize: 0.05,
       );
+      Telemetry.event('scan_safety_detect', data: {
+        'outcome': face != null ? 'ok' : 'no_face',
+      });
       return face;
     } finally {
       try {
@@ -544,27 +553,33 @@ class _HeatmapState extends ConsumerState<_Heatmap>
     String path, {
     required bool accurate,
     required bool contours,
+    bool? landmarks,
     required double minFaceSize,
+    String pass = '',
   }) async {
     final detector = FaceDetector(
       options: FaceDetectorOptions(
         performanceMode:
             accurate ? FaceDetectorMode.accurate : FaceDetectorMode.fast,
         enableContours: contours,
-        enableLandmarks: contours,
+        enableLandmarks: landmarks ?? contours,
         minFaceSize: minFaceSize,
       ),
     );
     try {
       final input = InputImage.fromFilePath(path);
       final faces = await detector.processImage(input);
-      if (faces.isEmpty) return null;
+      if (faces.isEmpty) {
+        debugPrint('safety detect pass=$pass returned 0 faces');
+        return null;
+      }
       faces.sort((a, b) =>
           (b.boundingBox.width * b.boundingBox.height)
               .compareTo(a.boundingBox.width * a.boundingBox.height));
+      debugPrint('safety detect pass=$pass found ${faces.length} face(s)');
       return faces.first;
     } catch (e) {
-      debugPrint('safety-net detect failed (accurate=$accurate): $e');
+      debugPrint('safety detect pass=$pass failed: $e');
       return null;
     } finally {
       await detector.close();

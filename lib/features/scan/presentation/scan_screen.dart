@@ -507,59 +507,100 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   /// by InputImage.fromFilePath and by Flutter's image decoder, so the
   /// resulting rect lines up with how the photo is later displayed.
   /// Detects the user's face on a saved photo and produces the full
-  /// `face_geom` payload uploaded with the scan. We run a 3-step cascade:
-  /// accurate+contours → accurate plain → fast. The contour-aware pass is
-  /// preferred (it gives the polygon + landmarks for the heatmap); the
-  /// remaining passes serve as bbox-only fallbacks for tricky lighting.
+  /// `face_geom` payload. We deliberately do NOT reuse [_faceDetector]
+  /// here — it has `enableTracking: true` for the live preview, and per
+  /// ML Kit docs tracking conflicts with contour detection on single
+  /// images (iOS silently returns no faces). Each pass below builds a
+  /// fresh detector with the right options.
   ///
-  /// Returns null only when no pass found a face at all.
+  /// 3-pass cascade:
+  ///   1. accurate + contours + landmarks @ 0.15  ← preferred (full data)
+  ///   2. accurate + landmarks only       @ 0.08
+  ///   3. fast, plain                     @ 0.05  ← last resort
   Future<Map<String, dynamic>?> _faceGeomFromFile(
       String path, List<int> bytes) async {
     final size = await _decodedImageSize(Uint8List.fromList(bytes));
-    if (size == null) return null;
+    if (size == null) {
+      Telemetry.event('scan_face_detect',
+          data: {'outcome': 'decode_failed'});
+      return null;
+    }
 
-    Face? face = await _runDetector(_faceDetector, path);
-    face ??= await _runDetector(
+    Face? face = await _runDetector(
       FaceDetector(
         options: FaceDetectorOptions(
           performanceMode: FaceDetectorMode.accurate,
           enableContours: true,
           enableLandmarks: true,
+          minFaceSize: 0.15,
+        ),
+      ),
+      path,
+      pass: 'accurate_contours_015',
+      dispose: true,
+    );
+    face ??= await _runDetector(
+      FaceDetector(
+        options: FaceDetectorOptions(
+          performanceMode: FaceDetectorMode.accurate,
+          enableLandmarks: true,
           minFaceSize: 0.08,
         ),
       ),
       path,
+      pass: 'accurate_landmarks_008',
       dispose: true,
     );
     face ??= await _runDetector(
       FaceDetector(
         options: FaceDetectorOptions(
           performanceMode: FaceDetectorMode.fast,
-          minFaceSize: 0.08,
+          minFaceSize: 0.05,
         ),
       ),
       path,
+      pass: 'fast_005',
       dispose: true,
     );
-    if (face == null) return null;
-    return buildFaceGeomJson(face, size.width, size.height);
+    if (face == null) {
+      Telemetry.event('scan_face_detect', data: {
+        'outcome': 'no_face',
+        'image_w': size.width.toInt(),
+        'image_h': size.height.toInt(),
+      });
+      return null;
+    }
+    final geom = buildFaceGeomJson(face, size.width, size.height);
+    Telemetry.event('scan_face_detect', data: {
+      'outcome': 'ok',
+      'has_contour': geom?['contour'] != null,
+      'image_w': size.width.toInt(),
+      'image_h': size.height.toInt(),
+    });
+    return geom;
   }
 
   Future<Face?> _runDetector(
     FaceDetector detector,
     String path, {
+    String pass = '',
     bool dispose = false,
   }) async {
     try {
       final input = InputImage.fromFilePath(path);
       final faces = await detector.processImage(input);
-      if (faces.isEmpty) return null;
+      if (faces.isEmpty) {
+        debugPrint('face detect pass=$pass returned 0 faces');
+        return null;
+      }
       faces.sort((a, b) =>
           (b.boundingBox.width * b.boundingBox.height)
               .compareTo(a.boundingBox.width * a.boundingBox.height));
+      debugPrint(
+          'face detect pass=$pass found ${faces.length} face(s)');
       return faces.first;
     } catch (e) {
-      debugPrint('face detect failed: $e');
+      debugPrint('face detect pass=$pass failed: $e');
       return null;
     } finally {
       if (dispose) await detector.close();
