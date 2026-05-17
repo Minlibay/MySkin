@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Моя Кожа</string>
+	<string>MySkin</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Нужен доступ к камере, чтобы сделать фото кожи для анализа.</string>
 	<key>NSPhotoLibraryUsageDescription</key>

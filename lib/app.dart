@@ -42,7 +42,7 @@ class MySkinApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Моя Кожа',
+      title: 'MySkin',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.light(),
       home: const _AuthGate(),
