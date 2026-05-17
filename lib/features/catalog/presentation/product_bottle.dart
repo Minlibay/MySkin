@@ -25,14 +25,18 @@ class ProductBottle extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     if (product.hasPhoto) {
       final api = ref.watch(backendApiProvider);
+      final url = product.isCustom
+          ? api.customProductPhotoUrl(product.id)
+          : api.productPhotoUrl(product.id);
       return ClipRRect(
         borderRadius: BorderRadius.circular(12),
         child: SizedBox(
           width: width,
           height: height,
           child: Image.network(
-            api.productPhotoUrl(product.id),
+            url,
             fit: BoxFit.cover,
+            headers: product.isCustom ? api.imageAuthHeaders() : null,
             errorBuilder: (_, __, ___) => _illustration(),
           ),
         ),
@@ -42,6 +46,19 @@ class ProductBottle extends ConsumerWidget {
   }
 
   Widget _illustration() {
+    // Map fill_level to a 0..1 multiplier for the liquid height. Null = no
+    // info → keep the default 1.0 so the bottle still looks like a bottle.
+    final fillMul = switch (product.fillLevel) {
+      'full' => 1.0,
+      'half' => 0.5,
+      'low' => 0.25,
+      'empty' => 0.0,
+      _ => 1.0,
+    };
+    final liquidMaxHeight = (height - 4) * 0.55;
+    final liquidHeight = liquidMaxHeight * fillMul;
+    // Anchor the liquid to the bottom of its band so it visually drains.
+    final liquidBottomY = 10.0 + (height - 4) * 0.85;
     final cap = product.kind == 'spf' ? Colors.black87 : AppColors.roseDeep;
     final liquid = product.accentColor;
     return SizedBox(
@@ -94,26 +111,28 @@ class ProductBottle extends ConsumerWidget {
               ),
             ),
           ),
-          // liquid
-          Positioned(
-            top: 10 + (height - 4) * 0.3,
-            left: width * 0.12,
-            right: width * 0.12,
-            height: (height - 4) * 0.55,
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topCenter,
-                  end: Alignment.bottomCenter,
-                  colors: [
-                    liquid.withOpacity(0.85),
-                    liquid.withOpacity(0.55),
-                  ],
+          // liquid (height modulated by fill_level — gravity-correct, drains
+          // from the top)
+          if (liquidHeight > 0)
+            Positioned(
+              top: liquidBottomY - liquidHeight,
+              left: width * 0.12,
+              right: width * 0.12,
+              height: liquidHeight,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      liquid.withOpacity(0.85),
+                      liquid.withOpacity(0.55),
+                    ],
+                  ),
+                  borderRadius: BorderRadius.circular(3),
                 ),
-                borderRadius: BorderRadius.circular(3),
               ),
             ),
-          ),
           // label
           if (label != null)
             Positioned(

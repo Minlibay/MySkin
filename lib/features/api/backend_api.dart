@@ -159,6 +159,124 @@ class BackendApi {
     await _dio.delete('$baseUrl/me/shelf/$productId', options: _auth());
   }
 
+  /// Patch fill_level / opened_at / expires_at / pao_months for a catalog
+  /// product already on the user's shelf. Pass `null` for any key in
+  /// [clear] to null it out server-side; non-null fields are written as-is.
+  Future<void> patchShelfItem({
+    required String productId,
+    String? fillLevel,
+    DateTime? openedAt,
+    DateTime? expiresAt,
+    int? paoMonths,
+    Set<String> clear = const {},
+  }) async {
+    final body = <String, dynamic>{};
+    if (fillLevel != null) body['fill_level'] = fillLevel;
+    if (openedAt != null) body['opened_at'] = _dateOnly(openedAt);
+    if (expiresAt != null) body['expires_at'] = _dateOnly(expiresAt);
+    if (paoMonths != null) body['pao_months'] = paoMonths;
+    for (final k in clear) {
+      body[k] = null;
+    }
+    if (body.isEmpty) return;
+    await _dio.patch('$baseUrl/me/shelf/$productId',
+        data: body, options: _auth());
+  }
+
+  Future<Product> addCustomProduct({
+    required String brand,
+    required String name,
+    required String kind,
+    String? accentColor,
+    List<String> ingredients = const [],
+    String status = 'have',
+    String? fillLevel,
+    DateTime? openedAt,
+    DateTime? expiresAt,
+    int? paoMonths,
+    String? notes,
+    String? photoBase64,
+    String photoMime = 'image/jpeg',
+  }) async {
+    final body = <String, dynamic>{
+      'brand': brand,
+      'name': name,
+      'kind': kind,
+      if (accentColor != null) 'accent_color': accentColor,
+      if (ingredients.isNotEmpty) 'ingredients': ingredients,
+      'status': status,
+      if (fillLevel != null) 'fill_level': fillLevel,
+      if (openedAt != null) 'opened_at': _dateOnly(openedAt),
+      if (expiresAt != null) 'expires_at': _dateOnly(expiresAt),
+      if (paoMonths != null) 'pao_months': paoMonths,
+      if (notes != null) 'notes': notes,
+      if (photoBase64 != null) ...{
+        'photo_b64': photoBase64,
+        'photo_mime': photoMime,
+      },
+    };
+    final r =
+        await _dio.post('$baseUrl/me/shelf/custom', data: body, options: _auth());
+    return Product.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  Future<Product> patchCustomProduct({
+    required String id,
+    String? brand,
+    String? name,
+    String? kind,
+    String? status,
+    String? fillLevel,
+    DateTime? openedAt,
+    DateTime? expiresAt,
+    int? paoMonths,
+    String? notes,
+    Set<String> clear = const {},
+  }) async {
+    final body = <String, dynamic>{};
+    if (brand != null) body['brand'] = brand;
+    if (name != null) body['name'] = name;
+    if (kind != null) body['kind'] = kind;
+    if (status != null) body['status'] = status;
+    if (fillLevel != null) body['fill_level'] = fillLevel;
+    if (openedAt != null) body['opened_at'] = _dateOnly(openedAt);
+    if (expiresAt != null) body['expires_at'] = _dateOnly(expiresAt);
+    if (paoMonths != null) body['pao_months'] = paoMonths;
+    if (notes != null) body['notes'] = notes;
+    for (final k in clear) {
+      body[k] = null;
+    }
+    final r = await _dio.patch('$baseUrl/me/shelf/custom/$id',
+        data: body, options: _auth());
+    return Product.fromJson(r.data as Map<String, dynamic>);
+  }
+
+  Future<void> removeCustomProduct(String id) async {
+    await _dio.delete('$baseUrl/me/shelf/custom/$id', options: _auth());
+  }
+
+  String customProductPhotoUrl(String id) =>
+      '$baseUrl/me/shelf/custom/$id/photo';
+
+  Future<void> setCustomProductPhoto({
+    required String id,
+    required String photoBase64,
+    String mime = 'image/jpeg',
+  }) async {
+    await _dio.put(
+      '$baseUrl/me/shelf/custom/$id/photo',
+      data: {'photo_b64': photoBase64, 'mime': mime},
+      options: _auth(),
+    );
+  }
+
+  static String _dateOnly(DateTime d) {
+    final u = d.toUtc();
+    return '${u.year.toString().padLeft(4, '0')}-'
+        '${u.month.toString().padLeft(2, '0')}-'
+        '${u.day.toString().padLeft(2, '0')}';
+  }
+
   Future<void> addFavorite(String productId) async {
     await _dio.put('$baseUrl/me/favorites/$productId', options: _auth());
   }

@@ -1609,6 +1609,7 @@ class CatalogHandlers {
     required this.sessions,
     required this.products,
     required this.shelf,
+    required this.customShelf,
     required this.profiles,
     required this.favorites,
   });
@@ -1616,6 +1617,7 @@ class CatalogHandlers {
   final SessionRepository sessions;
   final ProductRepository products;
   final UserProductRepository shelf;
+  final UserCustomProductRepository customShelf;
   final ProfileRepository profiles;
   final UserFavoriteRepository favorites;
 
@@ -1627,6 +1629,12 @@ class CatalogHandlers {
     ..get('/me/shelf', _withUser(_shelf))
     ..put('/me/shelf/<productId>', _withUser(_addToShelf))
     ..delete('/me/shelf/<productId>', _withUser(_removeFromShelf))
+    ..patch('/me/shelf/<productId>', _withUser(_patchShelf))
+    ..post('/me/shelf/custom', _withUser(_addCustom))
+    ..patch('/me/shelf/custom/<id>', _withUser(_patchCustom))
+    ..delete('/me/shelf/custom/<id>', _withUser(_removeCustom))
+    ..get('/me/shelf/custom/<id>/photo', _withUser(_customPhoto))
+    ..put('/me/shelf/custom/<id>/photo', _withUser(_setCustomPhoto))
     ..get('/me/favorites', _withUser(_listFavorites))
     ..put('/me/favorites/<productId>', _withUser(_addFavorite))
     ..delete('/me/favorites/<productId>', _withUser(_removeFavorite));
@@ -1720,17 +1728,58 @@ class CatalogHandlers {
 
   Future<Response> _shelf(Request req, UserRow user) async {
     final items = await shelf.list(user.id);
-    return jsonResponse(200, {
-      'items': items
-          .map((it) => {
-                ...it.product.toJson(),
-                'status': it.status,
-                'added_at': it.addedAt.toUtc().toIso8601String(),
-                'notes': it.notes,
-              })
-          .toList(),
+    final customItems = await customShelf.list(user.id);
+    final merged = <Map<String, dynamic>>[];
+    for (final it in items) {
+      merged.add({
+        ...it.product.toJson(),
+        'status': it.status,
+        'added_at': it.addedAt.toUtc().toIso8601String(),
+        'notes': it.notes,
+        'fill_level': it.fillLevel,
+        'opened_at': it.openedAt?.toUtc().toIso8601String(),
+        'expires_at': it.expiresAt?.toUtc().toIso8601String(),
+        'pao_months': it.paoMonths,
+        'is_custom': false,
+      });
+    }
+    for (final c in customItems) {
+      merged.add(_customToJson(c));
+    }
+    // Newest first across both sources.
+    merged.sort((a, b) {
+      final ax = DateTime.tryParse(a['added_at'] as String? ?? '')?.millisecondsSinceEpoch ?? 0;
+      final bx = DateTime.tryParse(b['added_at'] as String? ?? '')?.millisecondsSinceEpoch ?? 0;
+      return bx.compareTo(ax);
     });
+    return jsonResponse(200, {'items': merged});
   }
+
+  Map<String, dynamic> _customToJson(CustomShelfItem c) => {
+        'id': c.id,
+        'slug': 'custom-${c.id}',
+        'brand': c.brand,
+        'name': c.name,
+        'kind': c.kind,
+        'description': '',
+        'price_rub': 0,
+        'accent_color': c.accentColor,
+        'ingredients': c.ingredients,
+        'tags': const <String>[],
+        'skin_types': const <String>[],
+        'is_active': false,
+        'gentle': false,
+        'routine_phase': 'any',
+        'has_photo': c.hasPhoto,
+        'status': c.status,
+        'added_at': c.addedAt.toUtc().toIso8601String(),
+        'notes': c.notes,
+        'fill_level': c.fillLevel,
+        'opened_at': c.openedAt?.toUtc().toIso8601String(),
+        'expires_at': c.expiresAt?.toUtc().toIso8601String(),
+        'pao_months': c.paoMonths,
+        'is_custom': true,
+      };
 
   Future<Response> _addToShelf(Request req, UserRow user) async {
     final productId = req.params['productId']!;
@@ -1755,6 +1804,199 @@ class CatalogHandlers {
     final productId = req.params['productId']!;
     await shelf.remove(userId: user.id, productId: productId);
     return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _patchShelf(Request req, UserRow user) async {
+    final productId = req.params['productId']!;
+    final body =
+        jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final patch = _parseExpiryPatch(body);
+    if (patch == null) return jsonResponse(400, {'error': 'invalid_body'});
+    await shelf.patch(
+      userId: user.id,
+      productId: productId,
+      fillLevel: patch.fillLevel,
+      openedAt: patch.openedAt,
+      expiresAt: patch.expiresAt,
+      paoMonths: patch.paoMonths,
+      clear: patch.clear,
+    );
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _addCustom(Request req, UserRow user) async {
+    final body =
+        jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final brand = (body['brand'] as String? ?? '').trim();
+    final name = (body['name'] as String? ?? '').trim();
+    final kind = (body['kind'] as String? ?? '').trim();
+    if (brand.isEmpty || name.isEmpty || kind.isEmpty) {
+      return jsonResponse(400, {'error': 'missing_fields'});
+    }
+    const allowedKinds = {
+      'cleanser', 'toner', 'essence', 'serum', 'moisturizer',
+      'spf', 'mask', 'eye_cream',
+    };
+    if (!allowedKinds.contains(kind)) {
+      return jsonResponse(400, {'error': 'invalid_kind'});
+    }
+    final patch = _parseExpiryPatch(body) ?? _ExpiryPatch();
+    final item = await customShelf.create(
+      userId: user.id,
+      brand: brand,
+      name: name,
+      kind: kind,
+      accentColor: (body['accent_color'] as String?)?.trim().isNotEmpty == true
+          ? (body['accent_color'] as String).trim()
+          : '#D98FA3',
+      ingredients: ((body['ingredients'] as List?) ?? const [])
+          .map((e) => '$e')
+          .toList(),
+      status: (body['status'] as String? ?? 'have').trim(),
+      fillLevel: patch.fillLevel,
+      openedAt: patch.openedAt,
+      expiresAt: patch.expiresAt,
+      paoMonths: patch.paoMonths,
+      notes: body['notes'] as String?,
+    );
+    // Optional inline photo for one-shot add (base64 like avatar/scan APIs).
+    final photoB64 = (body['photo_b64'] as String?)?.trim();
+    if (photoB64 != null && photoB64.isNotEmpty) {
+      try {
+        await customShelf.setPhoto(
+          userId: user.id,
+          id: item.id,
+          bytes: base64Decode(photoB64),
+          mime: (body['photo_mime'] as String?) ?? 'image/jpeg',
+        );
+      } catch (_) {
+        // Bad base64 — ignore the photo, keep the product.
+      }
+    }
+    final reloaded =
+        await customShelf.findById(userId: user.id, id: item.id) ?? item;
+    return jsonResponse(200, _customToJson(reloaded));
+  }
+
+  Future<Response> _patchCustom(Request req, UserRow user) async {
+    final id = req.params['id']!;
+    final body =
+        jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final patch = _parseExpiryPatch(body);
+    if (patch == null) return jsonResponse(400, {'error': 'invalid_body'});
+    final status = (body['status'] as String?)?.trim();
+    if (status != null && !const {'have', 'finished'}.contains(status)) {
+      return jsonResponse(400, {'error': 'invalid_status'});
+    }
+    await customShelf.patch(
+      userId: user.id,
+      id: id,
+      brand: (body['brand'] as String?)?.trim(),
+      name: (body['name'] as String?)?.trim(),
+      kind: (body['kind'] as String?)?.trim(),
+      status: status,
+      fillLevel: patch.fillLevel,
+      openedAt: patch.openedAt,
+      expiresAt: patch.expiresAt,
+      paoMonths: patch.paoMonths,
+      notes: body['notes'] as String?,
+      clear: patch.clear,
+    );
+    final reloaded =
+        await customShelf.findById(userId: user.id, id: id);
+    if (reloaded == null) return jsonResponse(404, {'error': 'not_found'});
+    return jsonResponse(200, _customToJson(reloaded));
+  }
+
+  Future<Response> _removeCustom(Request req, UserRow user) async {
+    final id = req.params['id']!;
+    await customShelf.remove(userId: user.id, id: id);
+    return jsonResponse(200, {'ok': true});
+  }
+
+  Future<Response> _customPhoto(Request req, UserRow user) async {
+    final id = req.params['id']!;
+    final p = await customShelf.getPhoto(userId: user.id, id: id);
+    if (p == null) return jsonResponse(404, {'error': 'no_photo'});
+    return Response.ok(p.bytes, headers: {
+      'content-type': p.mime,
+      'cache-control': 'private, max-age=86400',
+    });
+  }
+
+  Future<Response> _setCustomPhoto(Request req, UserRow user) async {
+    final id = req.params['id']!;
+    final body =
+        jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final b64 = (body['photo_b64'] as String?)?.trim();
+    if (b64 == null || b64.isEmpty) {
+      return jsonResponse(400, {'error': 'missing_photo'});
+    }
+    List<int> bytes;
+    try {
+      bytes = base64Decode(b64);
+    } catch (_) {
+      return jsonResponse(400, {'error': 'invalid_base64'});
+    }
+    final ok = await customShelf.setPhoto(
+      userId: user.id,
+      id: id,
+      bytes: bytes,
+      mime: (body['mime'] as String?) ?? 'image/jpeg',
+    );
+    if (!ok) return jsonResponse(404, {'error': 'not_found'});
+    return jsonResponse(200, {'ok': true});
+  }
+
+  static _ExpiryPatch? _parseExpiryPatch(Map<String, dynamic> body) {
+    final patch = _ExpiryPatch();
+    DateTime? parseDate(Object? v) {
+      if (v is! String || v.trim().isEmpty) return null;
+      return DateTime.tryParse(v.trim());
+    }
+
+    if (body.containsKey('fill_level')) {
+      final v = body['fill_level'];
+      if (v == null) {
+        patch.clear.add('fill_level');
+      } else if (v is String &&
+          const {'full', 'half', 'low', 'empty'}.contains(v)) {
+        patch.fillLevel = v;
+      } else {
+        return null;
+      }
+    }
+    if (body.containsKey('opened_at')) {
+      final v = body['opened_at'];
+      if (v == null) {
+        patch.clear.add('opened_at');
+      } else {
+        final d = parseDate(v);
+        if (d == null) return null;
+        patch.openedAt = d;
+      }
+    }
+    if (body.containsKey('expires_at')) {
+      final v = body['expires_at'];
+      if (v == null) {
+        patch.clear.add('expires_at');
+      } else {
+        final d = parseDate(v);
+        if (d == null) return null;
+        patch.expiresAt = d;
+      }
+    }
+    if (body.containsKey('pao_months')) {
+      final v = body['pao_months'];
+      if (v == null) {
+        patch.clear.add('pao_months');
+      } else if (v is num && v.toInt() > 0 && v.toInt() <= 120) {
+        patch.paoMonths = v.toInt();
+      } else {
+        return null;
+      }
+    }
+    return patch;
   }
 
   Future<Response> _listFavorites(Request req, UserRow user) async {
@@ -2622,4 +2864,12 @@ DateTime _rangeSince(String? token) {
     'all' => DateTime.utc(2020),
     _ => now.subtract(const Duration(days: 7)),
   };
+}
+
+class _ExpiryPatch {
+  String? fillLevel;
+  DateTime? openedAt;
+  DateTime? expiresAt;
+  int? paoMonths;
+  final Set<String> clear = <String>{};
 }

@@ -7,6 +7,7 @@ import '../../../core/widgets/eyebrow_text.dart';
 import '../../../core/widgets/feedback_state.dart';
 import '../../../core/widgets/glow_background.dart';
 import '../../api/backend_api.dart';
+import '../../notifications/data/local_notifications.dart';
 import '../domain/product.dart';
 import 'product_bottle.dart';
 
@@ -15,9 +16,11 @@ class ShelfScreen extends ConsumerStatefulWidget {
     super.key,
     required this.onOpen,
     required this.onBack,
+    required this.onAddCustom,
   });
   final void Function(Product) onOpen;
   final VoidCallback onBack;
+  final VoidCallback onAddCustom;
 
   @override
   ConsumerState<ShelfScreen> createState() => _ShelfScreenState();
@@ -30,7 +33,22 @@ class _ShelfScreenState extends ConsumerState<ShelfScreen> {
   @override
   void initState() {
     super.initState();
-    _future = ref.read(backendApiProvider).getShelf();
+    _future = ref.read(backendApiProvider).getShelf().then((items) {
+      _scheduleExpiryReminders(items);
+      return items;
+    });
+  }
+
+  void _scheduleExpiryReminders(List<Product> items) {
+    // Fire-and-forget: a failed reschedule shouldn't block rendering.
+    ref
+        .read(localNotificationsProvider)
+        .rescheduleExpiryReminders<Product>(
+          items: items.where((p) => p.effectiveExpiry != null),
+          keyOf: (p) => p.id,
+          labelOf: (p) => '${p.brand} ${p.name}',
+          expiryOf: (p) => p.effectiveExpiry,
+        );
   }
 
   Future<void> _remove(Product p) async {
@@ -38,7 +56,10 @@ class _ShelfScreenState extends ConsumerState<ShelfScreen> {
       await ref.read(backendApiProvider).removeFromShelf(p.id);
       if (!mounted) return;
       setState(() {
-        _future = ref.read(backendApiProvider).getShelf();
+        _future = ref.read(backendApiProvider).getShelf().then((items) {
+          _scheduleExpiryReminders(items);
+          return items;
+        });
       });
     } catch (e) {
       if (!mounted) return;
@@ -52,6 +73,17 @@ class _ShelfScreenState extends ConsumerState<ShelfScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: AppColors.roseDeep,
+        foregroundColor: Colors.white,
+        onPressed: widget.onAddCustom,
+        icon: const Icon(Icons.add_rounded, size: 20),
+        label: Text(
+          'Добавить своё',
+          style: AppTypography.bodySm
+              .copyWith(color: Colors.white, fontWeight: FontWeight.w600),
+        ),
+      ),
       body: Stack(
         children: [
           const Positioned.fill(
@@ -116,8 +148,13 @@ class _ShelfScreenState extends ConsumerState<ShelfScreen> {
                       if (snap.hasError) {
                         return FeedbackState.error(
                           onRetry: () => setState(() {
-                            _future =
-                                ref.read(backendApiProvider).getShelf();
+                            _future = ref
+                                .read(backendApiProvider)
+                                .getShelf()
+                                .then((items) {
+                              _scheduleExpiryReminders(items);
+                              return items;
+                            });
                           }),
                         );
                       }
@@ -361,9 +398,17 @@ class _ShelfRow extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(
-                        product.brand,
-                        style: AppTypography.eyebrow().copyWith(fontSize: 10),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              product.brand,
+                              style: AppTypography.eyebrow()
+                                  .copyWith(fontSize: 10),
+                            ),
+                          ),
+                          if (product.isCustom) const _CustomBadge(),
+                        ],
                       ),
                       const SizedBox(height: 2),
                       Text(
@@ -375,9 +420,15 @@ class _ShelfRow extends StatelessWidget {
                       ),
                       const SizedBox(height: 6),
                       Text(
-                        '${product.kindLabel} · ${product.priceRub} ₽',
+                        product.isCustom
+                            ? product.kindLabel
+                            : '${product.kindLabel} · ${product.priceRub} ₽',
                         style: AppTypography.caption.copyWith(fontSize: 12),
                       ),
+                      if (product.expiryStatus != null) ...[
+                        const SizedBox(height: 6),
+                        _ExpiryBadge(product: product),
+                      ],
                     ],
                   ),
                 ),
@@ -389,6 +440,103 @@ class _ShelfRow extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+class _CustomBadge extends StatelessWidget {
+  const _CustomBadge();
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppColors.roseDeep.withOpacity(0.12),
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Text(
+        'Моё',
+        style: AppTypography.caption.copyWith(
+          fontSize: 9,
+          color: AppColors.roseDeep,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.4,
+        ),
+      ),
+    );
+  }
+}
+
+class _ExpiryBadge extends StatelessWidget {
+  const _ExpiryBadge({required this.product});
+  final Product product;
+
+  @override
+  Widget build(BuildContext context) {
+    final status = product.expiryStatus;
+    final exp = product.effectiveExpiry;
+    if (status == null || exp == null) return const SizedBox.shrink();
+
+    final (label, fg, bg, icon) = switch (status) {
+      'expired' => (
+        _expiredLabel(exp),
+        const Color(0xFFB3261E),
+        const Color(0xFFB3261E).withOpacity(0.12),
+        Icons.warning_amber_rounded,
+      ),
+      'expiring_soon' => (
+        _untilLabel(exp),
+        const Color(0xFFB07000),
+        const Color(0xFFFFC107).withOpacity(0.18),
+        Icons.schedule_rounded,
+      ),
+      _ => (
+        _untilLabel(exp),
+        AppColors.textSecondary,
+        AppColors.divider,
+        Icons.event_available_rounded,
+      ),
+    };
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(99),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: fg),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: AppTypography.caption.copyWith(
+              fontSize: 11,
+              color: fg,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  static String _untilLabel(DateTime exp) {
+    final days = exp.difference(DateTime.now()).inDays;
+    if (days <= 0) return 'Истекает сегодня';
+    if (days == 1) return 'Истекает завтра';
+    if (days < 30) return 'Истекает через $days дн.';
+    final months = (days / 30).round();
+    return 'Истекает через $months мес.';
+  }
+
+  static String _expiredLabel(DateTime exp) {
+    final days = DateTime.now().difference(exp).inDays;
+    if (days <= 0) return 'Срок истёк';
+    if (days < 30) return 'Истёк $days дн. назад';
+    final months = (days / 30).round();
+    return 'Истёк $months мес. назад';
   }
 }
 

@@ -29,6 +29,11 @@ class Product {
     this.precautions,
     this.usage,
     this.extraInfo,
+    this.isCustom = false,
+    this.fillLevel,
+    this.openedAt,
+    this.expiresAt,
+    this.paoMonths,
   });
 
   final String id;
@@ -81,6 +86,48 @@ class Product {
   final String? usage;
   final String? extraInfo;
 
+  /// True when the product was added by the user themselves (not in the
+  /// public catalog). Custom products live in `user_custom_products` server
+  /// side and are visible only to the owner.
+  final bool isCustom;
+
+  /// Bottle fill level reported by the user: full | half | low | empty.
+  final String? fillLevel;
+
+  /// When the user opened the bottle. Combined with [paoMonths] to compute
+  /// effective expiry. Null when unknown.
+  final DateTime? openedAt;
+
+  /// Hard expiry printed on the package.
+  final DateTime? expiresAt;
+
+  /// Period-after-opening in months (the "12M" / "6M" symbol on the label).
+  final int? paoMonths;
+
+  /// Effective expiry = min(expiresAt, openedAt + paoMonths). Null when no
+  /// date info is available.
+  DateTime? get effectiveExpiry {
+    DateTime? paoEnd;
+    if (openedAt != null && paoMonths != null) {
+      final d = openedAt!;
+      paoEnd = DateTime(d.year, d.month + paoMonths!, d.day);
+    }
+    if (expiresAt == null) return paoEnd;
+    if (paoEnd == null) return expiresAt;
+    return expiresAt!.isBefore(paoEnd) ? expiresAt : paoEnd;
+  }
+
+  /// Status bucket for UI: ok | expiring_soon | expired. Null when no expiry
+  /// info is set.
+  String? get expiryStatus {
+    final e = effectiveExpiry;
+    if (e == null) return null;
+    final days = e.difference(DateTime.now()).inDays;
+    if (days < 0) return 'expired';
+    if (days <= 30) return 'expiring_soon';
+    return 'ok';
+  }
+
   factory Product.fromJson(Map<String, dynamic> j) {
     Color parseColor(String hex) {
       final v = hex.replaceAll('#', '');
@@ -131,7 +178,19 @@ class Product {
       precautions: _stringOrNull(j['precautions']),
       usage: _stringOrNull(j['usage']),
       extraInfo: _stringOrNull(j['extra_info']),
+      isCustom: j['is_custom'] as bool? ?? false,
+      fillLevel: _stringOrNull(j['fill_level']),
+      openedAt: _dateOrNull(j['opened_at']),
+      expiresAt: _dateOrNull(j['expires_at']),
+      paoMonths: (j['pao_months'] as num?)?.toInt(),
     );
+  }
+
+  static DateTime? _dateOrNull(Object? v) {
+    if (v is! String) return null;
+    final t = v.trim();
+    if (t.isEmpty) return null;
+    return DateTime.tryParse(t);
   }
 
   static String? _stringOrNull(Object? v) {

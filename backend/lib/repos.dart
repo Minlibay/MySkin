@@ -1817,10 +1817,53 @@ class ShelfItem {
     required this.status,
     required this.addedAt,
     this.notes,
+    this.fillLevel,
+    this.openedAt,
+    this.expiresAt,
+    this.paoMonths,
   });
   final ProductRow product;
   final String status;
   final DateTime addedAt;
+  final String? notes;
+  final String? fillLevel;
+  final DateTime? openedAt;
+  final DateTime? expiresAt;
+  final int? paoMonths;
+}
+
+class CustomShelfItem {
+  CustomShelfItem({
+    required this.id,
+    required this.userId,
+    required this.brand,
+    required this.name,
+    required this.kind,
+    required this.accentColor,
+    required this.hasPhoto,
+    required this.ingredients,
+    required this.status,
+    required this.addedAt,
+    this.fillLevel,
+    this.openedAt,
+    this.expiresAt,
+    this.paoMonths,
+    this.notes,
+  });
+  final String id;
+  final String userId;
+  final String brand;
+  final String name;
+  final String kind;
+  final String accentColor;
+  final bool hasPhoto;
+  final List<String> ingredients;
+  final String status;
+  final DateTime addedAt;
+  final String? fillLevel;
+  final DateTime? openedAt;
+  final DateTime? expiresAt;
+  final int? paoMonths;
   final String? notes;
 }
 
@@ -1842,7 +1885,8 @@ class UserProductRepository {
                p.moderation_status, p.moderation_reason,
                p.submitted_by_partner_id, p.composition, p.precautions,
                p.usage_instructions, p.extra_info,
-               up.status AS up_status, up.added_at, up.notes
+               up.status AS up_status, up.added_at, up.notes,
+               up.fill_level, up.opened_at, up.expires_at, up.pao_months
         FROM user_products up
         JOIN products p ON p.id = up.product_id
         WHERE up.user_id = @u
@@ -1856,8 +1900,60 @@ class UserProductRepository {
         status: row[24] as String,
         addedAt: row[25] as DateTime,
         notes: row[26] as String?,
+        fillLevel: row[27] as String?,
+        openedAt: row[28] as DateTime?,
+        expiresAt: row[29] as DateTime?,
+        paoMonths: row[30] as int?,
       );
     }).toList();
+  }
+
+  /// Patch the shelf item's expiry / fill_level fields. Only non-null keys
+  /// in [patch] are written; keys explicitly set to null in [clear] are
+  /// nulled out (caller passes them to remove a date).
+  Future<void> patch({
+    required String userId,
+    required String productId,
+    String? fillLevel,
+    DateTime? openedAt,
+    DateTime? expiresAt,
+    int? paoMonths,
+    Set<String> clear = const {},
+  }) async {
+    final sets = <String>[];
+    final params = <String, dynamic>{'u': userId, 'p': productId};
+    if (fillLevel != null) {
+      sets.add('fill_level = @fl');
+      params['fl'] = fillLevel;
+    } else if (clear.contains('fill_level')) {
+      sets.add('fill_level = NULL');
+    }
+    if (openedAt != null) {
+      sets.add('opened_at = @oa');
+      params['oa'] = openedAt;
+    } else if (clear.contains('opened_at')) {
+      sets.add('opened_at = NULL');
+    }
+    if (expiresAt != null) {
+      sets.add('expires_at = @ea');
+      params['ea'] = expiresAt;
+    } else if (clear.contains('expires_at')) {
+      sets.add('expires_at = NULL');
+    }
+    if (paoMonths != null) {
+      sets.add('pao_months = @pm');
+      params['pm'] = paoMonths;
+    } else if (clear.contains('pao_months')) {
+      sets.add('pao_months = NULL');
+    }
+    if (sets.isEmpty) return;
+    await db.execute(
+      Sql.named('''
+        UPDATE user_products SET ${sets.join(', ')}
+        WHERE user_id = @u AND product_id = @p
+      '''),
+      parameters: params,
+    );
   }
 
   Future<void> upsert({
@@ -1884,6 +1980,199 @@ class UserProductRepository {
           'DELETE FROM user_products WHERE user_id = @u AND product_id = @p'),
       parameters: {'u': userId, 'p': productId},
     );
+  }
+}
+
+class UserCustomProductRepository {
+  UserCustomProductRepository(this.db);
+  final Pool db;
+
+  static const _cols =
+      'id, user_id, brand, name, kind, accent_color, (photo IS NOT NULL), '
+      'ingredients, status, fill_level, opened_at, expires_at, pao_months, '
+      'notes, added_at';
+
+  CustomShelfItem _fromRow(List<dynamic> r) => CustomShelfItem(
+        id: r[0] as String,
+        userId: r[1] as String,
+        brand: r[2] as String,
+        name: r[3] as String,
+        kind: r[4] as String,
+        accentColor: r[5] as String,
+        hasPhoto: r[6] as bool,
+        ingredients:
+            (r[7] as List? ?? const []).map((e) => '$e').toList(),
+        status: r[8] as String,
+        fillLevel: r[9] as String?,
+        openedAt: r[10] as DateTime?,
+        expiresAt: r[11] as DateTime?,
+        paoMonths: r[12] as int?,
+        notes: r[13] as String?,
+        addedAt: r[14] as DateTime,
+      );
+
+  Future<List<CustomShelfItem>> list(String userId) async {
+    final r = await db.execute(
+      Sql.named(
+          'SELECT $_cols FROM user_custom_products WHERE user_id = @u ORDER BY added_at DESC'),
+      parameters: {'u': userId},
+    );
+    return r.map(_fromRow).toList();
+  }
+
+  Future<CustomShelfItem?> findById(
+      {required String userId, required String id}) async {
+    final r = await db.execute(
+      Sql.named(
+          'SELECT $_cols FROM user_custom_products WHERE id = @i AND user_id = @u'),
+      parameters: {'i': id, 'u': userId},
+    );
+    if (r.isEmpty) return null;
+    return _fromRow(r.first);
+  }
+
+  Future<CustomShelfItem> create({
+    required String userId,
+    required String brand,
+    required String name,
+    required String kind,
+    String accentColor = '#D98FA3',
+    List<String> ingredients = const [],
+    String status = 'have',
+    String? fillLevel,
+    DateTime? openedAt,
+    DateTime? expiresAt,
+    int? paoMonths,
+    String? notes,
+  }) async {
+    final id = _uuid.v4();
+    await db.execute(
+      Sql.named('''
+        INSERT INTO user_custom_products (
+          id, user_id, brand, name, kind, accent_color, ingredients,
+          status, fill_level, opened_at, expires_at, pao_months, notes
+        ) VALUES (
+          @id, @u, @b, @n, @k, @ac, @ing::jsonb,
+          @s, @fl, @oa, @ea, @pm, @no
+        )
+      '''),
+      parameters: {
+        'id': id,
+        'u': userId,
+        'b': brand,
+        'n': name,
+        'k': kind,
+        'ac': accentColor,
+        'ing': jsonEncode(ingredients),
+        's': status,
+        'fl': fillLevel,
+        'oa': openedAt,
+        'ea': expiresAt,
+        'pm': paoMonths,
+        'no': notes,
+      },
+    );
+    return (await findById(userId: userId, id: id))!;
+  }
+
+  Future<void> patch({
+    required String userId,
+    required String id,
+    String? brand,
+    String? name,
+    String? kind,
+    String? status,
+    String? fillLevel,
+    DateTime? openedAt,
+    DateTime? expiresAt,
+    int? paoMonths,
+    String? notes,
+    Set<String> clear = const {},
+  }) async {
+    final sets = <String>[];
+    final params = <String, dynamic>{'u': userId, 'i': id};
+    void str(String key, String col, String? v) {
+      if (v != null) {
+        sets.add('$col = @$key');
+        params[key] = v;
+      } else if (clear.contains(col)) {
+        sets.add('$col = NULL');
+      }
+    }
+
+    str('b', 'brand', brand);
+    str('n', 'name', name);
+    str('k', 'kind', kind);
+    str('s', 'status', status);
+    str('fl', 'fill_level', fillLevel);
+    str('no', 'notes', notes);
+    if (openedAt != null) {
+      sets.add('opened_at = @oa');
+      params['oa'] = openedAt;
+    } else if (clear.contains('opened_at')) {
+      sets.add('opened_at = NULL');
+    }
+    if (expiresAt != null) {
+      sets.add('expires_at = @ea');
+      params['ea'] = expiresAt;
+    } else if (clear.contains('expires_at')) {
+      sets.add('expires_at = NULL');
+    }
+    if (paoMonths != null) {
+      sets.add('pao_months = @pm');
+      params['pm'] = paoMonths;
+    } else if (clear.contains('pao_months')) {
+      sets.add('pao_months = NULL');
+    }
+    if (sets.isEmpty) return;
+    await db.execute(
+      Sql.named(
+          'UPDATE user_custom_products SET ${sets.join(', ')} WHERE id = @i AND user_id = @u'),
+      parameters: params,
+    );
+  }
+
+  Future<void> remove({required String userId, required String id}) async {
+    await db.execute(
+      Sql.named(
+          'DELETE FROM user_custom_products WHERE id = @i AND user_id = @u'),
+      parameters: {'i': id, 'u': userId},
+    );
+  }
+
+  Future<({Uint8List bytes, String mime})?> getPhoto({
+    required String userId,
+    required String id,
+  }) async {
+    final r = await db.execute(
+      Sql.named(
+          'SELECT photo, COALESCE(photo_mime, \'image/jpeg\') FROM user_custom_products WHERE id = @i AND user_id = @u'),
+      parameters: {'i': id, 'u': userId},
+    );
+    if (r.isEmpty) return null;
+    final bytes = r.first[0];
+    if (bytes == null) return null;
+    return (
+      bytes: Uint8List.fromList(bytes as List<int>),
+      mime: r.first[1] as String,
+    );
+  }
+
+  Future<bool> setPhoto({
+    required String userId,
+    required String id,
+    required List<int> bytes,
+    required String mime,
+  }) async {
+    final b = TypedValue(Type.byteArray, Uint8List.fromList(bytes));
+    final r = await db.execute(
+      Sql.named('''
+        UPDATE user_custom_products SET photo = @b, photo_mime = @m
+        WHERE id = @i AND user_id = @u
+      '''),
+      parameters: {'i': id, 'u': userId, 'b': b, 'm': mime},
+    );
+    return r.affectedRows > 0;
   }
 }
 

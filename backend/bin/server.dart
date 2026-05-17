@@ -30,6 +30,7 @@ void main(List<String> args) async {
   final dermSessions = DermSessionRepository(pool);
   final products = ProductRepository(pool);
   final shelf = UserProductRepository(pool);
+  final customShelf = UserCustomProductRepository(pool);
   final favorites = UserFavoriteRepository(pool);
   final completions = RoutineCompletionRepository(pool);
   final scans = ScanRepository(pool);
@@ -80,6 +81,7 @@ void main(List<String> args) async {
     sessions: sessions,
     products: products,
     shelf: shelf,
+    customShelf: customShelf,
     profiles: profiles,
     favorites: favorites,
   );

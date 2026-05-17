@@ -14,6 +14,8 @@ import 'features/chat/presentation/chat_screen.dart';
 import 'features/catalog/presentation/catalog_screen.dart';
 import 'features/catalog/presentation/favorites_screen.dart';
 import 'features/catalog/presentation/product_detail_screen.dart';
+import 'features/catalog/presentation/add_custom_product_screen.dart';
+import 'features/catalog/presentation/custom_product_detail_screen.dart';
 import 'features/catalog/presentation/shelf_screen.dart';
 import 'features/derm2/presentation/derm2_screen.dart';
 import 'features/home/presentation/home_screen.dart';
@@ -151,6 +153,8 @@ enum _Shell {
   notifications,
   quickCheckIn,
   favorites,
+  addCustomProduct,
+  customProductDetail,
 }
 
 class _AppShell extends ConsumerStatefulWidget {
@@ -166,6 +170,7 @@ class _AppShellState extends ConsumerState<_AppShell> {
   SkinProfile _profile = const SkinProfile();
   RoutineResult? _lastResult;
   String? _openProductSlug;
+  Product? _openCustomProduct;
   Today? _today;
   ScanResult? _lastScan;
   String? _catalogInitialConcern;
@@ -350,11 +355,34 @@ class _AppShellState extends ConsumerState<_AppShell> {
       case _Shell.shelf:
         return ShelfScreen(
           onBack: () => setState(() => _view = _Shell.home),
-          onOpen: (Product p) => setState(() {
-            _previousView = _Shell.shelf;
-            _openProductSlug = p.slug;
-            _view = _Shell.productDetail;
-          }),
+          onOpen: (Product p) {
+            if (p.isCustom) {
+              setState(() {
+                _openCustomProduct = p;
+                _view = _Shell.customProductDetail;
+              });
+            } else {
+              setState(() {
+                _previousView = _Shell.shelf;
+                _openProductSlug = p.slug;
+                _view = _Shell.productDetail;
+              });
+            }
+          },
+          onAddCustom: () =>
+              setState(() => _view = _Shell.addCustomProduct),
+        );
+      case _Shell.addCustomProduct:
+        return AddCustomProductScreen(
+          onBack: () => setState(() => _view = _Shell.shelf),
+          onSaved: () => setState(() => _view = _Shell.shelf),
+        );
+      case _Shell.customProductDetail:
+        return CustomProductDetailScreen(
+          product: _openCustomProduct!,
+          onBack: () => setState(() => _view = _Shell.shelf),
+          onDeleted: () => setState(() => _view = _Shell.shelf),
+          onAskLina: () => setState(() => _view = _Shell.chat),
         );
       case _Shell.productDetail:
         return ProductDetailScreen(
