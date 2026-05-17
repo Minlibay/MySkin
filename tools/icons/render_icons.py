@@ -1,103 +1,193 @@
-"""Render Моя Кожа app icon (Direction A — Italic Monogram) at all required sizes
-for iOS and Android, from the spec in design/App Icon.html.
+"""Render MySkin app icon (v2 — Italic Monogram, Premium) at all required sizes
+for iOS and Android.
 
-Source of truth: spec values
-  canvas      1024 x 1024
-  background  linear 135deg #FCEEF2 -> #F8E8EE @55% -> #F5DCE4
-  glow        circle cx=512 cy=450 r=380, white 35%, blur 40px
-  letter      M (Cyrillic), Cormorant Garamond Medium Italic, 700px,
-              fill oklch(0.42 0.11 12) ~ sRGB(125,46,61), baseline y=640
-  hairline    (380,780)-(644,780), wine 40%, 2px
-  caption     "КОЖА" JetBrains Mono 38px, tracking 12, wine 60%, anchor (512,820)
+Composition (1024×1024 canvas):
+  background  radial gradient centered (520, 460), inner #FFF4F6 →
+              outer #E8C3CE, with corner vignette #C7889A @8%
+  petal arc   single thin wine crescent behind the letter, 5% opacity,
+              evokes a flower petal / skin contour without being literal
+  letter      Latin "M", Cormorant Garamond Medium Italic, 760px,
+              vertical gradient #7D2E3D (top) → #B06378 (bottom),
+              anchor centered at (512, 600)
+  sheen       diagonal white sheen across upper-left of the M, 9% white,
+              masked by the M's alpha so it only shows on the glyph
+  shadow      micro-shadow behind the M, 4px y-offset, 6% wine
+
+No caption, no hairline. Launcher labels the app "MySkin" below the icon
+on both platforms — repeating it inside the icon is visual noise and
+illegible at home-screen size.
+
+Source font:
+  tools/icons/fonts/CormorantGaramond-MediumItalic.ttf
 """
 
 from pathlib import Path
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageChops
 
 ROOT = Path(__file__).resolve().parents[2]
 FONTS = Path(__file__).resolve().parent / "fonts"
 CORMORANT = str(FONTS / "CormorantGaramond-MediumItalic.ttf")
-JBMONO = str(FONTS / "JetBrainsMono-Regular.ttf")
 
-WINE = (125, 46, 61)
-BG_STOPS = [
-    (0.00, (252, 238, 242)),
-    (0.55, (248, 232, 238)),
-    (1.00, (245, 220, 228)),
-]
+WINE_DEEP = (110, 38, 54)     # #6E2636 — letter top, slightly deeper
+WINE_SOFT = (188, 116, 134)   # #BC7486 — letter bottom (premium rose)
+
+BG_INNER = (255, 247, 249)    # #FFF7F9 — highlight tone
+BG_OUTER = (224, 184, 196)    # #E0B8C4 — outer rose
+VIGNETTE = (185, 122, 142)    # #B97A8E — subtle corner darkening
+
+# Italic shear added on top of the font's own slope. Cormorant Garamond
+# Medium Italic renders almost upright in Pillow, so we synthesise extra
+# slant here. -0.13 ≈ 7.4° lean to the right — refined, not aggressive.
+ITALIC_SHEAR = -0.13
 
 
 def lerp(a, b, t):
     return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
 
 
-def stop_color(t):
-    for i in range(len(BG_STOPS) - 1):
-        p0, c0 = BG_STOPS[i]
-        p1, c1 = BG_STOPS[i + 1]
-        if p0 <= t <= p1:
-            local = (t - p0) / (p1 - p0) if p1 > p0 else 0.0
-            return lerp(c0, c1, local)
-    return BG_STOPS[-1][1]
-
-
 def make_background(size):
-    # Render at low res for speed, then upscale — gradient is smooth.
+    """Radial gradient with highlight shifted to upper-left so it doesn't
+    sit behind the letter (which gave a 'smudge' look in v2). Plus a soft
+    corner vignette for depth."""
     small = 256
-    img = Image.new("RGBA", (small, small))
+    img = Image.new("RGB", (small, small))
     px = img.load()
+    # Light source from the upper-left quadrant
+    cx, cy = int(0.36 * small), int(0.30 * small)
+    max_r = ((small - cx) ** 2 + (small - cy) ** 2) ** 0.5
+    corner_max_r = (small ** 2 + small ** 2) ** 0.5 / 2
     for y in range(small):
         for x in range(small):
-            t = (x + y) / (2 * (small - 1))
-            px[x, y] = stop_color(t) + (255,)
-    return img.resize((size, size), Image.LANCZOS)
+            dx, dy = x - cx, y - cy
+            r = (dx * dx + dy * dy) ** 0.5
+            t = min(1.0, r / max_r)
+            t = 1 - (1 - t) ** 1.6
+            base = lerp(BG_INNER, BG_OUTER, t)
+            corner_r = ((x - small / 2) ** 2 + (y - small / 2) ** 2) ** 0.5
+            v = max(0.0, (corner_r / corner_max_r - 0.65) / 0.35) * 0.12
+            base = lerp(base, VIGNETTE, v)
+            px[x, y] = base
+    return img.convert("RGBA").resize((size, size), Image.LANCZOS)
 
 
-def make_glow(size):
+def make_petal_arc(size):
+    """Thin wine arc sweeping behind the letter from upper-right down
+    along its right edge. Reads as a single petal contour, not a disc.
+    Subtle by design — should whisper, not announce itself."""
+    s = size / 1024
+    # Big ellipse, slightly off the canvas to the lower-right, so only its
+    # upper-left rim crosses the icon's interior.
+    outer = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(outer).ellipse(
+        (int(120 * s), int(60 * s), int(1180 * s), int(1120 * s)),
+        fill=255,
+    )
+    # Inner ellipse very close to outer → thin crescent rim
+    inner = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(inner).ellipse(
+        (int(80 * s), int(20 * s), int(1140 * s), int(1080 * s)),
+        fill=255,
+    )
+    crescent = ImageChops.subtract(outer, inner)
+    crescent = crescent.filter(ImageFilter.GaussianBlur(int(10 * s)))
+
     layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    tint = Image.new("RGBA", (size, size), WINE_DEEP + (int(0.07 * 255),))
+    layer.paste(tint, (0, 0), crescent)
+    return layer
+
+
+def make_letter_layer(size, with_shadow=True):
+    """Italic M with vertical gradient fill, a strong diagonal sheen, and a
+    micro-shadow. Synthesises extra italic lean via affine shear on top of
+    the font's own slope."""
     s = size / 1024
-    cx, cy, r = int(512 * s), int(450 * s), int(380 * s)
-    ImageDraw.Draw(layer).ellipse(
-        (cx - r, cy - r, cx + r, cy + r),
-        fill=(255, 255, 255, int(0.35 * 255)),
+    layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+
+    # 1. Letter alpha mask, then shear it to add visible italic lean. We
+    #    render in an oversized canvas so the slant doesn't clip on the
+    #    right side, then trim back to the icon size.
+    font_size = int(round(740 * s))
+    font = ImageFont.truetype(CORMORANT, font_size)
+    pad = int(200 * s)
+    big = Image.new("L", (size + 2 * pad, size + 2 * pad), 0)
+    ImageDraw.Draw(big).text(
+        (int(512 * s) + pad, int(560 * s) + pad), "M",
+        font=font, fill=255, anchor="mm",
     )
-    return layer.filter(ImageFilter.GaussianBlur(max(1, int(40 * s))))
-
-
-def draw_content(layer, size):
-    s = size / 1024
-    d = ImageDraw.Draw(layer)
-
-    cormorant = ImageFont.truetype(CORMORANT, int(round(700 * s)))
-    d.text((512 * s, 640 * s), "М", font=cormorant, fill=WINE, anchor="ms")
-
-    hair_w = max(1, int(round(2 * s)))
-    d.line(
-        [(380 * s, 780 * s), (644 * s, 780 * s)],
-        fill=WINE + (int(0.4 * 255),),
-        width=hair_w,
+    # Affine: x' = x + ITALIC_SHEAR * (y - y_center). PIL's Image.AFFINE
+    # consumes (a, b, c, d, e, f) for the inverse mapping
+    #   x_src = a*x_dst + b*y_dst + c
+    #   y_src = d*x_dst + e*y_dst + f
+    # so we use the inverse of the desired skew (sign flipped).
+    y_center = (size / 2) + pad
+    sheared = big.transform(
+        big.size, Image.AFFINE,
+        (1, -ITALIC_SHEAR, ITALIC_SHEAR * y_center, 0, 1, 0),
+        resample=Image.BICUBIC,
     )
+    letter_mask = sheared.crop((pad, pad, pad + size, pad + size))
 
-    mono = ImageFont.truetype(JBMONO, int(round(38 * s)))
-    text = "КОЖА"
-    spacing = 12 * s
-    widths = [mono.getlength(ch) for ch in text]
-    total = sum(widths) + spacing * (len(text) - 1)
-    x = 512 * s - total / 2
-    fill = WINE + (int(0.6 * 255),)
-    for ch, w in zip(text, widths):
-        d.text((x, 820 * s), ch, font=mono, fill=fill, anchor="ls")
-        x += w + spacing
+    # 2. Vertical gradient (deep wine top → premium rose bottom). Build a
+    #    1×size column then stretch — same result, way faster.
+    col = Image.new("RGBA", (1, size))
+    cpx = col.load()
+    for y in range(size):
+        t = y / (size - 1)
+        cpx[0, y] = lerp(WINE_DEEP, WINE_SOFT, t) + (255,)
+    grad = col.resize((size, size), Image.NEAREST)
+
+    # 3. Micro-shadow — soft, low opacity, slight y-offset
+    if with_shadow:
+        shadow = letter_mask.filter(
+            ImageFilter.GaussianBlur(max(2, int(9 * s))))
+        shadow_layer = Image.new("RGBA", (size, size),
+                                 WINE_DEEP + (int(0.08 * 255),))
+        offset_shadow = Image.new("L", (size, size), 0)
+        offset_shadow.paste(shadow, (0, int(round(6 * s))))
+        layer.paste(shadow_layer, (0, 0), offset_shadow)
+
+    # 4. Gradient-filled letter
+    layer.paste(grad, (0, 0), letter_mask)
+
+    # 5. Diagonal sheen — tighter, brighter band across the upper-left
+    #    portion of the M. Acts as a glass highlight.
+    sheen_mask = Image.new("L", (size, size), 0)
+    spx = sheen_mask.load()
+    # Sweep direction: about 35° from vertical, descending right→left
+    nx, ny = 0.574, -0.819   # cos 35°, -sin 35°
+    band_center_x, band_center_y = 360 * s, 280 * s
+    half_width = 70 * s
+    peak = 0.32
+    for y in range(size):
+        for x in range(size):
+            d = (x - band_center_x) * nx + (y - band_center_y) * ny
+            v = max(0.0, 1 - abs(d) / half_width)
+            # smoothstep for softer edges
+            v = v * v * (3 - 2 * v)
+            spx[x, y] = int(v * 255 * peak)
+    # Soften the sheen edges
+    sheen_mask = sheen_mask.filter(ImageFilter.GaussianBlur(int(4 * s)))
+    # Intersect sheen with letter so highlight only paints on the glyph
+    combined = ImageChops.multiply(
+        sheen_mask, letter_mask.point(lambda v: v),
+    )
+    sheen_layer = Image.new("RGBA", (size, size), (255, 255, 255, 255))
+    layer.paste(sheen_layer, (0, 0), combined)
+
+    return layer
 
 
 def compose(size, background=True, content=True):
     out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     if background:
         out = Image.alpha_composite(out, make_background(size))
-        out = Image.alpha_composite(out, make_glow(size))
+        out = Image.alpha_composite(out, make_petal_arc(size))
     if content:
-        layer = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-        draw_content(layer, size)
+        # On adaptive foreground (no background), the shadow would land on
+        # transparency and look broken once Android composes its own bg
+        # behind. Keep shadow only when we have our own background.
+        layer = make_letter_layer(size, with_shadow=background)
         out = Image.alpha_composite(out, layer)
     return out
 

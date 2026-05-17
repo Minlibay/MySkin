@@ -1,8 +1,16 @@
 # App icon renderer
 
-Renders the "Моя Кожа" app icon (Direction A — Italic Monogram, per
-`design/App Icon.html`) into every size required by iOS and Android,
-including the Android adaptive-icon foreground/background pair.
+Renders the **MySkin** app icon (v2 — Premium Italic Monogram) into every
+size required by iOS and Android, including the Android adaptive-icon
+foreground/background pair.
+
+Composition:
+- Radial rose gradient background, light source in the upper-left
+- Latin **M** in Cormorant Garamond Italic, vertical wine→rose fill
+- Synthesised italic shear (~7°) on top of the font's own slope
+- Diagonal sheen highlight on the upper-left of the M for a glass finish
+- Subtle wine crescent in the lower-right, blurred — adds depth, not noise
+- Micro-shadow grounds the letter
 
 ## One-shot
 
@@ -10,8 +18,6 @@ including the Android adaptive-icon foreground/background pair.
 mkdir -p tools/icons/fonts
 curl -sSL -o tools/icons/fonts/CormorantGaramond-MediumItalic.ttf \
   "https://fonts.gstatic.com/s/cormorantgaramond/v21/co3smX5slCNuHLi8bLeY9MK7whWMhyjYrGFEsdtdc62E6zd5wDDOjw.ttf"
-curl -sSL -o tools/icons/fonts/JetBrainsMono-Regular.ttf \
-  "https://github.com/JetBrains/JetBrainsMono/raw/master/fonts/ttf/JetBrainsMono-Regular.ttf"
 python tools/icons/render_icons.py
 ```
 
@@ -23,4 +29,5 @@ Outputs:
 - `android/app/src/main/res/mipmap-*/ic_launcher_{foreground,background}.png` — adaptive layers
 - `android/app/src/main/res/mipmap-anydpi-v26/ic_launcher{,_round}.xml` — adaptive XML
 
-Requires Python with Pillow.
+Requires Python with Pillow. No JetBrains Mono font needed any more — the
+old caption "КОЖА" is removed.
