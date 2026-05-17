@@ -5,6 +5,7 @@ import '../../../core/theme/app_typography.dart';
 import '../../../core/widgets/app_button.dart';
 import '../../../core/widgets/app_card.dart';
 import '../../../core/widgets/eyebrow_text.dart';
+import '../../../core/widgets/medical_disclaimer_note.dart';
 import '../../../core/widgets/metric_ring.dart';
 import '../../../core/widgets/routine_card.dart';
 import '../../ai/domain/models.dart';
@@ -74,7 +75,9 @@ class RoutineScreen extends StatelessWidget {
               variant: AppButtonVariant.soft,
             ),
           ],
-          const SizedBox(height: AppSpacing.xl),
+          const SizedBox(height: AppSpacing.lg),
+          const MedicalDisclaimerNote(),
+          const SizedBox(height: AppSpacing.lg),
         ],
       ),
     );

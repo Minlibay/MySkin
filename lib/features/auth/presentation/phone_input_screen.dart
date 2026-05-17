@@ -217,12 +217,19 @@ class _LegalConsentTextState extends State<_LegalConsentText> {
             recognizer:
                 _tap('legal_privacy', 'Политика конфиденциальности'),
           ),
-          const TextSpan(text: ' и '),
+          const TextSpan(text: ', '),
           TextSpan(
             text: 'Согласие на обработку персональных данных',
             style: linkStyle,
             recognizer: _tap(
                 'legal_consent', 'Согласие на обработку персональных данных'),
+          ),
+          const TextSpan(text: ' и '),
+          TextSpan(
+            text: 'Медицинскую оговорку',
+            style: linkStyle,
+            recognizer:
+                _tap('legal_medical', 'Медицинская оговорка'),
           ),
           const TextSpan(text: '.'),
         ],

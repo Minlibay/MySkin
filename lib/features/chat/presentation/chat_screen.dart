@@ -8,6 +8,7 @@ import '../../../core/telemetry/product_telemetry.dart';
 import '../../../core/widgets/lina_avatar.dart';
 import '../../catalog/domain/product.dart';
 import '../../catalog/presentation/product_bottle.dart';
+import '../../legal/presentation/legal_viewer_screen.dart';
 import '../domain/chat_message.dart';
 import 'chat_controller.dart';
 
@@ -262,14 +263,31 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             top: false,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-              child: _InputBar(
-                controller: _input,
-                focus: _focus,
-                onSend: _send,
-                onAttach: _showAttachSheet,
-                onMic: _toggleMic,
-                busy: state.sending,
-                listening: _listening,
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  _LinaMedicalBanner(
+                    onTap: () => Navigator.of(context).push(
+                      MaterialPageRoute<void>(
+                        builder: (ctx) => LegalViewerScreen(
+                          docKey: 'legal_medical',
+                          title: 'Медицинская оговорка',
+                          onBack: () => Navigator.of(ctx).pop(),
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _InputBar(
+                    controller: _input,
+                    focus: _focus,
+                    onSend: _send,
+                    onAttach: _showAttachSheet,
+                    onMic: _toggleMic,
+                    busy: state.sending,
+                    listening: _listening,
+                  ),
+                ],
               ),
             ),
           ),
@@ -925,6 +943,59 @@ class _InputBar extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _LinaMedicalBanner extends StatelessWidget {
+  const _LinaMedicalBanner({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: AppColors.primary.withOpacity(0.4),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: AppColors.divider),
+          ),
+          child: Row(
+            children: [
+              const Icon(Icons.info_outline_rounded,
+                  size: 14, color: AppColors.textSecondary),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  'Лина — не врач. Информация справочная, при проблемах с кожей — к дерматологу.',
+                  style: AppTypography.caption.copyWith(
+                    fontSize: 11,
+                    color: AppColors.textSecondary,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 4),
+              Text(
+                'Подробнее',
+                style: AppTypography.caption.copyWith(
+                  fontSize: 11,
+                  color: AppColors.roseDeep,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const Icon(Icons.chevron_right_rounded,
+                  size: 14, color: AppColors.roseDeep),
+            ],
+          ),
+        ),
       ),
     );
   }

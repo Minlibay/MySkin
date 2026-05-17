@@ -387,12 +387,17 @@ class AdminHandlers {
   }
 
   Future<Response> _getLegal(Request req) async {
-    final m = await appSettings.getMany(
-        const ['legal_terms', 'legal_privacy', 'legal_consent']);
+    final m = await appSettings.getMany(const [
+      'legal_terms',
+      'legal_privacy',
+      'legal_consent',
+      'legal_medical',
+    ]);
     return jsonResponse(200, {
       'terms': m['legal_terms'] ?? '',
       'privacy': m['legal_privacy'] ?? '',
       'consent': m['legal_consent'] ?? '',
+      'medical': m['legal_medical'] ?? '',
     });
   }
 
@@ -403,6 +408,7 @@ class AdminHandlers {
       'legal_terms': body['terms'] as String?,
       'legal_privacy': body['privacy'] as String?,
       'legal_consent': body['consent'] as String?,
+      'legal_medical': body['medical'] as String?,
     };
     for (final entry in mapping.entries) {
       final v = entry.value;
@@ -2441,7 +2447,12 @@ class LegalHandlers {
 
   final AppSettingsRepository appSettings;
 
-  static const _allowed = {'legal_terms', 'legal_privacy', 'legal_consent'};
+  static const _allowed = {
+    'legal_terms',
+    'legal_privacy',
+    'legal_consent',
+    'legal_medical',
+  };
 
   Router router() => Router()..get('/legal/<key>', _get);
 

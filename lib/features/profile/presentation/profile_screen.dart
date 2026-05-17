@@ -625,6 +625,28 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 );
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.medical_information_outlined,
+                  color: AppColors.textPrimary),
+              title: Text('Медицинская оговорка',
+                  style: AppTypography.body),
+              subtitle: Text(
+                'Лина — не врач. Информационно-справочный сервис.',
+                style: AppTypography.caption,
+              ),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.of(context).push(
+                  MaterialPageRoute<void>(
+                    builder: (ctx2) => LegalViewerScreen(
+                      docKey: 'legal_medical',
+                      title: 'Медицинская оговорка',
+                      onBack: () => Navigator.of(ctx2).pop(),
+                    ),
+                  ),
+                );
+              },
+            ),
             const SizedBox(height: 8),
           ],
         ),
