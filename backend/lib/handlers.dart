@@ -1086,6 +1086,16 @@ ScanAnalysis _mergeAiAnalysis(ScanAnalysis local, Map<String, dynamic> ai) {
   }
   final aiWarnings =
       ((ai['quality_warnings'] as List?) ?? const []).cast<String>();
+  // GigaChat Vision now ships face geometry alongside the metrics. We
+  // build a face_geom payload from it (bbox + 5 landmarks → matching the
+  // mobile builder's shape) and stash it here. The handler chooses
+  // between client and vision faceGeom at write time, preferring client.
+  Map<String, dynamic>? visionFaceGeom;
+  final rawFace = ai['face'];
+  if (rawFace is Map) {
+    visionFaceGeom = _faceGeomFromVision(rawFace.cast<String, dynamic>());
+  }
+
   return ScanAnalysis(
     score: clamp(ai['score'] as num?, local.score),
     hydration: clamp(ai['hydration'] as num?, local.hydration),
@@ -1103,10 +1113,68 @@ ScanAnalysis _mergeAiAnalysis(ScanAnalysis local, Map<String, dynamic> ai) {
       'source': 'gigachat-vision',
       if (ai['concerns'] is List) 'ai_concerns': ai['concerns'],
     },
-    // Don't propagate the server-side skin-colour bbox — the result
-    // screen now relies on the client-supplied face_geom from ML Kit.
-    faceGeom: null,
+    faceGeom: visionFaceGeom,
   );
+}
+
+/// Pulls the {bbox, forehead, tzone, left_cheek, right_cheek, chin}
+/// structure out of GigaChat Vision's response and reshapes it into the
+/// `face_geom` schema the mobile client expects. Returns null if the
+/// bbox is missing or unusable so we don't poison the row with garbage.
+Map<String, dynamic>? _faceGeomFromVision(Map<String, dynamic> raw) {
+  final rawBbox = raw['bbox'];
+  if (rawBbox is! List || rawBbox.length != 4) return null;
+  final bbox = rawBbox
+      .whereType<num>()
+      .map((n) => n.toDouble().clamp(0.0, 1.0))
+      .toList();
+  if (bbox.length != 4) return null;
+  if (bbox[2] <= bbox[0] || bbox[3] <= bbox[1]) return null;
+  // Reject obviously useless bboxes (full frame or microscopic).
+  final w = bbox[2] - bbox[0], h = bbox[3] - bbox[1];
+  if (w < 0.1 || h < 0.1 || w > 0.95 || h > 0.95) return null;
+
+  List<double>? point(Object? v) {
+    if (v is! List || v.length < 2) return null;
+    if (v[0] is! num || v[1] is! num) return null;
+    return [
+      (v[0] as num).toDouble().clamp(0.0, 1.0),
+      (v[1] as num).toDouble().clamp(0.0, 1.0),
+    ];
+  }
+
+  final landmarks = <String, List<double>>{};
+  for (final key in const [
+    'forehead',
+    'tzone',
+    'left_cheek',
+    'right_cheek',
+    'chin',
+  ]) {
+    final p = point(raw[key]);
+    if (p != null) landmarks[key] = p;
+  }
+
+  // Synth landmarks from the bbox if the model didn't return them —
+  // typical face proportions, same anchors the mobile fallback uses.
+  if (landmarks.length != 5) {
+    final cx = (bbox[0] + bbox[2]) / 2;
+    final y0 = bbox[1], y1 = bbox[3];
+    landmarks.putIfAbsent('forehead', () => [cx, y0 + (y1 - y0) * 0.15]);
+    landmarks.putIfAbsent('tzone', () => [cx, y0 + (y1 - y0) * 0.45]);
+    landmarks.putIfAbsent(
+        'left_cheek', () => [bbox[0] + w * 0.25, y0 + (y1 - y0) * 0.55]);
+    landmarks.putIfAbsent(
+        'right_cheek', () => [bbox[0] + w * 0.75, y0 + (y1 - y0) * 0.55]);
+    landmarks.putIfAbsent('chin', () => [cx, y0 + (y1 - y0) * 0.86]);
+  }
+
+  return {
+    'bbox': bbox,
+    'landmarks': landmarks,
+    // No contour from Vision — the mobile renderer's bbox-only branch
+    // synthesises an ellipse, same as the old fallback.
+  };
 }
 
 class ScanHandlers {
@@ -1193,19 +1261,20 @@ class ScanHandlers {
         stderr.writeln('Vision scan failed, using local analysis: $e');
       }
     }
-    // Face geometry is now a single source of truth: whatever the mobile
-    // client (ML Kit on-device) sent. We deliberately do NOT fall back to
-    // the server's skin-colour heuristic — it routinely captured neck and
-    // shoulders alongside the face, dragging the heatmap overlay off.
-    // When the client couldn't detect a face at all, we store null and
-    // the result screen hides the heatmap with a friendly nudge to retake.
+    // Face geometry priority:
+    //   1. Client face_geom (on-device ML Kit, gives full contour)  ← best
+    //   2. Client face_bbox (legacy clients before the geom rollout)
+    //   3. GigaChat Vision face (vision model, bbox + landmarks)    ← fallback
+    //   4. null → result screen shows "Лицо не распозналось"
+    //
+    // We deliberately do NOT fall back to the server's skin-colour
+    // heuristic (analyzeScan.faceGeom) — it routinely captured neck and
+    // shoulders, dragging the heatmap overlay off.
     Map<String, dynamic>? faceGeom;
     final rawGeom = body['face_geom'];
     if (rawGeom is Map) {
       faceGeom = _sanitiseFaceGeom(rawGeom.cast<String, dynamic>());
     } else {
-      // Legacy clients (pre face_geom rollout) shipped only `face_bbox`.
-      // Still honoured so old app builds keep working until forced update.
       final legacy = body['face_bbox'];
       if (legacy is List && legacy.length == 4) {
         final v = legacy.map((e) => (e as num).toDouble()).toList();
@@ -1216,6 +1285,12 @@ class ScanHandlers {
             (v[3] - v[1]) < 0.95;
         if (ok) faceGeom = {'bbox': v};
       }
+    }
+    // Last resort — re-sanitise vision's bbox+landmarks through the same
+    // guard the client payload uses (clamps, validates landmark count)
+    // so downstream code can assume a consistent shape.
+    if (faceGeom == null && analysis.faceGeom != null) {
+      faceGeom = _sanitiseFaceGeom(analysis.faceGeom!);
     }
     final scan = await scans.create(
       userId: user.id,

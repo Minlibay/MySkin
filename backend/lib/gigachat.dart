@@ -368,7 +368,15 @@ const visionScanSystemPrompt = '''
   "zones": {"forehead": 0, "nose": 0, "left_cheek": 0, "right_cheek": 0, "chin": 0},
   "insight": "одна короткая фраза-вывод",
   "concerns": ["acne", "dehydration", "redness", "pih", "dullness", "aging"],
-  "quality_warnings": []
+  "quality_warnings": [],
+  "face": {
+    "bbox": [x0, y0, x1, y1],
+    "forehead":    [x, y],
+    "tzone":       [x, y],
+    "left_cheek":  [x, y],
+    "right_cheek": [x, y],
+    "chin":        [x, y]
+  }
 }
 
 Шкалы 0..100:
@@ -384,6 +392,18 @@ acne, pih, redness, dehydration, dullness, aging, sensitivity, oiliness, dryness
 
 quality_warnings — массив строк, если что-то мешает анализу
 ("no_face_detected", "too_dark", "too_blurry", "too_far"). Пустой массив — норм.
+
+face — обязательное поле, если лицо видно на фото (даже частично):
+  bbox — [x0, y0, x1, y1] — прямоугольник лица, нормированный к размерам
+         фото (значения 0..1, где [0,0] — левый верх, [1,1] — правый низ).
+         Должен охватывать только лицо: от линии волос до подбородка,
+         от уха до уха. НЕ включай шею или плечи.
+  forehead — точка на середине лба, [x, y] нормированные к фото.
+  tzone    — точка на переносице (середина носа).
+  left_cheek  — точка на левой щеке (зрительно слева на фото).
+  right_cheek — точка на правой щеке (зрительно справа на фото).
+  chin     — точка на подбородке.
+Если лицо НЕ видно — поле face можешь не включать или указать null.
 
 Без markdown, без префиксов, только JSON.
 ''';
