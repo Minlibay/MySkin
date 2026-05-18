@@ -1,3 +1,5 @@
+import '../../catalog/domain/product.dart';
+
 /// "Today" payload returned by GET /me/today — list of morning/evening steps
 /// with completion booleans + streak counter.
 class TodayStep {
@@ -39,6 +41,8 @@ class Today {
     required this.hasRoutine,
     required this.morning,
     required this.evening,
+    this.shelfMorning = const [],
+    this.shelfEvening = const [],
     this.tip,
   });
 
@@ -46,6 +50,12 @@ class Today {
   final bool hasRoutine;
   final List<TodayStep> morning;
   final List<TodayStep> evening;
+
+  /// Products from the user's shelf, grouped by phase. The Ritual screen
+  /// renders these under the morning / evening tabs so the user sees what
+  /// they actually own — not just generic step titles.
+  final List<Product> shelfMorning;
+  final List<Product> shelfEvening;
 
   /// Optional Лина tip surfaced by the backend (currently the latest scan's
   /// `insight`). Null when there's no scan yet — the UI then falls back to
@@ -69,11 +79,27 @@ class Today {
           .toList();
     }
 
+    List<Product> parseProducts(dynamic v) {
+      if (v is! List) return const [];
+      final out = <Product>[];
+      for (final raw in v) {
+        if (raw is! Map<String, dynamic>) continue;
+        try {
+          out.add(Product.fromJson(raw));
+        } catch (_) {
+          // Skip malformed entries rather than crash the Ritual screen.
+        }
+      }
+      return out;
+    }
+
     return Today(
       streak: (j['streak'] as num?)?.toInt() ?? 0,
       hasRoutine: j['has_routine'] as bool? ?? false,
       morning: parse(j['morning']),
       evening: parse(j['evening']),
+      shelfMorning: parseProducts(j['shelf_morning']),
+      shelfEvening: parseProducts(j['shelf_evening']),
       tip: j['tip'] as String?,
     );
   }
@@ -88,6 +114,8 @@ class Today {
             s.index == index ? s.copyWith(done: !s.done) : s
         ],
         evening: evening,
+        shelfMorning: shelfMorning,
+        shelfEvening: shelfEvening,
         tip: tip,
       );
     }
@@ -99,6 +127,8 @@ class Today {
         for (final s in evening)
           s.index == index ? s.copyWith(done: !s.done) : s
       ],
+      shelfMorning: shelfMorning,
+      shelfEvening: shelfEvening,
       tip: tip,
     );
   }

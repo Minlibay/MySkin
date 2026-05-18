@@ -1096,6 +1096,9 @@ class AiHandlers {
     required this.scans,
     required this.appSettings,
     required this.chatMessages,
+    required this.shelf,
+    required this.customShelf,
+    required this.routines,
   });
   final SessionRepository sessions;
   final AiClient giga;
@@ -1104,6 +1107,9 @@ class AiHandlers {
   final ScanRepository scans;
   final AppSettingsRepository appSettings;
   final ChatMessageRepository chatMessages;
+  final UserProductRepository shelf;
+  final UserCustomProductRepository customShelf;
+  final RoutineRepository routines;
 
   Router router() => Router()
     ..post('/ai/generate-routine', _withUser(_generate))
@@ -1264,6 +1270,59 @@ class AiHandlers {
               'created_at': s.createdAt.toUtc().toIso8601String(),
             }).toList();
 
+    // Лина should know what's already on the user's shelf so she doesn't
+    // recommend duplicates and can speak about products the user owns
+    // ("у тебя уже есть Niacinamide 10% — продолжай вечером…"). Slim
+    // payload — brand/name/kind/status, not the full product row.
+    final shelfHint = <Map<String, dynamic>>[];
+    try {
+      final items = await shelf.list(user.id);
+      for (final it in items) {
+        shelfHint.add({
+          'brand': it.product.brand,
+          'name': it.product.name,
+          'kind': it.product.kind,
+          'routine_phase': it.product.routinePhase,
+          'status': it.status,
+        });
+      }
+      final customs = await customShelf.list(user.id);
+      for (final c in customs) {
+        shelfHint.add({
+          'brand': c.brand,
+          'name': c.name,
+          'kind': c.kind,
+          'status': c.status,
+        });
+      }
+    } catch (e) {
+      stderr.writeln('chat shelf fetch failed: $e');
+    }
+
+    // Current active routine — Лина can comment on a specific step ("после
+    // тоника утром добавь сыворотку с витамином C") instead of treating each
+    // turn as cold-start.
+    Map<String, dynamic>? routineHint;
+    try {
+      final recent = await routines.listForUser(user.id, limit: 5);
+      for (final r in recent) {
+        final p = r['payload'];
+        if (p is Map) {
+          final m = p['morning'];
+          final e = p['evening'];
+          if ((m is List && m.isNotEmpty) || (e is List && e.isNotEmpty)) {
+            routineHint = {
+              'morning': (m is List ? m : const []),
+              'evening': (e is List ? e : const []),
+            };
+            break;
+          }
+        }
+      }
+    } catch (e) {
+      stderr.writeln('chat routine fetch failed: $e');
+    }
+
     // Pull product ids Лина already surfaced in earlier turns so she can
     // build on her past recommendations instead of repeating them. We only
     // keep the most recent ~15 to bound the prompt.
@@ -1308,6 +1367,18 @@ class AiHandlers {
             'упомяни её естественно ("увлажнённость поднялась с X до Y"), '
             'не выдумывай тренды там где разница в пределах 3-5 пунктов:',
         jsonEncode(scanHistory),
+      ],
+      if (shelfHint.isNotEmpty) ...[
+        '',
+        'На полке у пользователя уже стоит (status: have/want/dropped):',
+        jsonEncode(shelfHint),
+        'НЕ предлагай продукты, которые уже стоят на полке со status=have — '
+            'либо упомяни их как «у тебя уже есть X», либо предложи дополнение.',
+      ],
+      if (routineHint != null) ...[
+        '',
+        'Текущий активный ритуал пользователя (то, что назначено на утро/вечер):',
+        jsonEncode(routineHint),
       ],
       '',
       'Доступный каталог (топ-${top.length} '
@@ -2585,6 +2656,8 @@ class MeHandlers {
     required this.scans,
     required this.chatMessages,
     required this.events,
+    required this.shelf,
+    required this.customShelf,
   });
 
   final SessionRepository sessions;
@@ -2596,6 +2669,8 @@ class MeHandlers {
   final ScanRepository scans;
   final ChatMessageRepository chatMessages;
   final ProductEventRepository events;
+  final UserProductRepository shelf;
+  final UserCustomProductRepository customShelf;
 
   Router router() => Router()
     ..get('/me/profile', _withUser(_getProfile))
@@ -3003,6 +3078,43 @@ class MeHandlers {
       }
     } catch (_) {/* silent */}
 
+    // Shelf items grouped by phase. The Ritual screen renders them under
+    // the morning / evening tabs so the user sees what they actually own
+    // instead of generic AI step titles. Catalog products honour their
+    // routine_phase ('morning' | 'evening' | 'any'); custom shelf items
+    // fall into both buckets since they don't carry phase metadata.
+    final shelfMorning = <Map<String, dynamic>>[];
+    final shelfEvening = <Map<String, dynamic>>[];
+    try {
+      final items = await shelf.list(user.id);
+      for (final it in items) {
+        if (it.status != 'have') continue; // skip "хочу" / "не пошёл"
+        final json = {
+          ...it.product.toJson(),
+          'status': it.status,
+          'added_at': it.addedAt.toUtc().toIso8601String(),
+          'is_custom': false,
+        };
+        final phase = it.product.routinePhase.toLowerCase();
+        if (phase == 'morning' || phase == 'any' || phase.isEmpty) {
+          shelfMorning.add(json);
+        }
+        if (phase == 'evening' || phase == 'any' || phase.isEmpty) {
+          shelfEvening.add(json);
+        }
+      }
+      final customs = await customShelf.list(user.id);
+      for (final c in customs) {
+        if (c.status != 'have') continue;
+        // Custom items have no phase — show in both.
+        final json = _customToJson(c);
+        shelfMorning.add(json);
+        shelfEvening.add(json);
+      }
+    } catch (e) {
+      stderr.writeln('today shelf fetch failed: $e');
+    }
+
     return jsonResponse(200, {
       'date': dayUtc.toIso8601String(),
       'streak': streak,
@@ -3010,9 +3122,35 @@ class MeHandlers {
       'routine_id': latest?['id'],
       'morning': _stepsWithDone(latest, 'morning', done),
       'evening': _stepsWithDone(latest, 'evening', done),
+      'shelf_morning': shelfMorning,
+      'shelf_evening': shelfEvening,
       if (tip != null) 'tip': tip,
     });
   }
+
+  /// Mirror of CatalogHandlers._customToJson — duplicated here so MeHandlers
+  /// doesn't have to depend on CatalogHandlers just to surface custom items
+  /// inside `/me/today`. Keep the field set in sync if either changes.
+  Map<String, dynamic> _customToJson(CustomShelfItem c) => {
+        'id': c.id,
+        'slug': 'custom-${c.id}',
+        'brand': c.brand,
+        'name': c.name,
+        'kind': c.kind,
+        'description': '',
+        'price_rub': 0,
+        'accent_color': c.accentColor,
+        'ingredients': c.ingredients,
+        'tags': const <String>[],
+        'skin_types': const <String>[],
+        'is_active': false,
+        'gentle': false,
+        'routine_phase': 'any',
+        'has_photo': c.hasPhoto,
+        'status': c.status,
+        'added_at': c.addedAt.toUtc().toIso8601String(),
+        'is_custom': true,
+      };
 
   List<Map<String, dynamic>> _stepsWithDone(
       Map<String, dynamic>? routine, String phase, Set<String> done) {

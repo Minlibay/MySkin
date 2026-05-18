@@ -103,6 +103,8 @@ void main(List<String> args) async {
     scans: scans,
     chatMessages: chatMessages,
     events: productEvents,
+    shelf: shelf,
+    customShelf: customShelf,
   );
   final catalog = CatalogHandlers(
     sessions: sessions,
@@ -139,6 +141,9 @@ void main(List<String> args) async {
           scans: scans,
           appSettings: appSettings,
           chatMessages: chatMessages,
+          shelf: shelf,
+          customShelf: customShelf,
+          routines: routines,
         )
       : null;
 

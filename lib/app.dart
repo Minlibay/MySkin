@@ -395,6 +395,12 @@ class _AppShellState extends ConsumerState<_AppShell> {
             _refreshToday();
             setState(() => _view = _Shell.home);
           },
+          onOpenProduct: (p) => setState(() {
+            _openProductSlug = p.slug;
+            _previousView = _Shell.ritual;
+            _view = _Shell.productDetail;
+          }),
+          onOpenCatalog: () => setState(() => _view = _Shell.catalog),
         );
       case _Shell.profile:
         return ProfileScreen(

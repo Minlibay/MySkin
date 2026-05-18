@@ -9,6 +9,7 @@ import '../../../core/widgets/eyebrow_text.dart';
 import '../../../core/widgets/glow_background.dart';
 import '../../../core/widgets/lina_avatar.dart';
 import '../../api/backend_api.dart';
+import '../../catalog/domain/product.dart';
 import '../domain/today.dart';
 
 class DailyRitualScreen extends ConsumerStatefulWidget {
@@ -16,9 +17,13 @@ class DailyRitualScreen extends ConsumerStatefulWidget {
     super.key,
     required this.onBack,
     this.onScan,
+    this.onOpenProduct,
+    this.onOpenCatalog,
   });
   final VoidCallback onBack;
   final VoidCallback? onScan;
+  final ValueChanged<Product>? onOpenProduct;
+  final VoidCallback? onOpenCatalog;
 
   @override
   ConsumerState<DailyRitualScreen> createState() =>
@@ -116,6 +121,8 @@ class _DailyRitualScreenState extends ConsumerState<DailyRitualScreen> {
                             onBack: widget.onBack,
                             onToggle: _toggle,
                             onScan: widget.onScan,
+                            onOpenProduct: widget.onOpenProduct,
+                            onOpenCatalog: widget.onOpenCatalog,
                           )
                         : _Empty(
                             onBack: widget.onBack,
@@ -136,6 +143,8 @@ class _Body extends StatelessWidget {
     required this.onPhaseTab,
     required this.onBack,
     required this.onToggle,
+    this.onOpenProduct,
+    this.onOpenCatalog,
   });
 
   final Today today;
@@ -144,11 +153,16 @@ class _Body extends StatelessWidget {
   final VoidCallback onBack;
   final ValueChanged<TodayStep> onToggle;
   final VoidCallback? onScan;
+  final ValueChanged<Product>? onOpenProduct;
+  final VoidCallback? onOpenCatalog;
 
   bool get _isMorning => phaseTab == 'morning';
 
   List<TodayStep> get _steps =>
       _isMorning ? today.morning : today.evening;
+
+  List<Product> get _shelfForPhase =>
+      _isMorning ? today.shelfMorning : today.shelfEvening;
 
   int get _done => _isMorning ? today.morningDone : today.eveningDone;
 
@@ -188,6 +202,13 @@ class _Body extends StatelessWidget {
             ),
             const SizedBox(height: AppSpacing.lg),
             ..._buildSteps(activeIdx),
+            const SizedBox(height: AppSpacing.lg),
+            _ShelfSection(
+              isMorning: _isMorning,
+              items: _shelfForPhase,
+              onOpenProduct: onOpenProduct,
+              onOpenCatalog: onOpenCatalog,
+            ),
             const SizedBox(height: AppSpacing.md),
             if (today.streak > 0) _StreakBadge(streak: today.streak),
             if (today.streak > 0) const SizedBox(height: AppSpacing.md),
@@ -655,6 +676,180 @@ class _OrderBadge extends StatelessWidget {
         fontSize: 18,
         color: isActive ? AppColors.roseDeep : AppColors.textSecondary,
       ).copyWith(height: 1),
+    );
+  }
+}
+
+/// Strip of products from the user's shelf that match the current phase.
+/// When the shelf for this phase is empty, shows a soft empty-state with
+/// a CTA to the catalog so the user can pick something to add.
+class _ShelfSection extends StatelessWidget {
+  const _ShelfSection({
+    required this.isMorning,
+    required this.items,
+    this.onOpenProduct,
+    this.onOpenCatalog,
+  });
+
+  final bool isMorning;
+  final List<Product> items;
+  final ValueChanged<Product>? onOpenProduct;
+  final VoidCallback? onOpenCatalog;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const EyebrowText(
+          'Твои средства',
+          color: AppColors.roseDeep,
+        ),
+        const SizedBox(height: 4),
+        Text(
+          isMorning
+              ? 'С полки — для утреннего ритуала'
+              : 'С полки — для вечернего ритуала',
+          style: AppTypography.bodySecondary,
+        ),
+        const SizedBox(height: AppSpacing.sm),
+        if (items.isEmpty)
+          _ShelfEmpty(isMorning: isMorning, onOpenCatalog: onOpenCatalog)
+        else
+          SizedBox(
+            height: 158,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              padding: EdgeInsets.zero,
+              itemCount: items.length,
+              separatorBuilder: (_, __) =>
+                  const SizedBox(width: AppSpacing.sm),
+              itemBuilder: (_, i) => _ShelfMiniCard(
+                product: items[i],
+                onTap: onOpenProduct == null
+                    ? null
+                    : () => onOpenProduct!(items[i]),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _ShelfMiniCard extends StatelessWidget {
+  const _ShelfMiniCard({required this.product, this.onTap});
+  final Product product;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      width: 140,
+      child: Material(
+        color: Colors.white.withOpacity(0.7),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(18),
+          side: const BorderSide(color: AppColors.divider),
+        ),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(18),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Container(
+                  height: 70,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(12),
+                    gradient: LinearGradient(
+                      begin: Alignment.topCenter,
+                      end: Alignment.bottomCenter,
+                      colors: [
+                        Colors.white,
+                        product.accentColor,
+                      ],
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  product.brand,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.bodySecondary
+                      .copyWith(fontSize: 11, height: 1.1),
+                ),
+                Text(
+                  product.name,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: AppTypography.body.copyWith(
+                    fontSize: 13,
+                    height: 1.15,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _ShelfEmpty extends StatelessWidget {
+  const _ShelfEmpty({required this.isMorning, this.onOpenCatalog});
+  final bool isMorning;
+  final VoidCallback? onOpenCatalog;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(AppSpacing.md),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.55),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.divider),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            isMorning
+                ? 'Пока ничего на полке для утра.'
+                : 'Пока ничего на полке для вечера.',
+            style: AppTypography.body.copyWith(fontWeight: FontWeight.w500),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Подбери в каталоге и добавь — Лина сможет привязать продукт к ритуалу.',
+            style: AppTypography.bodySecondary,
+          ),
+          if (onOpenCatalog != null) ...[
+            const SizedBox(height: AppSpacing.sm),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton(
+                onPressed: onOpenCatalog,
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.roseDeep,
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 8),
+                  backgroundColor: AppColors.roseDeep.withOpacity(0.08),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                ),
+                child: const Text('Подобрать в каталоге'),
+              ),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }
