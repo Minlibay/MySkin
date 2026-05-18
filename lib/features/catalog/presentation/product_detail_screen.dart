@@ -207,14 +207,23 @@ class _Body extends StatelessWidget {
                 style: AppTypography.h1.copyWith(fontSize: 28, height: 1.1)),
             const SizedBox(height: 4),
             Text(product.kindLabel, style: AppTypography.caption),
-            if (product.matchScore != null) ...[
+            if (product.matchBlocked) ...[
+              const SizedBox(height: AppSpacing.md),
+              _MatchBlockedBanner(
+                reasons: product.matchWarnings.isNotEmpty
+                    ? product.matchWarnings
+                    : const ['Это средство не подходит твоему типу кожи'],
+              ),
+            ] else if (product.hasReliableMatch) ...[
               const SizedBox(height: AppSpacing.md),
               _MatchHero(
                 score: product.matchScore!,
                 reasons: product.matchReasons,
               ),
             ],
-            if (product.matchReasons.isNotEmpty) ...[
+            if (!product.matchBlocked &&
+                (product.matchReasons.isNotEmpty ||
+                    product.matchWarnings.isNotEmpty)) ...[
               const SizedBox(height: AppSpacing.lg),
               EyebrowText('Почему подходит'),
               const SizedBox(height: 10),
@@ -222,7 +231,11 @@ class _Body extends StatelessWidget {
                 _FitRow(text: r, warn: false),
                 const SizedBox(height: 8),
               ],
-              if (product.isActive)
+              for (final w in product.matchWarnings) ...[
+                _FitRow(text: w, warn: true),
+                const SizedBox(height: 8),
+              ],
+              if (product.isActive && product.matchWarnings.isEmpty)
                 _FitRow(
                   text:
                       'Активный ингредиент — Лина учтёт сочетания и SPF.',
@@ -645,6 +658,57 @@ class _RingPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _RingPainter old) =>
       old.progress != progress;
+}
+
+/// Hero band shown in place of the match score when the product is a hard
+/// knockout for the user (wrong skin type, etc.). We don't pretend a number
+/// — the message is the message.
+class _MatchBlockedBanner extends StatelessWidget {
+  const _MatchBlockedBanner({required this.reasons});
+  final List<String> reasons;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: AppColors.roseDeep.withOpacity(0.10),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: AppColors.roseDeep.withOpacity(0.30)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Icon(Icons.block_rounded,
+              size: 24, color: AppColors.roseDeep),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Не для тебя',
+                  style: AppTypography.h2.copyWith(
+                    fontSize: 16,
+                    color: AppColors.roseDeep,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                for (final r in reasons)
+                  Text(
+                    r,
+                    style: AppTypography.bodySm.copyWith(
+                      fontSize: 13,
+                      color: AppColors.roseDeep,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }
 
 class _FitRow extends StatelessWidget {

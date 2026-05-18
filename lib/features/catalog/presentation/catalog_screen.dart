@@ -328,7 +328,7 @@ class _ProductCardState extends ConsumerState<_ProductCard> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  if (product.matchScore != null)
+                  if (product.hasReliableMatch)
                     Container(
                       padding: const EdgeInsets.symmetric(
                           horizontal: 8, vertical: 3),

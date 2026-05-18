@@ -84,6 +84,7 @@ void main(List<String> args) async {
     customShelf: customShelf,
     profiles: profiles,
     favorites: favorites,
+    scans: scans,
   );
   final gigaKey = env['GIGACHAT_AUTH_KEY'];
   final giga = (gigaKey != null && gigaKey.isNotEmpty)

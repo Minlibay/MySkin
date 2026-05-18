@@ -2768,107 +2768,207 @@ class _RegionAcc {
   }
 }
 
-/// Compute 0..100 match between a user's profile and a product.
-/// Returns score and a list of reasoning bullets.
+/// Honest, normalised match between a user and a product.
 ///
-/// [scan] is the user's latest scan as a JSON-ish map with int metrics
-/// (`hydration`, `sebum`, `tone`, `pores`) — when present, low/high values
-/// boost products tagged for the matching concern. This is what makes the
-/// recommendation react to the photo, not just the onboarding questionnaire.
-({int score, List<String> reasons}) computeMatch({
+/// [score] is `achieved / possible × 100` over the signals where we actually
+/// have data on BOTH sides (user profile + product card). It is NOT additive
+/// from a base — an empty product card scores 0 over 0, not "50%".
+///
+/// [confidence] is how much of the user's evaluable signal space the product
+/// actually filled. Low confidence (sparse product card or sparse profile)
+/// means the score is unreliable; UIs should hide the number under ~40%.
+///
+/// [blocked] = hard knockout (skin-type mismatch). Such products must not be
+/// auto-recommended — show only on direct view with a clear "not for you"
+/// label.
+///
+/// [warnings] = soft caveats (e.g. potent active for sensitive skin). Surface
+/// alongside the score; don't auto-recommend without a disclaimer.
+class ProductMatch {
+  ProductMatch({
+    required this.score,
+    required this.confidence,
+    required this.reasons,
+    required this.warnings,
+    required this.blocked,
+  });
+  final int score;
+  final int confidence;
+  final List<String> reasons;
+  final List<String> warnings;
+  final bool blocked;
+
+  /// Empty match (no profile data) — display as "no data" upstream.
+  static final empty = ProductMatch(
+    score: 0,
+    confidence: 0,
+    reasons: const [],
+    warnings: const [],
+    blocked: false,
+  );
+}
+
+/// Weights of each scoring signal, in points out of 100. Only signals that
+/// can be evaluated for THIS user contribute to the denominator — so a
+/// non-sensitive user isn't capped below 100 because the sensitivity dimension
+/// doesn't apply to them.
+const int _wSkinType = 35;
+const int _wSensitivity = 20;
+const int _wProfileConcerns = 25;
+const int _wScanConcerns = 15;
+const int _wScanMetrics = 5;
+
+ProductMatch computeMatch({
   required Map<String, dynamic> profile,
   required ProductRow product,
   Map<String, dynamic>? scan,
 }) {
-  final reasons = <String>[];
-  var score = 50;
-
   final skinType = profile['skin_type'] as String?;
-  final concerns =
-      (profile['concerns'] as List?)?.cast<String>() ?? const [];
+  final profileConcerns =
+      (profile['concerns'] as List?)?.cast<String>() ?? const <String>[];
   final sensitivity = profile['sensitivity'] as String?;
-
-  // Skin type match.
-  if (skinType != null) {
-    if (product.skinTypes.contains(skinType) ||
-        product.skinTypes.contains('all')) {
-      score += 22;
-      reasons.add('Подходит для ${_skinTypeRu(skinType)} кожи');
-    } else if (product.skinTypes.isNotEmpty) {
-      score -= 8;
-    }
-  }
-
-  // Profile concerns (from onboarding).
-  final hits = concerns.where(product.tags.contains).toList();
-  if (hits.isNotEmpty) {
-    final delta = (hits.length * 9).clamp(0, 27);
-    score += delta;
-    reasons.add('Работает с: ${hits.map(_concernRu).join(', ')}');
-  }
-
-  // Scan-derived concerns (vision flagged on the photo) — scored separately
-  // and only for tags the profile didn't already cover, so we don't double-
-  // count the same concern. Weighted slightly less than self-reported.
   final scanConcerns =
       (scan?['concerns'] as List?)?.cast<String>() ?? const <String>[];
-  final scanOnly = scanConcerns
-      .where((c) => !concerns.contains(c))
-      .where(product.tags.contains)
-      .toList();
-  if (scanOnly.isNotEmpty) {
-    final delta = (scanOnly.length * 7).clamp(0, 21);
-    score += delta;
-    reasons
-        .add('По скану: ${scanOnly.map(_concernRu).join(', ')}');
-  }
 
-  // Scan-driven nudges. Metrics are 0..100; thresholds below match the
-  // semantic buckets in the vision prompt (50 = norm baseline).
-  if (scan != null) {
-    int? metric(String k) => (scan[k] as num?)?.toInt();
-    final hydration = metric('hydration');
-    final sebum = metric('sebum');
-    final tone = metric('tone');
-    final pores = metric('pores');
+  // Per-user max: total weight of signals that could ever be evaluated given
+  // what this user has filled in. Used to compute confidence (fraction of
+  // user's evaluable signal space that the product actually filled in).
+  var maxForUser = 0;
+  if (skinType != null) maxForUser += _wSkinType;
+  if (sensitivity == 'yes') maxForUser += _wSensitivity;
+  if (profileConcerns.isNotEmpty) maxForUser += _wProfileConcerns;
+  if (scanConcerns.isNotEmpty) maxForUser += _wScanConcerns;
+  if (scan != null) maxForUser += _wScanMetrics;
+  if (maxForUser == 0) return ProductMatch.empty;
 
-    if (hydration != null &&
-        hydration < 50 &&
-        product.tags.contains('dehydration')) {
-      score += 6;
-      reasons.add('Восстанавливает увлажнённость (скан: $hydration/100)');
-    }
-    if (sebum != null && sebum > 60 && product.tags.contains('oiliness')) {
-      score += 6;
-      reasons.add('Помогает с жирностью (скан: $sebum/100)');
-    }
-    if (tone != null &&
-        tone < 55 &&
-        (product.tags.contains('dullness') || product.tags.contains('pih'))) {
-      score += 5;
-      reasons.add('Выравнивает тон (скан: $tone/100)');
-    }
-    if (pores != null && pores < 50 && product.tags.contains('pores')) {
-      score += 5;
-      reasons.add('Сужает поры (скан: $pores/100)');
+  final reasons = <String>[];
+  final warnings = <String>[];
+  var blocked = false;
+  var actuallyPossible = 0;
+  var achieved = 0.0;
+
+  // Skin type — hard knockout if mismatch (product is for the wrong skin).
+  if (skinType != null && product.skinTypes.isNotEmpty) {
+    actuallyPossible += _wSkinType;
+    final matches = product.skinTypes.contains(skinType) ||
+        product.skinTypes.contains('all');
+    if (matches) {
+      achieved += _wSkinType;
+      reasons.add('Подходит для ${_skinTypeRu(skinType)} кожи');
+    } else {
+      blocked = true;
+      warnings.add('Не для ${_skinTypeRu(skinType)} кожи');
     }
   }
 
-  // Sensitivity-friendly bonus / active warning.
+  // Sensitivity safety. We score even when product flags are absent — a
+  // product that's neither flagged "gentle" nor "active" gets half credit
+  // (we genuinely don't know how strong it is).
   if (sensitivity == 'yes') {
+    actuallyPossible += _wSensitivity;
     if (product.gentle) {
-      score += 6;
+      achieved += _wSensitivity;
       reasons.add('Деликатная формула');
-    }
-    if (product.isActive) {
-      score -= 12;
-      reasons.add('⚠ Содержит активы — вводи постепенно');
+    } else if (product.isActive) {
+      achieved += _wSensitivity * 0.2;
+      warnings.add('⚠ Сильный актив — для чувствительной кожи рискованно');
+    } else {
+      achieved += _wSensitivity * 0.5;
     }
   }
 
-  return (
-    score: score.clamp(0, 100),
+  // Profile concerns: fraction of user's concerns the product addresses.
+  if (profileConcerns.isNotEmpty && product.tags.isNotEmpty) {
+    actuallyPossible += _wProfileConcerns;
+    final hits = profileConcerns.where(product.tags.contains).toList();
+    if (hits.isNotEmpty) {
+      final frac = hits.length / profileConcerns.length;
+      achieved += _wProfileConcerns * frac;
+      reasons.add('Работает с: ${hits.map(_concernRu).join(', ')}');
+    }
+  }
+
+  // Scan concerns: only credit tags that profile didn't already cover, to
+  // avoid double-counting the same concern across two signals.
+  if (scanConcerns.isNotEmpty && product.tags.isNotEmpty) {
+    actuallyPossible += _wScanConcerns;
+    final scanOnly =
+        scanConcerns.where((c) => !profileConcerns.contains(c)).toList();
+    if (scanOnly.isEmpty) {
+      // All scan concerns already accounted for via profile → full credit.
+      achieved += _wScanConcerns;
+    } else {
+      final hits = scanOnly.where(product.tags.contains).toList();
+      if (hits.isNotEmpty) {
+        final frac = hits.length / scanOnly.length;
+        achieved += _wScanConcerns * frac;
+        reasons.add('По скану: ${hits.map(_concernRu).join(', ')}');
+      }
+    }
+  }
+
+  // Scan metrics: per-metric, score 1 if (out-of-range && product addresses
+  // it), 0 if (out-of-range && product ignores it), 0.5 if in range (neutral).
+  if (scan != null) {
+    actuallyPossible += _wScanMetrics;
+    int? metric(String k) => (scan[k] as num?)?.toInt();
+    final signals = <({bool need, bool covers})>[];
+    final hydration = metric('hydration');
+    if (hydration != null) {
+      signals.add((
+        need: hydration < 50,
+        covers: product.tags.contains('dehydration'),
+      ));
+    }
+    final sebum = metric('sebum');
+    if (sebum != null) {
+      signals.add((
+        need: sebum > 60,
+        covers: product.tags.contains('oiliness'),
+      ));
+    }
+    final tone = metric('tone');
+    if (tone != null) {
+      signals.add((
+        need: tone < 55,
+        covers: product.tags.contains('dullness') ||
+            product.tags.contains('pih'),
+      ));
+    }
+    final pores = metric('pores');
+    if (pores != null) {
+      signals.add((
+        need: pores < 50,
+        covers: product.tags.contains('pores'),
+      ));
+    }
+    if (signals.isNotEmpty) {
+      var sum = 0.0;
+      for (final s in signals) {
+        if (!s.need) {
+          sum += 0.5;
+        } else if (s.covers) {
+          sum += 1.0;
+        }
+      }
+      achieved += _wScanMetrics * (sum / signals.length);
+    } else {
+      achieved += _wScanMetrics * 0.5;
+    }
+  }
+
+  final score = actuallyPossible == 0
+      ? 0
+      : (achieved / actuallyPossible * 100).round().clamp(0, 100);
+  final confidence =
+      (actuallyPossible / maxForUser * 100).round().clamp(0, 100);
+
+  return ProductMatch(
+    score: score,
+    confidence: confidence,
     reasons: reasons,
+    warnings: warnings,
+    blocked: blocked,
   );
 }
 

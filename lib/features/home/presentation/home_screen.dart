@@ -66,9 +66,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 
   Future<List<Product>> _loadTopMatches() async {
     final items = await ref.read(backendApiProvider).listCatalog();
-    final scored = items
-        .where((p) => p.matchScore != null && p.matchScore! > 0)
-        .toList()
+    final scored = items.where((p) => p.hasReliableMatch).toList()
       ..sort((a, b) => (b.matchScore ?? 0).compareTo(a.matchScore ?? 0));
     return scored.take(8).toList();
   }
@@ -304,7 +302,7 @@ class _MatchedProductCard extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (product.matchScore != null)
+              if (product.hasReliableMatch)
                 Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 8, vertical: 3),

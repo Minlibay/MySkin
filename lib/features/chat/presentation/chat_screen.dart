@@ -568,7 +568,7 @@ class _ProductChipCard extends StatelessWidget {
             overflow: TextOverflow.ellipsis,
           ),
           const Spacer(),
-          if (product.matchScore != null)
+          if (product.hasReliableMatch)
             Container(
               padding: const EdgeInsets.symmetric(
                   horizontal: 6, vertical: 2),

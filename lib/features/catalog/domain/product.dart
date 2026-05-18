@@ -18,7 +18,10 @@ class Product {
     required this.gentle,
     required this.routinePhase,
     this.matchScore,
+    this.matchConfidence,
     this.matchReasons = const [],
+    this.matchWarnings = const [],
+    this.matchBlocked = false,
     this.shelfStatus,
     this.hasPhoto = false,
     this.status = 'published',
@@ -51,9 +54,29 @@ class Product {
   final bool gentle;
   final String routinePhase;
 
-  /// Personalised match (0..100). Only present when fetched while logged in.
+  /// Personalised match (0..100) — normalised "covered / coverable signals".
+  /// Only meaningful when [matchConfidence] is high enough; UIs should hide
+  /// the number under ~40% confidence and show "Мало данных" instead.
   final int? matchScore;
+  /// 0..100 fraction of the user's evaluable signal space the product
+  /// actually filled in. Low confidence ⇒ score is unreliable.
+  final int? matchConfidence;
+  /// Positive reasons (skin type match, concerns covered, gentle, etc.).
   final List<String> matchReasons;
+  /// Soft caveats — e.g. potent active for sensitive skin. Show alongside
+  /// the score.
+  final List<String> matchWarnings;
+  /// Hard knockout — wrong skin type. Never auto-recommend; if shown,
+  /// display "Не для тебя" instead of a number.
+  final bool matchBlocked;
+
+  /// Whether the match score should be shown as a number. Below the
+  /// confidence threshold or on a blocked product, callers should display
+  /// a qualitative label instead.
+  bool get hasReliableMatch =>
+      !matchBlocked &&
+      matchScore != null &&
+      (matchConfidence ?? 0) >= 40;
 
   /// Status from user_products if loaded as a shelf item.
   final String? shelfStatus;
@@ -153,8 +176,12 @@ class Product {
       gentle: j['gentle'] as bool? ?? false,
       routinePhase: j['routine_phase'] as String? ?? 'any',
       matchScore: (j['match_score'] as num?)?.toInt(),
+      matchConfidence: (j['match_confidence'] as num?)?.toInt(),
       matchReasons:
           ((j['match_reasons'] as List?) ?? const []).cast<String>(),
+      matchWarnings:
+          ((j['match_warnings'] as List?) ?? const []).cast<String>(),
+      matchBlocked: j['match_blocked'] as bool? ?? false,
       // For shelf items the API returns user_product status ('have'|'wishlist'|
       // 'finished') in `status` and the product status is irrelevant. For
       // catalog items we get the publish status.

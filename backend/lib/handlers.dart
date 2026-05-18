@@ -941,20 +941,24 @@ class AiHandlers {
           };
 
     final catalog = await products.list(publicCatalogOnly: true, limit: 200);
-    final scored = <({ProductRow p, int score, List<String> reasons})>[];
+    final scored = <({ProductRow p, ProductMatch m})>[];
     for (final p in catalog) {
       final m = computeMatch(
         profile: profile,
         product: p,
         scan: scanForMatch,
       );
-      scored.add((p: p, score: m.score, reasons: m.reasons));
+      // Hard knockouts (wrong skin type) never enter the recommendation loop.
+      // Same for products we can't evaluate at all — pushing them would just
+      // mean "we have no idea but here you go".
+      if (m.blocked || m.confidence < 40) continue;
+      scored.add((p: p, m: m));
     }
-    scored.sort((a, b) => b.score.compareTo(a.score));
+    scored.sort((a, b) => b.m.score.compareTo(a.m.score));
     // Diversify the context window by `kind` so Лина doesn't see eight
     // cleansers and miss the cream the user actually needs. Cap 2 per kind.
     final perKindCtx = <String, int>{};
-    final top = <({ProductRow p, int score, List<String> reasons})>[];
+    final top = <({ProductRow p, ProductMatch m})>[];
     for (final e in scored) {
       final n = perKindCtx[e.p.kind] ?? 0;
       if (n >= 2) continue;
@@ -970,7 +974,7 @@ class AiHandlers {
               'name': e.p.name,
               'kind': e.p.kind,
               'tags': e.p.tags,
-              'match_score': e.score,
+              'match_score': e.m.score,
               // Long-form fields Лина leans on for ingredient-aware advice
               // and contraindication warnings. Omitted when empty so the
               // model doesn't waste tokens on "null"s.
@@ -1077,18 +1081,21 @@ class AiHandlers {
 
       // One product per `kind` so the strip looks like a mini routine
       // (cleanser + serum + cream + …) instead of five lookalike SKUs.
-      // 60 is "actually a good match" — base is 50, skin-type+concern hits
-      // are required to clear it.
+      // Threshold 70 on a normalised score = "covers the majority of what
+      // we know about this user's skin", which is a stricter bar than the
+      // old additive 60 since score is now proper achieved/possible.
       final recommended = <Map<String, dynamic>>[];
       if (showProducts) {
         final usedKinds = <String>{};
         for (final e in top) {
-          if (e.score < 60) continue;
+          if (e.m.score < 70) continue;
           if (!usedKinds.add(e.p.kind)) continue;
           recommended.add({
             ...e.p.toJson(),
-            'match_score': e.score,
-            'match_reasons': e.reasons,
+            'match_score': e.m.score,
+            'match_confidence': e.m.confidence,
+            'match_reasons': e.m.reasons,
+            'match_warnings': e.m.warnings,
           });
           if (recommended.length >= 5) break;
         }
@@ -1700,6 +1707,7 @@ class CatalogHandlers {
     required this.customShelf,
     required this.profiles,
     required this.favorites,
+    required this.scans,
   });
 
   final SessionRepository sessions;
@@ -1708,6 +1716,23 @@ class CatalogHandlers {
   final UserCustomProductRepository customShelf;
   final ProfileRepository profiles;
   final UserFavoriteRepository favorites;
+  final ScanRepository scans;
+
+  /// Builds the small {hydration, sebum, tone, pores, concerns} map that
+  /// `computeMatch` consumes. Null when the user has no scan yet — the
+  /// matcher then falls back to profile-only signals.
+  Future<Map<String, dynamic>?> _scanForMatch(String userId) async {
+    final recent = await scans.listForUser(userId, limit: 1);
+    if (recent.isEmpty) return null;
+    final s = recent.first;
+    return {
+      'hydration': s.hydration,
+      'sebum': s.sebum,
+      'tone': s.tone,
+      'pores': s.pores,
+      'concerns': s.concerns,
+    };
+  }
 
   Router router() => Router()
     ..get('/catalog', _withUser(_list))
@@ -1752,16 +1777,20 @@ class CatalogHandlers {
       offset: int.tryParse(qp['offset'] ?? '') ?? 0,
     );
     final profile = await profiles.get(user.id) ?? <String, dynamic>{};
+    final scan = await _scanForMatch(user.id);
     // Single fetch of all favourite ids → O(1) membership check per row, no
     // n+1 query as we walk the catalog list.
     final favIds = (await favorites.listIds(user.id)).toSet();
     return jsonResponse(200, {
       'items': items.map((p) {
-        final m = computeMatch(profile: profile, product: p);
+        final m = computeMatch(profile: profile, product: p, scan: scan);
         return {
           ...p.toJson(),
           'match_score': m.score,
+          'match_confidence': m.confidence,
           'match_reasons': m.reasons,
+          'match_warnings': m.warnings,
+          'match_blocked': m.blocked,
           'is_favorite': favIds.contains(p.id),
         };
       }).toList(),
@@ -1801,14 +1830,18 @@ class CatalogHandlers {
     final p = await products.findBySlug(slug, publishedOnly: true);
     if (p == null) return jsonResponse(404, {'error': 'not_found'});
     final profile = await profiles.get(user.id) ?? <String, dynamic>{};
-    final m = computeMatch(profile: profile, product: p);
+    final scan = await _scanForMatch(user.id);
+    final m = computeMatch(profile: profile, product: p, scan: scan);
     final isFav =
         await favorites.contains(userId: user.id, productId: p.id);
     final slots = await products.photoSlots(p.id);
     return jsonResponse(200, {
       ...p.toJson(),
       'match_score': m.score,
+      'match_confidence': m.confidence,
       'match_reasons': m.reasons,
+      'match_warnings': m.warnings,
+      'match_blocked': m.blocked,
       'is_favorite': isFav,
       'photo_slots': slots,
     });
@@ -2091,15 +2124,19 @@ class CatalogHandlers {
     final ids = await favorites.listIds(user.id);
     if (ids.isEmpty) return jsonResponse(200, {'items': const []});
     final profile = await profiles.get(user.id) ?? <String, dynamic>{};
+    final scan = await _scanForMatch(user.id);
     final items = <Map<String, dynamic>>[];
     for (final id in ids) {
       final p = await products.findById(id);
       if (p == null) continue;
-      final m = computeMatch(profile: profile, product: p);
+      final m = computeMatch(profile: profile, product: p, scan: scan);
       items.add({
         ...p.toJson(),
         'match_score': m.score,
+        'match_confidence': m.confidence,
         'match_reasons': m.reasons,
+        'match_warnings': m.warnings,
+        'match_blocked': m.blocked,
         'is_favorite': true,
       });
     }
