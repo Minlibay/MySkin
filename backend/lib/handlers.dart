@@ -999,7 +999,11 @@ class AiHandlers {
     // Pre-compute top-matched products for this user so Лина can mention
     // them and the frontend can render them as a strip beside her reply.
     final profile = await profiles.get(user.id) ?? <String, dynamic>{};
-    final recentScans = await scans.listForUser(user.id, limit: 1);
+    // Fetch last 3 scans so Лина can speak about the trend ("hydration grew
+    // from 42 to 58 over 6 weeks") instead of treating each conversation as
+    // a one-off. The newest one still drives the ranker; older ones only
+    // enter the system prompt.
+    final recentScans = await scans.listForUser(user.id, limit: 3);
     final recentScan = recentScans.isEmpty ? null : recentScans.first;
     // Subset of metrics passed to computeMatch so the ranker can react to
     // the latest photo, not just the static onboarding questionnaire.
@@ -1072,6 +1076,19 @@ class AiHandlers {
             'concerns': recentScan.concerns,
             'created_at': recentScan.createdAt.toUtc().toIso8601String(),
           };
+    // Older scans, slimmed down to just the metrics + date — enough for Лина
+    // to phrase progress ("увлажнённость +16 за полтора месяца") without
+    // wasting tokens on zone arrays or insights from old runs.
+    final scanHistory = recentScans.length < 2
+        ? const <Map<String, dynamic>>[]
+        : recentScans.skip(1).map((s) => {
+              'score': s.score,
+              'hydration': s.hydration,
+              'sebum': s.sebum,
+              'tone': s.tone,
+              'pores': s.pores,
+              'created_at': s.createdAt.toUtc().toIso8601String(),
+            }).toList();
 
     // Pull product ids Лина already surfaced in earlier turns so she can
     // build on her past recommendations instead of repeating them. We only
@@ -1110,6 +1127,13 @@ class AiHandlers {
         '',
         'Последний скан кожи пользователя (метрики 0-100, бери в расчёт):',
         jsonEncode(scanHint),
+      ],
+      if (scanHistory.isNotEmpty) ...[
+        '',
+        'Предыдущие сканы (от свежего к старому). Если видишь динамику — '
+            'упомяни её естественно ("увлажнённость поднялась с X до Y"), '
+            'не выдумывай тренды там где разница в пределах 3-5 пунктов:',
+        jsonEncode(scanHistory),
       ],
       '',
       'Доступный каталог (топ-${top.length} '
@@ -1807,6 +1831,7 @@ class CatalogHandlers {
     required this.profiles,
     required this.favorites,
     required this.scans,
+    required this.routines,
   });
 
   final SessionRepository sessions;
@@ -1816,6 +1841,7 @@ class CatalogHandlers {
   final ProfileRepository profiles;
   final UserFavoriteRepository favorites;
   final ScanRepository scans;
+  final RoutineRepository routines;
 
   /// Builds the small {hydration, sebum, tone, pores, concerns} map that
   /// `computeMatch` consumes. Null when the user has no scan yet — the
@@ -1849,7 +1875,8 @@ class CatalogHandlers {
     ..put('/me/shelf/custom/<id>/photo', _withUser(_setCustomPhoto))
     ..get('/me/favorites', _withUser(_listFavorites))
     ..put('/me/favorites/<productId>', _withUser(_addFavorite))
-    ..delete('/me/favorites/<productId>', _withUser(_removeFavorite));
+    ..delete('/me/favorites/<productId>', _withUser(_removeFavorite))
+    ..post('/me/routines/from-shelf', _withUser(_routineFromShelf));
 
   Handler _withUser(Future<Response> Function(Request, UserRow) inner) =>
       (Request req) async {
@@ -2254,6 +2281,86 @@ class CatalogHandlers {
     final productId = req.params['productId']!;
     await favorites.remove(userId: user.id, productId: productId);
     return jsonResponse(200, {'ok': true});
+  }
+
+  /// Canonical order of skincare steps within a single routine phase.
+  /// Anything not in this list ends up at the tail in the order it was
+  /// added — so unusual `kind` values (admin custom categories, partner
+  /// experiments) still appear but don't break the flow.
+  static const _stepOrder = <String, int>{
+    'cleanser': 0,
+    'toner': 1,
+    'essence': 2,
+    'mask': 3,
+    'serum': 4,
+    'eye_cream': 5,
+    'moisturizer': 6,
+    'spf': 7,
+  };
+
+  /// Generates a morning + evening routine from products the user already
+  /// owns (`status='have'` on the shelf). Pass `{"preview": true}` to get
+  /// the payload without persisting — useful for the confirmation screen.
+  Future<Response> _routineFromShelf(Request req, UserRow user) async {
+    final body = req.headers['content-length'] == '0'
+        ? const <String, dynamic>{}
+        : jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final preview = body['preview'] as bool? ?? false;
+
+    final items = await shelf.list(user.id);
+    final owned = items.where((it) => it.status == 'have').toList();
+    if (owned.isEmpty) {
+      return jsonResponse(409, {
+        'error': 'empty_shelf',
+        'message': 'Сначала добавь свои средства на полку — без них не из '
+            'чего собрать рутину.',
+      });
+    }
+
+    int orderOf(String kind) => _stepOrder[kind] ?? 99;
+
+    final morning = <Map<String, dynamic>>[];
+    final evening = <Map<String, dynamic>>[];
+    for (final it in owned) {
+      final p = it.product;
+      // SPF is morning-only by definition — never put it in evening even if
+      // someone tagged it 'any' by mistake.
+      final phase = p.kind == 'spf' ? 'morning' : p.routinePhase;
+      final step = {
+        'product_id': p.id,
+        'slug': p.slug,
+        'brand': p.brand,
+        'name': p.name,
+        'kind': p.kind,
+        'has_photo': p.hasPhoto,
+      };
+      if (phase == 'morning' || phase == 'any') morning.add(step);
+      if (phase == 'evening' || phase == 'any') {
+        if (p.kind != 'spf') evening.add(step);
+      }
+    }
+    morning.sort((a, b) =>
+        orderOf(a['kind'] as String).compareTo(orderOf(b['kind'] as String)));
+    evening.sort((a, b) =>
+        orderOf(a['kind'] as String).compareTo(orderOf(b['kind'] as String)));
+
+    final payload = <String, dynamic>{
+      'source': 'shelf',
+      'generated_at': DateTime.now().toUtc().toIso8601String(),
+      'morning': morning,
+      'evening': evening,
+    };
+
+    if (preview) {
+      return jsonResponse(200, {'preview': true, 'payload': payload});
+    }
+
+    final id = await routines.create(
+      userId: user.id,
+      kind: 'from_shelf',
+      payload: payload,
+    );
+    return jsonResponse(200, {'id': id, 'payload': payload});
   }
 }
 

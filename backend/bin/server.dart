@@ -85,6 +85,7 @@ void main(List<String> args) async {
     profiles: profiles,
     favorites: favorites,
     scans: scans,
+    routines: routines,
   );
   final gigaKey = env['GIGACHAT_AUTH_KEY'];
   final giga = (gigaKey != null && gigaKey.isNotEmpty)

@@ -51,6 +51,37 @@ class _ShelfScreenState extends ConsumerState<ShelfScreen> {
         );
   }
 
+  Future<void> _buildRoutine() async {
+    final messenger = ScaffoldMessenger.of(context);
+    try {
+      final preview =
+          await ref.read(backendApiProvider).buildRoutineFromShelf(
+                preview: true,
+              );
+      final payload = (preview['payload'] as Map).cast<String, dynamic>();
+      if (!mounted) return;
+      final shouldSave = await showModalBottomSheet<bool>(
+            context: context,
+            isScrollControlled: true,
+            backgroundColor: AppColors.surface,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            builder: (_) => _RoutinePreviewSheet(payload: payload),
+          ) ??
+          false;
+      if (!shouldSave) return;
+      await ref.read(backendApiProvider).buildRoutineFromShelf();
+      messenger.showSnackBar(
+        const SnackBar(content: Text('Рутина сохранена')),
+      );
+    } on EmptyShelfException catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text(e.message)));
+    } catch (e) {
+      messenger.showSnackBar(SnackBar(content: Text('Ошибка: $e')));
+    }
+  }
+
   Future<void> _remove(Product p) async {
     try {
       await ref.read(backendApiProvider).removeFromShelf(p.id);
@@ -135,6 +166,7 @@ class _ShelfScreenState extends ConsumerState<ShelfScreen> {
                           ],
                         ),
                       ),
+                      _BuildRoutineButton(onTap: _buildRoutine),
                     ],
                   ),
                 ),
@@ -560,6 +592,174 @@ class _Empty extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Compact icon button in the shelf header — generates a routine from the
+/// products on the shelf. Visually muted so it doesn't compete with the
+/// primary "add custom" FAB.
+class _BuildRoutineButton extends StatelessWidget {
+  const _BuildRoutineButton({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox(
+      height: 40,
+      child: Material(
+        color: AppColors.primaryAccent.withOpacity(0.14),
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+            side: BorderSide(color: AppColors.roseDeep.withOpacity(0.18))),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 14),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.auto_awesome_rounded,
+                    size: 16, color: AppColors.roseDeep),
+                const SizedBox(width: 6),
+                Text(
+                  'Рутина',
+                  style: AppTypography.bodySm.copyWith(
+                    color: AppColors.roseDeep,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Bottom sheet that shows the morning + evening lists built from shelf
+/// products, ordered by canonical step sequence. The user either confirms
+/// (saves to /me/routines) or cancels.
+class _RoutinePreviewSheet extends StatelessWidget {
+  const _RoutinePreviewSheet({required this.payload});
+  final Map<String, dynamic> payload;
+
+  static const _kindLabel = {
+    'cleanser': 'Очищение',
+    'toner': 'Тоник',
+    'essence': 'Эссенция',
+    'serum': 'Сыворотка',
+    'moisturizer': 'Крем',
+    'spf': 'SPF',
+    'mask': 'Маска',
+    'eye_cream': 'Крем для глаз',
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final morning = ((payload['morning'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>();
+    final evening = ((payload['evening'] as List?) ?? const [])
+        .cast<Map<String, dynamic>>();
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(
+            AppSpacing.lg, AppSpacing.lg, AppSpacing.lg, AppSpacing.md),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Рутина из твоей полки',
+                style: AppTypography.h2.copyWith(fontSize: 20)),
+            const SizedBox(height: 4),
+            Text(
+              'Собрано из средств, помеченных «Использую». Можно сохранить '
+              'и пользоваться в разделе «Сегодня».',
+              style: AppTypography.bodySm.copyWith(
+                  color: AppColors.textSecondary, height: 1.4),
+            ),
+            const SizedBox(height: AppSpacing.lg),
+            _phaseBlock('☀  Утро', morning),
+            const SizedBox(height: AppSpacing.md),
+            _phaseBlock('☾  Вечер', evening),
+            const SizedBox(height: AppSpacing.lg),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(context).pop(false),
+                    child: const Text('Отмена'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton(
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.roseDeep,
+                      foregroundColor: Colors.white,
+                    ),
+                    onPressed: morning.isEmpty && evening.isEmpty
+                        ? null
+                        : () => Navigator.of(context).pop(true),
+                    child: const Text('Сохранить'),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _phaseBlock(String title, List<Map<String, dynamic>> steps) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        EyebrowText(title, color: AppColors.roseDeep),
+        const SizedBox(height: 6),
+        if (steps.isEmpty)
+          Text(
+            'Здесь пока пусто — добавь средства на полку.',
+            style: AppTypography.bodySm
+                .copyWith(color: AppColors.textSecondary),
+          )
+        else
+          ...steps.map((s) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 4),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: const BoxDecoration(
+                        color: AppColors.roseDeep,
+                        shape: BoxShape.circle,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text.rich(
+                        TextSpan(children: [
+                          TextSpan(
+                              text:
+                                  '${_kindLabel[s['kind']] ?? s['kind']} · ',
+                              style: AppTypography.bodySm.copyWith(
+                                  color: AppColors.textSecondary)),
+                          TextSpan(
+                            text: '${s['brand']} ${s['name']}',
+                            style: AppTypography.bodySm
+                                .copyWith(fontWeight: FontWeight.w600),
+                          ),
+                        ]),
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+      ],
     );
   }
 }

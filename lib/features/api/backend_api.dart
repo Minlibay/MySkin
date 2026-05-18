@@ -8,6 +8,15 @@ import '../progress/domain/progress.dart';
 import '../ritual/domain/today.dart';
 import '../scan/domain/scan_result.dart';
 
+/// Thrown by [BackendApi.buildRoutineFromShelf] when the user's shelf has
+/// no `have` items yet — the UI shows a "add some products first" prompt.
+class EmptyShelfException implements Exception {
+  EmptyShelfException(this.message);
+  final String message;
+  @override
+  String toString() => 'EmptyShelfException: $message';
+}
+
 /// Thrown by [BackendApi.uploadScan] when the server refused the photo
 /// because the metrics would be meaningless (no face, dark, blurry, far).
 /// The camera screen catches this to show a "retake" prompt instead of a
@@ -170,6 +179,31 @@ class BackendApi {
 
   Future<void> removeFromShelf(String productId) async {
     await _dio.delete('$baseUrl/me/shelf/$productId', options: _auth());
+  }
+
+  /// Builds a morning/evening routine from products the user has on their
+  /// shelf (status='have'). Returns the saved routine's id + payload. Throws
+  /// [EmptyShelfException] if the shelf has no `have` items yet.
+  Future<Map<String, dynamic>> buildRoutineFromShelf({
+    bool preview = false,
+  }) async {
+    try {
+      final r = await _dio.post(
+        '$baseUrl/me/routines/from-shelf',
+        data: {if (preview) 'preview': true},
+        options: _auth(),
+      );
+      return (r.data as Map).cast<String, dynamic>();
+    } on DioException catch (e) {
+      if (e.response?.statusCode == 409 &&
+          (e.response?.data as Map?)?['error'] == 'empty_shelf') {
+        throw EmptyShelfException(
+          (e.response?.data as Map)['message'] as String? ??
+              'Полка пустая.',
+        );
+      }
+      rethrow;
+    }
   }
 
   /// Patch fill_level / opened_at / expires_at / pao_months for a catalog
