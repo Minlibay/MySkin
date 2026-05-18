@@ -1087,34 +1087,6 @@ Map<String, dynamic>? _sanitiseFaceGeom(Map<String, dynamic> raw) {
   };
 }
 
-/// Cheap sanity check on vision-returned landmarks before we let them
-/// override the client's contour-derived placement. VLMs sometimes
-/// hallucinate coords (everything at 0.5/0.5, or wildly swapped left/right)
-/// so we verify basic anatomy:
-///   - forehead is above tzone, which is above the cheeks, which are above chin;
-///   - left cheek is to the left of right cheek;
-///   - chin and forehead live roughly on the vertical midline of the cheeks.
-/// Anything outside these tolerances → fall back to ML Kit landmarks.
-bool _landmarksLookSane(Map<String, List<double>> lm) {
-  final f = lm['forehead'], t = lm['tzone'], chin = lm['chin'];
-  final lc = lm['left_cheek'], rc = lm['right_cheek'];
-  if (f == null || t == null || chin == null || lc == null || rc == null) {
-    return false;
-  }
-  // Vertical ordering (small slack lets the AI be off by ~2% without
-  // breaking the override entirely).
-  if (!(f[1] < t[1] - 0.01)) return false;
-  if (!(t[1] < lc[1] + 0.05 && t[1] < rc[1] + 0.05)) return false;
-  if (!(lc[1] < chin[1] && rc[1] < chin[1])) return false;
-  // Left cheek must be left of right cheek with at least 8% separation.
-  if (rc[0] - lc[0] < 0.08) return false;
-  // Forehead and chin should sit between the cheeks horizontally.
-  final cheekMidX = (lc[0] + rc[0]) / 2;
-  if ((f[0] - cheekMidX).abs() > 0.2) return false;
-  if ((chin[0] - cheekMidX).abs() > 0.2) return false;
-  return true;
-}
-
 class AiHandlers {
   AiHandlers({
     required this.sessions,
@@ -1715,34 +1687,13 @@ class ScanHandlers {
       faceGeom = _sanitiseFaceGeom(analysis.faceGeom!);
     }
 
-    // Landmark override: ML Kit's contour-derived landmarks drift hard on
-    // bearded faces (contour traces the beard, so cheeks/chin inflate
-    // downward). The vision model places the dots from anatomy, not from
-    // a polygon, so when it returns a plausible set we trust it over our
-    // geometric heuristic. We keep the ML Kit *contour* for the dashed
-    // outline because the AI doesn't return one.
-    final aiGeom = analysis.faceGeom;
-    if (faceGeom != null && aiGeom != null) {
-      final aiLandmarks = <String, List<double>>{};
-      for (final k in const [
-        'forehead',
-        'tzone',
-        'left_cheek',
-        'right_cheek',
-        'chin',
-      ]) {
-        final v = aiGeom[k];
-        if (v is List && v.length >= 2 && v[0] is num && v[1] is num) {
-          aiLandmarks[k] = [
-            (v[0] as num).toDouble().clamp(0.0, 1.0),
-            (v[1] as num).toDouble().clamp(0.0, 1.0),
-          ];
-        }
-      }
-      if (aiLandmarks.length == 5 && _landmarksLookSane(aiLandmarks)) {
-        faceGeom = {...faceGeom, 'landmarks': aiLandmarks};
-      }
-    }
+    // We previously overrode the client's landmarks with vision-model
+    // coordinates, hoping anatomy-aware placement would beat ML Kit. In
+    // practice the VLM kept putting cheeks next to the nose and the
+    // forehead in the hairline, while the new client builder now anchors
+    // to direct ML Kit landmarks (eyes, noseBase, mouth) — those are far
+    // more reliable than any coord a VLM produces. So we trust the
+    // client's landmarks again and ignore aiGeom for that field.
     // Quality gate: if the photo can't be analysed (no face, too dark/blurry),
     // refuse the scan instead of persisting garbage metrics that would then
     // poison Лина's recommendations and the user's progress chart.
