@@ -201,12 +201,11 @@ class AuthHandlers {
       return jsonResponse(429, {'error': 'too_many_requests'});
     }
 
-    // voicepassword generates the code on its side and returns it. On failure
-    // we fall back to a locally generated code so the admin can still relay it
-    // manually via the Codes page (same UX as before with SMSC failures).
-    final result = await sendSmsViaVoicePassword(phone: phone, env: env);
-    final code = result?.code ?? _generateCode();
-    final ok = result != null;
+    final code = _generateCode();
+    final ok = await sendSmsViaSmsc(phone: phone, code: code, env: env);
+    // Store the OTP regardless of SMS outcome: when the SMS provider fails
+    // (e.g. balance gone) an admin can still relay the plaintext code to the
+    // user via Codes page in the admin panel.
     await otps.upsert(
       phone: phone,
       codeHash: hashOtp(phone, code, _pepper),

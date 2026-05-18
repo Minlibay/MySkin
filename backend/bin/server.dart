@@ -173,9 +173,9 @@ void main(List<String> args) async {
   final port = int.parse(env['PORT'] ?? '8080');
   final server = await serve(handler, InternetAddress.anyIPv4, port);
   stdout.writeln('MySkin backend listening on http://localhost:${server.port}');
-  if ((env['VOICEPASSWORD_API_KEY'] ?? '').isEmpty) {
+  if ((env['SMSC_LOGIN'] ?? '').isEmpty) {
     stdout.writeln(
-        '⚠  VOICEPASSWORD_API_KEY empty — codes printed to stdout.');
+        '⚠  SMSC_LOGIN/SMSC_PASSWORD empty — codes printed to stdout.');
   }
   if (allowedOrigins.contains('*') || allowedOrigins.isEmpty) {
     stdout.writeln(
