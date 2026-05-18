@@ -50,28 +50,43 @@ Map<String, dynamic>? buildFaceGeomJson(
       .toList(growable: false);
 
   // ---- Derive zone landmarks from ML Kit data ----
+  // We deliberately ignore FaceLandmarkType.leftCheek/rightCheek: those mark
+  // the geometric centre of ML Kit's cheek region (basically under the eye,
+  // near the nose) which doesn't line up with where dermatologists actually
+  // assess "cheek" skin. Contour-derived points sit on the apple of the
+  // cheek instead, which is what every other zone (forehead, T-zone, chin)
+  // already does.
   final lBrow = face.contours[FaceContourType.leftEyebrowTop]?.points ?? [];
   final rBrow = face.contours[FaceContourType.rightEyebrowTop]?.points ?? [];
   final nose = face.contours[FaceContourType.noseBridge]?.points ?? [];
-  final lCheekL = face.landmarks[FaceLandmarkType.leftCheek];
-  final rCheekL = face.landmarks[FaceLandmarkType.rightCheek];
+  final lowerLip =
+      face.contours[FaceContourType.lowerLipBottom]?.points ?? [];
 
-  final ys = contour.map((p) => p[1]);
-  final xs = contour.map((p) => p[0]);
+  final ys = contour.map((p) => p[1]).toList();
+  final xs = contour.map((p) => p[0]).toList();
   final faceTop = ys.reduce(math.min);
   final faceBot = ys.reduce(math.max);
+  final faceLeft = xs.reduce(math.min);
+  final faceRight = xs.reduce(math.max);
   final faceH = faceBot - faceTop;
+  final faceW = faceRight - faceLeft;
   final xMean = xs.reduce((a, b) => a + b) / contour.length;
 
-  // Forehead — above midpoint of the two eyebrows, lifted by ~18% face h.
+  // Forehead — above brow midpoint. We lift by 14% face-h (was 18%, which
+  // pushed the dot into the hairline for taller foreheads) and clamp so we
+  // never go above bbox-top + 6%, otherwise long-haired users get a dot in
+  // their hair.
   List<double> forehead;
   if (lBrow.isNotEmpty && rBrow.isNotEmpty) {
     final all = [...lBrow, ...rBrow];
     final cx = all.map((p) => p.x).reduce((a, b) => a + b) / all.length;
-    final cy = all.map((p) => p.y).reduce((a, b) => a + b) / all.length;
-    forehead = [nx(cx), ((cy / imgH) - faceH * 0.18).clamp(0.0, 1.0)];
+    final browYNorm =
+        all.map((p) => p.y).reduce((a, b) => a + b) / all.length / imgH;
+    final lifted = browYNorm - faceH * 0.14;
+    final minY = faceTop + faceH * 0.06;
+    forehead = [nx(cx), math.max(lifted, minY).clamp(0.0, 1.0)];
   } else {
-    forehead = [xMean, (faceTop + faceH * 0.10).clamp(0.0, 1.0)];
+    forehead = [xMean, (faceTop + faceH * 0.12).clamp(0.0, 1.0)];
   }
 
   // T-zone — middle of nose bridge.
@@ -83,32 +98,59 @@ Map<String, dynamic>? buildFaceGeomJson(
     tzone = [forehead[0], (forehead[1] + faceH * 0.30).clamp(0.0, 1.0)];
   }
 
-  // Cheeks — explicit landmarks or extreme contour points at cheekbone Y.
-  List<double> leftCheek;
-  if (lCheekL != null) {
-    leftCheek = point(lCheekL.position.x, lCheekL.position.y);
+  // Cheeks — apple of the cheek: vertically aligned with the bottom of the
+  // nose bridge (about 60% down the face), horizontally pulled in 12% from
+  // the contour edge so the dot sits on skin, not on the jaw line.
+  double cheekY;
+  if (nose.isNotEmpty) {
+    // noseBridge bottom = nose tip → cheek apple is roughly at that Y.
+    cheekY = nose.last.y / imgH;
   } else {
-    final lp = contour.reduce((a, b) => a[0] < b[0] ? a : b);
-    leftCheek = [
-      (lp[0] + 0.03).clamp(0.0, 1.0),
-      (tzone[1] + faceH * 0.05).clamp(0.0, 1.0),
-    ];
+    cheekY = (faceTop + faceH * 0.55).clamp(0.0, 1.0);
   }
+  // Find leftmost / rightmost contour points within a band around cheekY.
+  // ±10% face-h is wide enough to find points even when contour is sparse.
+  final band = contour
+      .where((p) => (p[1] - cheekY).abs() < faceH * 0.10)
+      .toList();
+  List<double> leftCheek;
   List<double> rightCheek;
-  if (rCheekL != null) {
-    rightCheek = point(rCheekL.position.x, rCheekL.position.y);
-  } else {
-    final rp = contour.reduce((a, b) => a[0] > b[0] ? a : b);
+  if (band.length >= 2) {
+    final lEdge = band.reduce((a, b) => a[0] < b[0] ? a : b);
+    final rEdge = band.reduce((a, b) => a[0] > b[0] ? a : b);
+    leftCheek = [
+      (lEdge[0] + faceW * 0.12).clamp(0.0, 1.0),
+      cheekY.clamp(0.0, 1.0),
+    ];
     rightCheek = [
-      (rp[0] - 0.03).clamp(0.0, 1.0),
-      (tzone[1] + faceH * 0.05).clamp(0.0, 1.0),
+      (rEdge[0] - faceW * 0.12).clamp(0.0, 1.0),
+      cheekY.clamp(0.0, 1.0),
+    ];
+  } else {
+    leftCheek = [
+      (faceLeft + faceW * 0.22).clamp(0.0, 1.0),
+      cheekY.clamp(0.0, 1.0),
+    ];
+    rightCheek = [
+      (faceRight - faceW * 0.22).clamp(0.0, 1.0),
+      cheekY.clamp(0.0, 1.0),
     ];
   }
 
-  // Chin — lowest contour point, raised slightly so the blob sits on the
-  // chin rather than the throat below it.
+  // Chin — pad below the lower lip. The lower-lip contour gives us a stable
+  // reference; we drop the dot ~45% of the way between lip and contour
+  // bottom so it lands on the chin proper, not in the labio-mental crease
+  // (the natural fold right under the lip) or on the throat.
+  List<double> chin;
   final bottom = contour.reduce((a, b) => a[1] > b[1] ? a : b);
-  final chin = [bottom[0], (bottom[1] - faceH * 0.04).clamp(0.0, 1.0)];
+  if (lowerLip.isNotEmpty) {
+    final lipY =
+        lowerLip.map((p) => p.y).reduce(math.max) / imgH;
+    final chinY = lipY + (bottom[1] - lipY) * 0.55;
+    chin = [bottom[0], chinY.clamp(0.0, 1.0)];
+  } else {
+    chin = [bottom[0], (bottom[1] - faceH * 0.06).clamp(0.0, 1.0)];
+  }
 
   return {
     'bbox': bbox,

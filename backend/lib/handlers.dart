@@ -1363,18 +1363,25 @@ Map<String, dynamic>? _faceGeomFromVision(Map<String, dynamic> raw) {
     if (p != null) landmarks[key] = p;
   }
 
-  // Synth landmarks from the bbox if the model didn't return them —
-  // typical face proportions, same anchors the mobile fallback uses.
+  // Synth landmarks from the bbox if the model didn't return them. Ratios
+  // tuned to land on the actual skin zones dermatologists evaluate, not on
+  // ML Kit-style "geometric centre" points that fall near the nose for
+  // cheeks or on the labio-mental crease for chin:
+  //   forehead — 18% down  (mid-forehead, well below hairline)
+  //   t-zone   — 42% down  (nose bridge midpoint)
+  //   cheeks   — 60% down × 18%/82% wide  (apple of the cheek, well lateral)
+  //   chin     — 90% down  (chin pad, just above contour bottom)
   if (landmarks.length != 5) {
     final cx = (bbox[0] + bbox[2]) / 2;
     final y0 = bbox[1], y1 = bbox[3];
-    landmarks.putIfAbsent('forehead', () => [cx, y0 + (y1 - y0) * 0.15]);
-    landmarks.putIfAbsent('tzone', () => [cx, y0 + (y1 - y0) * 0.45]);
+    final h = y1 - y0;
+    landmarks.putIfAbsent('forehead', () => [cx, y0 + h * 0.18]);
+    landmarks.putIfAbsent('tzone', () => [cx, y0 + h * 0.42]);
     landmarks.putIfAbsent(
-        'left_cheek', () => [bbox[0] + w * 0.25, y0 + (y1 - y0) * 0.55]);
+        'left_cheek', () => [bbox[0] + w * 0.18, y0 + h * 0.60]);
     landmarks.putIfAbsent(
-        'right_cheek', () => [bbox[0] + w * 0.75, y0 + (y1 - y0) * 0.55]);
-    landmarks.putIfAbsent('chin', () => [cx, y0 + (y1 - y0) * 0.86]);
+        'right_cheek', () => [bbox[0] + w * 0.82, y0 + h * 0.60]);
+    landmarks.putIfAbsent('chin', () => [cx, y0 + h * 0.90]);
   }
 
   return {
