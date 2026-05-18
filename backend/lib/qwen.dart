@@ -28,13 +28,24 @@ class QwenClient implements AiClient {
     this.baseUrl = 'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
   });
 
-  factory QwenClient.fromEnv(DotEnv env) => QwenClient(
-        apiKey: env['DASHSCOPE_API_KEY']!,
-        chatModel: env['QWEN_CHAT_MODEL'] ?? 'qwen-plus',
-        visionModel: env['QWEN_VISION_MODEL'] ?? 'qwen-vl-max',
-        baseUrl: env['DASHSCOPE_BASE_URL'] ??
-            'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
-      );
+  factory QwenClient.fromEnv(DotEnv env) {
+    // docker-compose forwards env vars as empty strings when unset rather
+    // than leaving them absent, so `??` against null isn't enough — we
+    // need to treat empty-or-whitespace as "use the default" too.
+    String pick(String key, String fallback) {
+      final v = env[key]?.trim();
+      return (v == null || v.isEmpty) ? fallback : v;
+    }
+    return QwenClient(
+      apiKey: env['DASHSCOPE_API_KEY']!,
+      chatModel: pick('QWEN_CHAT_MODEL', 'qwen-plus'),
+      visionModel: pick('QWEN_VISION_MODEL', 'qwen-vl-max'),
+      baseUrl: pick(
+        'DASHSCOPE_BASE_URL',
+        'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+      ),
+    );
+  }
 
   final String apiKey;
   @override

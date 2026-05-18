@@ -1316,7 +1316,7 @@ class AiHandlers {
         'recommended_products': recommended,
       });
     } on AiException catch (e) {
-      stderr.writeln('GigaChat /chat failed: $e');
+      stderr.writeln('AI /chat failed: $e');
       return jsonResponse(502, {'error': 'ai_failed', 'message': e.message});
     }
   }
