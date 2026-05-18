@@ -10,6 +10,7 @@ import 'package:shelf/shelf.dart';
 import 'package:shelf_router/shelf_router.dart';
 
 import 'package:uuid/uuid.dart';
+import 'ai_client.dart';
 import 'gigachat.dart';
 import 'repos.dart';
 import 'taxonomy.dart';
@@ -227,6 +228,7 @@ class AdminHandlers {
     required this.appSettings,
     required this.partners,
     required this.brands,
+    this.availableProviders = const ['gigachat'],
   });
 
   final AdminRepository admins;
@@ -240,6 +242,12 @@ class AdminHandlers {
   final AppSettingsRepository appSettings;
   final PartnerRepository partners;
   final BrandRepository brands;
+  /// Which AI providers actually have API keys wired at startup. Admin UI
+  /// uses this to grey out providers whose keys are missing instead of
+  /// letting users pick a provider that can't run.
+  final List<String> availableProviders;
+
+  List<String> get _availableProviders => availableProviders;
 
   static const _uuid = Uuid();
 
@@ -264,6 +272,8 @@ class AdminHandlers {
     ..get('/admin/pending-codes', _withAdmin(_pendingCodes))
     ..get('/admin/settings/gigachat', _withAdmin(_getGigaSettings))
     ..put('/admin/settings/gigachat', _withAdmin(_setGigaSettings))
+    ..get('/admin/settings/ai', _withAdmin(_getAiSettings))
+    ..put('/admin/settings/ai', _withAdmin(_setAiSettings))
     ..get('/admin/settings/legal', _withAdmin(_getLegal))
     ..put('/admin/settings/legal', _withAdmin(_setLegal))
     // Partner accounts (admin manages — partner cannot self-register)
@@ -383,6 +393,90 @@ class AdminHandlers {
     }
     if (vision != null && vision.isNotEmpty) {
       await appSettings.set('gigachat_vision_model', vision);
+    }
+    return jsonResponse(200, {'ok': true});
+  }
+
+  /// Single endpoint covering the AI provider toggle and per-provider model
+  /// overrides. Returned `available_providers` reflects whether the qwen
+  /// client could actually be wired (DASHSCOPE_API_KEY present at startup);
+  /// the admin UI uses it to grey out unavailable options instead of
+  /// pretending Qwen is selectable when the key is missing.
+  Future<Response> _getAiSettings(Request req) async {
+    final m = await appSettings.getMany(const [
+      'ai_provider',
+      'gigachat_chat_model',
+      'gigachat_vision_model',
+      'qwen_chat_model',
+      'qwen_vision_model',
+    ]);
+    return jsonResponse(200, {
+      'provider': m['ai_provider'] ?? 'gigachat',
+      'available_providers': _availableProviders,
+      'gigachat': {
+        'chat_model': m['gigachat_chat_model'],
+        'vision_model': m['gigachat_vision_model'],
+        'available_models': const [
+          'GigaChat',
+          'GigaChat-Plus',
+          'GigaChat-Pro',
+          'GigaChat-Max',
+          'GigaChat-2-Lite',
+          'GigaChat-2-Pro',
+          'GigaChat-2-Max',
+        ],
+      },
+      'qwen': {
+        'chat_model': m['qwen_chat_model'],
+        'vision_model': m['qwen_vision_model'],
+        'available_models': const [
+          'qwen-turbo',
+          'qwen-plus',
+          'qwen-max',
+          'qwen-vl-plus',
+          'qwen-vl-max',
+          'qwen2.5-vl-72b-instruct',
+        ],
+      },
+    });
+  }
+
+  Future<Response> _setAiSettings(Request req) async {
+    final body =
+        jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final provider = (body['provider'] as String?)?.trim();
+    if (provider != null && provider.isNotEmpty) {
+      if (!const {'gigachat', 'qwen'}.contains(provider)) {
+        return jsonResponse(400, {
+          'error': 'invalid_provider',
+          'allowed': ['gigachat', 'qwen'],
+        });
+      }
+      if (!_availableProviders.contains(provider)) {
+        return jsonResponse(409, {
+          'error': 'provider_not_configured',
+          'message': provider == 'qwen'
+              ? 'DASHSCOPE_API_KEY не задан в env бэкенда.'
+              : 'GIGACHAT_AUTH_KEY не задан в env бэкенда.',
+        });
+      }
+      await appSettings.set('ai_provider', provider);
+    }
+    Future<void> upsert(String key, dynamic raw) async {
+      if (raw is! String) return;
+      final v = raw.trim();
+      if (v.isEmpty) return;
+      await appSettings.set(key, v);
+    }
+    final gc = body['gigachat'];
+    if (gc is Map) {
+      await upsert('gigachat_chat_model', gc['chat_model']);
+      await upsert('gigachat_vision_model', gc['vision_model']);
+    }
+    final qw = body['qwen'];
+    if (qw is Map) {
+      await upsert('qwen_chat_model', qw['chat_model']);
+      await upsert('qwen_vision_model', qw['vision_model']);
     }
     return jsonResponse(200, {'ok': true});
   }
@@ -924,7 +1018,7 @@ class AiHandlers {
     required this.chatMessages,
   });
   final SessionRepository sessions;
-  final GigaChatClient giga;
+  final AiClient giga;
   final ProductRepository products;
   final ProfileRepository profiles;
   final ScanRepository scans;
@@ -968,7 +1062,7 @@ class AiHandlers {
         userMessage: userMsg.toString(),
       );
       return jsonResponse(200, parseJsonReply(raw));
-    } on GigaChatException catch (e) {
+    } on AiException catch (e) {
       stderr.writeln('GigaChat /generate failed: $e');
       return jsonResponse(502, {'error': 'ai_failed', 'message': e.message});
     } on FormatException catch (e) {
@@ -1156,12 +1250,13 @@ class AiHandlers {
     ].join('\n');
 
     try {
-      final chatModel = await appSettings.get('gigachat_chat_model') ??
-          giga.chatModel;
+      // Model selection (and provider selection) lives in AiRouter — it
+      // reads the active `ai_provider` setting plus the provider-specific
+      // `*_chat_model` override per call. Handlers pass `null` and stay
+      // provider-agnostic.
       final reply = await giga.chatWithMessages(
         systemPrompt: enrichedSystem,
         messages: messages,
-        model: chatModel,
       );
 
       // Only surface products when Лина explicitly flagged this turn as a
@@ -1220,7 +1315,7 @@ class AiHandlers {
         'reply': reply.trim(),
         'recommended_products': recommended,
       });
-    } on GigaChatException catch (e) {
+    } on AiException catch (e) {
       stderr.writeln('GigaChat /chat failed: $e');
       return jsonResponse(502, {'error': 'ai_failed', 'message': e.message});
     }
@@ -1239,7 +1334,7 @@ class AiHandlers {
         }),
       );
       return jsonResponse(200, parseJsonReply(raw));
-    } on GigaChatException catch (e) {
+    } on AiException catch (e) {
       stderr.writeln('GigaChat /derm failed: $e');
       return jsonResponse(502, {'error': 'ai_failed', 'message': e.message});
     } on FormatException catch (e) {
@@ -1407,7 +1502,7 @@ class ScanHandlers {
   final ProfileRepository profiles;
   final AppSettingsRepository appSettings;
   final NotificationRepository notifications;
-  final GigaChatClient? giga;
+  final AiClient? giga;
 
   Router router() => Router()
     ..post('/me/scans', _withUser(_create))
@@ -1460,15 +1555,15 @@ class ScanHandlers {
     // analysis so the user still gets a result.
     if (giga != null && bytes != null && bytes.length > 1000) {
       try {
-        final visionModel =
-            await appSettings.get('gigachat_vision_model');
+        // Provider + model both resolved inside AiRouter against
+        // app_settings. Vision call works the same shape for GigaChat and
+        // Qwen — the router hides the difference.
         final raw = await giga!.analyzePhoto(
           systemPrompt: visionScanSystemPrompt,
           userText:
               'Проанализируй кожу на этой селфи. Профиль: ${jsonEncode(profile)}',
           photoBytes: bytes,
           mime: mime,
-          model: visionModel,
         );
         final j = parseJsonReply(raw);
         analysis = _mergeAiAnalysis(analysis, j);

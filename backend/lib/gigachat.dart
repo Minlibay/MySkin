@@ -7,9 +7,12 @@ import 'package:http/io_client.dart';
 import 'package:http_parser/http_parser.dart';
 import 'package:uuid/uuid.dart';
 
-class GigaChatException implements Exception {
-  GigaChatException(this.message);
-  final String message;
+import 'ai_client.dart';
+
+/// GigaChat-specific exception. Extends [AiException] so generic catch
+/// blocks against the AiClient interface still match.
+class GigaChatException extends AiException {
+  GigaChatException(super.message);
   @override
   String toString() => 'GigaChatException: $message';
 }
@@ -17,7 +20,7 @@ class GigaChatException implements Exception {
 /// Minimal GigaChat client. OAuth + chat completion.
 /// Sber issues certs from a non-default Russian Trusted CA, so we relax
 /// host verification for the two GigaChat hostnames only.
-class GigaChatClient {
+class GigaChatClient implements AiClient {
   GigaChatClient({
     required this.authKey,
     this.scope = 'GIGACHAT_API_PERS',
@@ -40,12 +43,15 @@ class GigaChatClient {
 
   /// Fallback model when caller doesn't pass one explicitly.
   final String defaultModel;
-  /// Lightweight Lite model for free-form conversation.
+  @override
   final String chatModel;
-  /// Heavy multimodal model used for photo analysis.
+  @override
   final String visionModel;
   final String oauthUrl;
   final String baseUrl;
+
+  @override
+  String get providerId => 'gigachat';
 
   String? _token;
   DateTime? _tokenExpiresAt;
@@ -100,6 +106,7 @@ class GigaChatClient {
 
   /// Multi-turn chat — pass any number of {role, content} messages.
   /// Used for free-form Лина conversation.
+  @override
   Future<String> chatWithMessages({
     required String systemPrompt,
     required List<Map<String, dynamic>> messages,
@@ -118,6 +125,7 @@ class GigaChatClient {
     );
   }
 
+  @override
   Future<String> chat({
     required String systemPrompt,
     required String userMessage,
@@ -140,6 +148,7 @@ class GigaChatClient {
   /// completion whose user message references the uploaded file_id via
   /// `attachments`. Returns the raw text reply (typically JSON, parsed by
   /// caller).
+  @override
   Future<String> analyzePhoto({
     required String systemPrompt,
     required String userText,

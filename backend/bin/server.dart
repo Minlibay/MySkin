@@ -1,9 +1,12 @@
 import 'dart:io';
 
 import 'package:dotenv/dotenv.dart';
+import 'package:myskin_backend/ai_client.dart';
+import 'package:myskin_backend/ai_router.dart';
 import 'package:myskin_backend/db.dart';
 import 'package:myskin_backend/gigachat.dart';
 import 'package:myskin_backend/handlers.dart';
+import 'package:myskin_backend/qwen.dart';
 import 'package:myskin_backend/repos.dart';
 import 'package:shelf/shelf.dart';
 import 'package:shelf/shelf_io.dart';
@@ -47,6 +50,29 @@ void main(List<String> args) async {
     otps: otps,
     env: env,
   );
+  // Build whichever AI clients have credentials. The router stitches them
+  // together and reads `ai_provider` from app_settings to choose per call,
+  // so admin can flip live without a restart.
+  final gigaKey = env['GIGACHAT_AUTH_KEY'];
+  final gigachat = (gigaKey != null && gigaKey.isNotEmpty)
+      ? GigaChatClient.fromEnv(env)
+      : null;
+  final qwenKey = env['DASHSCOPE_API_KEY'];
+  final qwen = (qwenKey != null && qwenKey.isNotEmpty)
+      ? QwenClient.fromEnv(env)
+      : null;
+  final availableProviders = <String>[
+    if (gigachat != null) 'gigachat',
+    if (qwen != null) 'qwen',
+  ];
+  final AiClient? giga = gigachat == null
+      ? null
+      : AiRouter(
+          gigachat: gigachat,
+          qwen: qwen,
+          settings: appSettings,
+        );
+
   final admin = AdminHandlers(
     admins: admins,
     users: users,
@@ -59,6 +85,7 @@ void main(List<String> args) async {
     appSettings: appSettings,
     partners: partners,
     brands: brands,
+    availableProviders: availableProviders,
   );
   final partner = PartnerHandlers(
     partners: partners,
@@ -87,11 +114,6 @@ void main(List<String> args) async {
     scans: scans,
     routines: routines,
   );
-  final gigaKey = env['GIGACHAT_AUTH_KEY'];
-  final giga = (gigaKey != null && gigaKey.isNotEmpty)
-      ? GigaChatClient.fromEnv(env)
-      : null;
-
   final scanHandlers = ScanHandlers(
     sessions: sessions,
     scans: scans,

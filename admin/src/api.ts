@@ -179,6 +179,17 @@ export const api = {
     });
   },
 
+  getAiSettings() {
+    return this.request<AiSettings>('/admin/settings/ai');
+  },
+
+  setAiSettings(input: AiSettingsPatch) {
+    return this.request<{ ok: boolean }>('/admin/settings/ai', {
+      method: 'PUT',
+      body: JSON.stringify(input),
+    });
+  },
+
   getLegal() {
     return this.request<LegalDocs>('/admin/settings/legal');
   },
@@ -305,6 +316,25 @@ export type GigaSettings = {
   chat_model: string | null;
   vision_model: string | null;
   available_models: string[];
+};
+
+export type AiProviderModels = {
+  chat_model: string | null;
+  vision_model: string | null;
+  available_models: string[];
+};
+
+export type AiSettings = {
+  provider: 'gigachat' | 'qwen';
+  available_providers: Array<'gigachat' | 'qwen'>;
+  gigachat: AiProviderModels;
+  qwen: AiProviderModels;
+};
+
+export type AiSettingsPatch = {
+  provider?: 'gigachat' | 'qwen';
+  gigachat?: { chat_model?: string; vision_model?: string };
+  qwen?: { chat_model?: string; vision_model?: string };
 };
 
 export type PendingCode = {
