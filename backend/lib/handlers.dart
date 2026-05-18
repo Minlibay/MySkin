@@ -12,6 +12,7 @@ import 'package:shelf_router/shelf_router.dart';
 import 'package:uuid/uuid.dart';
 import 'gigachat.dart';
 import 'repos.dart';
+import 'taxonomy.dart';
 
 final _rng = Random.secure();
 
@@ -502,6 +503,17 @@ class AdminHandlers {
     if (existing != null) {
       return jsonResponse(409, {'error': 'slug_taken'});
     }
+    final tags = ((body['tags'] as List?) ?? const []).cast<String>();
+    final skinTypes =
+        ((body['skin_types'] as List?) ?? const []).cast<String>();
+    final status = (body['status'] as String?)?.trim() ?? 'draft';
+    // Drafts can be incomplete (admin work-in-progress). Publishing them
+    // requires the same rankable-metadata bar as partner submissions.
+    if (status == 'published') {
+      final metaError =
+          _validateAdminProductMetadata(tags: tags, skinTypes: skinTypes);
+      if (metaError != null) return metaError;
+    }
     final p = ProductRow(
       id: _uuid.v4(),
       slug: (body['slug'] as String).trim(),
@@ -514,14 +526,13 @@ class AdminHandlers {
           (body['accent_color'] as String?)?.trim() ?? '#D98FA3',
       ingredients:
           ((body['ingredients'] as List?) ?? const []).cast<String>(),
-      tags: ((body['tags'] as List?) ?? const []).cast<String>(),
-      skinTypes:
-          ((body['skin_types'] as List?) ?? const []).cast<String>(),
+      tags: tags,
+      skinTypes: skinTypes,
       isActive: body['is_active'] as bool? ?? false,
       gentle: body['gentle'] as bool? ?? false,
       routinePhase:
           (body['routine_phase'] as String?)?.trim() ?? 'any',
-      status: (body['status'] as String?)?.trim() ?? 'draft',
+      status: status,
       buyUrl: (body['buy_url'] as String?)?.trim().isNotEmpty == true
           ? (body['buy_url'] as String).trim()
           : null,
@@ -593,9 +604,62 @@ class AdminHandlers {
     final id = req.params['id']!;
     final body =
         jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final existing = await products.findById(id);
+    if (existing == null) return jsonResponse(404, {'error': 'not_found'});
+    // Same gate as create: if the patch flips status to published (or leaves
+    // an already-published product as published), the merged metadata must
+    // be rankable. Drafts can stay sparse.
+    final mergedStatus = body.containsKey('status')
+        ? (body['status'] as String?)?.trim() ?? existing.status
+        : existing.status;
+    if (mergedStatus == 'published') {
+      final mergedTags = body.containsKey('tags')
+          ? ((body['tags'] as List?) ?? const []).cast<String>()
+          : existing.tags;
+      final mergedSkin = body.containsKey('skin_types')
+          ? ((body['skin_types'] as List?) ?? const []).cast<String>()
+          : existing.skinTypes;
+      final metaError = _validateAdminProductMetadata(
+          tags: mergedTags, skinTypes: mergedSkin);
+      if (metaError != null) return metaError;
+    }
     final updated = await products.update(id, body);
     if (updated == null) return jsonResponse(404, {'error': 'not_found'});
     return jsonResponse(200, updated.toJson());
+  }
+
+  /// Same shape as partner gate but exposed as a method so AdminHandlers can
+  /// call it. Kept inside the class for proximity with the create/update
+  /// handlers that use it.
+  Response? _validateAdminProductMetadata({
+    required List<String> tags,
+    required List<String> skinTypes,
+  }) {
+    if (skinTypes.isEmpty) {
+      return jsonResponse(400, {
+        'error': 'missing_skin_types',
+        'message': 'Cannot publish: укажи хотя бы один skin_type (или "all").',
+      });
+    }
+    final badSkinTypes =
+        skinTypes.where((s) => !knownSkinTypes.contains(s)).toList();
+    if (badSkinTypes.isNotEmpty) {
+      return jsonResponse(400, {
+        'error': 'invalid_skin_types',
+        'invalid': badSkinTypes,
+        'allowed': knownSkinTypes.toList(),
+      });
+    }
+    final concernTags = tags.where(knownConcerns.contains).toList();
+    if (concernTags.isEmpty) {
+      return jsonResponse(400, {
+        'error': 'missing_concern_tag',
+        'message': 'Cannot publish: добавь минимум один тег-проблему '
+            'из канонического списка.',
+        'allowed_concerns': knownConcerns.toList(),
+      });
+    }
+    return null;
   }
 
   Future<Response> _deleteProduct(Request req) async {
@@ -721,8 +785,17 @@ class AdminHandlers {
     if (adminId == null) {
       return jsonResponse(401, {'error': 'unauthorized'});
     }
+    // Approving auto-flips to published — verify the product actually meets
+    // the rankable-metadata bar. Otherwise we'd quietly publish junk cards
+    // that show as low-confidence "?" matches across the app.
+    final productId = req.params['id']!;
+    final existing = await products.findById(productId);
+    if (existing == null) return jsonResponse(404, {'error': 'not_found'});
+    final metaError = _validateAdminProductMetadata(
+        tags: existing.tags, skinTypes: existing.skinTypes);
+    if (metaError != null) return metaError;
     await products.moderate(
-      productId: req.params['id']!,
+      productId: productId,
       moderationStatus: 'approved',
       reviewerAdminId: adminId,
     );
@@ -1196,6 +1269,28 @@ ScanAnalysis _mergeAiAnalysis(ScanAnalysis local, Map<String, dynamic> ai) {
   );
 }
 
+/// Russian message for a quality-gate rejection. Picks the first critical
+/// warning since they're all "retake the photo" — no need to enumerate.
+String _scanQualityMessage(List<String> warnings) {
+  for (final w in warnings) {
+    switch (w) {
+      case 'no_face_detected':
+        return 'Не получилось распознать лицо. Сделай селфи лицом к камере '
+            'без масок и фильтров.';
+      case 'too_dark':
+      case 'image_too_dark':
+        return 'Слишком темно. Перейди к окну или включи свет и попробуй ещё.';
+      case 'too_blurry':
+        return 'Фото размытое. Подержи телефон неподвижно секунду и сделай '
+            'снова.';
+      case 'too_far':
+        return 'Лицо слишком далеко. Поднеси телефон ближе, чтобы лицо '
+            'занимало кадр.';
+    }
+  }
+  return 'Фото не получилось проанализировать. Попробуй ещё раз.';
+}
+
 /// Pulls the {bbox, forehead, tzone, left_cheek, right_cheek, chin}
 /// structure out of GigaChat Vision's response and reshapes it into the
 /// `face_geom` schema the mobile client expects. Returns null if the
@@ -1371,13 +1466,23 @@ class ScanHandlers {
     if (faceGeom == null && analysis.faceGeom != null) {
       faceGeom = _sanitiseFaceGeom(analysis.faceGeom!);
     }
+    // Quality gate: if the photo can't be analysed (no face, too dark/blurry),
+    // refuse the scan instead of persisting garbage metrics that would then
+    // poison Лина's recommendations and the user's progress chart.
+    final critical = analysis.qualityWarnings
+        .where(criticalScanWarnings.contains)
+        .toList();
+    if (critical.isNotEmpty) {
+      return jsonResponse(422, {
+        'error': 'scan_quality',
+        'quality_warnings': critical,
+        'message': _scanQualityMessage(critical),
+      });
+    }
+
     // Vision-derived concern tags live in analysis.meta['ai_concerns'].
-    // Whitelist them against the prompt's fixed vocabulary so a hallucinated
-    // tag can't slip into the catalog ranker.
-    const knownConcerns = {
-      'acne', 'pih', 'redness', 'dehydration', 'dullness', 'aging',
-      'sensitivity', 'oiliness', 'dryness',
-    };
+    // Whitelist against the canonical taxonomy so a hallucinated tag can't
+    // slip into the ranker.
     final rawConcerns = analysis.meta['ai_concerns'];
     final concerns = rawConcerns is List
         ? rawConcerns
@@ -1546,14 +1651,6 @@ class ScanHandlers {
         if (remedies.length >= 4) break;
       }
     }
-    const validConcerns = {
-      'acne',
-      'pih',
-      'aging',
-      'dullness',
-      'redness',
-      'dehydration',
-    };
     final concern = (raw['concern'] as String?)?.toLowerCase();
     final fallback = _staticZoneInsight(zone, score);
     return {
@@ -1561,7 +1658,9 @@ class ScanHandlers {
       'score': score,
       'issue': s('issue').isNotEmpty ? s('issue') : fallback['issue'],
       'remedies': remedies.isNotEmpty ? remedies : fallback['remedies'],
-      'concern': validConcerns.contains(concern)
+      // Validate against the single canonical vocabulary so zone insight
+      // can't return a key the catalog filter doesn't understand.
+      'concern': knownConcerns.contains(concern)
           ? concern
           : fallback['concern'],
     };
@@ -2794,6 +2893,11 @@ class PartnerHandlers {
       return jsonResponse(
           400, {'error': 'missing_fields', 'fields': missing});
     }
+    final tags = ((body['tags'] as List?) ?? const []).cast<String>();
+    final skinTypes =
+        ((body['skin_types'] as List?) ?? const []).cast<String>();
+    final metaError = _validateProductMetadata(tags: tags, skinTypes: skinTypes);
+    if (metaError != null) return metaError;
     final brandId = (body['brand_id'] as String).trim();
     final brand = await brands.findById(brandId);
     if (brand == null || brand.ownerPartnerId != partner.id) {
@@ -2820,9 +2924,8 @@ class PartnerHandlers {
       routinePhase:
           (body['routine_phase'] as String?)?.trim() ?? 'any',
       gentle: body['gentle'] as bool? ?? false,
-      tags: ((body['tags'] as List?) ?? const []).cast<String>(),
-      skinTypes:
-          ((body['skin_types'] as List?) ?? const []).cast<String>(),
+      tags: tags,
+      skinTypes: skinTypes,
       ingredients:
           ((body['ingredients'] as List?) ?? const []).cast<String>(),
       composition: (body['composition'] as String?)?.trim().isNotEmpty == true
@@ -2850,9 +2953,64 @@ class PartnerHandlers {
       return jsonResponse(403, {'error': 'not_owned'});
     }
     final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    // Validate the POST-MERGE state: a patch can't omit tags or skin_types
+    // and rely on the existing values — but a patch can leave them alone
+    // entirely if it doesn't touch those keys.
+    final existing = await products.findById(id);
+    if (existing == null) return jsonResponse(404, {'error': 'not_found'});
+    final tags = body.containsKey('tags')
+        ? ((body['tags'] as List?) ?? const []).cast<String>()
+        : existing.tags;
+    final skinTypes = body.containsKey('skin_types')
+        ? ((body['skin_types'] as List?) ?? const []).cast<String>()
+        : existing.skinTypes;
+    final metaError =
+        _validateProductMetadata(tags: tags, skinTypes: skinTypes);
+    if (metaError != null) return metaError;
     await products.updateByPartner(productId: id, patch: body);
     final updated = await products.findById(id);
     return jsonResponse(200, updated!.toJson());
+  }
+
+  /// Refuse to accept a product card unless it has enough metadata to be
+  /// rankable. Otherwise every match would land at low confidence and the
+  /// catalog would silently fill up with "no-data" products that just dilute
+  /// search results.
+  Response? _validateProductMetadata({
+    required List<String> tags,
+    required List<String> skinTypes,
+  }) {
+    if (skinTypes.isEmpty) {
+      return jsonResponse(400, {
+        'error': 'missing_skin_types',
+        'message': 'Укажи хотя бы один тип кожи (или "all", если средство '
+            'подходит всем).',
+      });
+    }
+    final badSkinTypes =
+        skinTypes.where((s) => !knownSkinTypes.contains(s)).toList();
+    if (badSkinTypes.isNotEmpty) {
+      return jsonResponse(400, {
+        'error': 'invalid_skin_types',
+        'invalid': badSkinTypes,
+        'allowed': knownSkinTypes.toList(),
+      });
+    }
+    // At least one tag must be a known concern, otherwise the matcher has
+    // nothing to bind the product to a user's needs. Decorative tags
+    // (vitamin-c, korean-beauty, etc.) are allowed alongside but can't be
+    // the only ones.
+    final concernTags = tags.where(knownConcerns.contains).toList();
+    if (concernTags.isEmpty) {
+      return jsonResponse(400, {
+        'error': 'missing_concern_tag',
+        'message': 'Добавь хотя бы один тег-проблему, на которую работает '
+            'средство (acne, dehydration, redness, oiliness, dullness, '
+            'aging, pih, dryness, sensitivity или pores).',
+        'allowed_concerns': knownConcerns.toList(),
+      });
+    }
+    return null;
   }
 
   Future<Response> _deleteProduct(Request req, PartnerRow partner) async {

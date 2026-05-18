@@ -440,6 +440,13 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       // land in the wrong place once we project it onto the photo.
       final faceGeom = await _faceGeomFromFile(pic.path, bytes);
       await _uploadAndFinish(bytes, mime: 'image/jpeg', faceGeom: faceGeom);
+    } on ScanQualityException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.message;
+      });
+      await _startStream();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -475,6 +482,12 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       final faceGeom = await _faceGeomFromFile(picked.path, bytes);
       await _uploadAndFinish(bytes,
           mime: picked.mimeType ?? 'image/jpeg', faceGeom: faceGeom);
+    } on ScanQualityException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.message;
+      });
     } catch (e) {
       if (!mounted) return;
       setState(() {

@@ -8,6 +8,19 @@ import '../progress/domain/progress.dart';
 import '../ritual/domain/today.dart';
 import '../scan/domain/scan_result.dart';
 
+/// Thrown by [BackendApi.uploadScan] when the server refused the photo
+/// because the metrics would be meaningless (no face, dark, blurry, far).
+/// The camera screen catches this to show a "retake" prompt instead of a
+/// generic network error.
+class ScanQualityException implements Exception {
+  ScanQualityException({required this.warnings, required this.message});
+  final List<String> warnings;
+  final String message;
+
+  @override
+  String toString() => 'ScanQualityException($warnings): $message';
+}
+
 /// Authenticated client for `/me/*` endpoints.
 class BackendApi {
   BackendApi({required this.baseUrl, required this.tokenProvider, Dio? dio})
@@ -379,16 +392,35 @@ class BackendApi {
     String mime = 'image/jpeg',
     Map<String, dynamic>? faceGeom,
   }) async {
-    final r = await _dio.post(
-      '$baseUrl/me/scans',
-      data: {
-        'photo_b64': photoBase64,
-        'mime': mime,
-        if (faceGeom != null) 'face_geom': faceGeom,
-      },
-      options: _auth(),
-    );
-    return ScanResult.fromJson(r.data as Map<String, dynamic>);
+    try {
+      final r = await _dio.post(
+        '$baseUrl/me/scans',
+        data: {
+          'photo_b64': photoBase64,
+          'mime': mime,
+          if (faceGeom != null) 'face_geom': faceGeom,
+        },
+        options: _auth(),
+      );
+      return ScanResult.fromJson(r.data as Map<String, dynamic>);
+    } on DioException catch (e) {
+      // Server refused the photo because face/lighting/focus made the metrics
+      // meaningless. Surface a typed error so the camera screen can show
+      // "перефоткай" instead of falling back to the generic network toast.
+      if (e.response?.statusCode == 422) {
+        final data = e.response?.data;
+        if (data is Map && data['error'] == 'scan_quality') {
+          throw ScanQualityException(
+            warnings: ((data['quality_warnings'] as List?) ?? const [])
+                .map((e) => '$e')
+                .toList(),
+            message: (data['message'] as String?) ??
+                'Фото не подошло для анализа. Попробуй ещё раз.',
+          );
+        }
+      }
+      rethrow;
+    }
   }
 
   Future<List<ScanResult>> listScans() async {
