@@ -2240,6 +2240,7 @@ class ScanRow {
     required this.createdAt,
     this.hasPhoto = true,
     this.faceGeom,
+    this.concerns = const [],
   });
 
   final String id;
@@ -2254,6 +2255,10 @@ class ScanRow {
   final DateTime createdAt;
   final bool hasPhoto;
   final Map<String, dynamic>? faceGeom;
+  /// Concern tags from GigaChat Vision (acne, pih, redness, dehydration,
+  /// dullness, aging, sensitivity, oiliness, dryness). Empty on legacy
+  /// scans created before migration 022.
+  final List<String> concerns;
 
   Map<String, dynamic> toJson() => {
         'id': id,
@@ -2266,6 +2271,7 @@ class ScanRow {
         'insight': insight,
         'has_photo': hasPhoto,
         'created_at': createdAt.toUtc().toIso8601String(),
+        'concerns': concerns,
         if (faceGeom != null) 'face': faceGeom,
       };
 }
@@ -2286,14 +2292,16 @@ class ScanRepository {
     required Map<String, int> zones,
     required String insight,
     Map<String, dynamic>? faceGeom,
+    List<String> concerns = const [],
   }) async {
     final id = _uuid.v4();
     await db.execute(
       Sql.named('''
         INSERT INTO scans (id, user_id, photo, photo_mime, score, hydration,
-                           sebum, tone, pores, zones, insight, face_geom)
+                           sebum, tone, pores, zones, insight, face_geom,
+                           concerns)
         VALUES (@id, @u, @p, @m, @sc, @h, @se, @t, @po, @z::jsonb, @i,
-                @fg::jsonb)
+                @fg::jsonb, @cn::jsonb)
       '''),
       parameters: {
         'id': id,
@@ -2310,6 +2318,7 @@ class ScanRepository {
         'z': jsonEncode(zones),
         'i': insight,
         'fg': faceGeom == null ? null : jsonEncode(faceGeom),
+        'cn': jsonEncode(concerns),
       },
     );
     return ScanRow(
@@ -2325,6 +2334,7 @@ class ScanRepository {
       createdAt: DateTime.now().toUtc(),
       hasPhoto: photo != null,
       faceGeom: faceGeom,
+      concerns: List.unmodifiable(concerns),
     );
   }
 
@@ -2333,7 +2343,7 @@ class ScanRepository {
     final r = await db.execute(
       Sql.named('''
         SELECT id, user_id, score, hydration, sebum, tone, pores, zones,
-               insight, created_at, photo IS NOT NULL, face_geom
+               insight, created_at, photo IS NOT NULL, face_geom, concerns
         FROM scans WHERE id = @id AND user_id = @u
       '''),
       parameters: {'id': id, 'u': userId},
@@ -2354,6 +2364,7 @@ class ScanRepository {
       createdAt: row[9] as DateTime,
       hasPhoto: row[10] as bool,
       faceGeom: (row[11] as Map?)?.cast<String, dynamic>(),
+      concerns: ((row[12] as List?) ?? const []).map((e) => '$e').toList(),
     );
   }
 
@@ -2377,7 +2388,7 @@ class ScanRepository {
     final r = await db.execute(
       Sql.named('''
         SELECT id, user_id, score, hydration, sebum, tone, pores, zones,
-               insight, created_at, photo IS NOT NULL, face_geom
+               insight, created_at, photo IS NOT NULL, face_geom, concerns
         FROM scans WHERE user_id = @u
         ORDER BY created_at DESC LIMIT @lim
       '''),
@@ -2398,6 +2409,8 @@ class ScanRepository {
               createdAt: row[9] as DateTime,
               hasPhoto: row[10] as bool,
               faceGeom: (row[11] as Map?)?.cast<String, dynamic>(),
+              concerns:
+                  ((row[12] as List?) ?? const []).map((e) => '$e').toList(),
             ))
         .toList();
   }
@@ -2757,9 +2770,15 @@ class _RegionAcc {
 
 /// Compute 0..100 match between a user's profile and a product.
 /// Returns score and a list of reasoning bullets.
+///
+/// [scan] is the user's latest scan as a JSON-ish map with int metrics
+/// (`hydration`, `sebum`, `tone`, `pores`) — when present, low/high values
+/// boost products tagged for the matching concern. This is what makes the
+/// recommendation react to the photo, not just the onboarding questionnaire.
 ({int score, List<String> reasons}) computeMatch({
   required Map<String, dynamic> profile,
   required ProductRow product,
+  Map<String, dynamic>? scan,
 }) {
   final reasons = <String>[];
   var score = 50;
@@ -2780,12 +2799,59 @@ class _RegionAcc {
     }
   }
 
-  // Concerns overlap.
+  // Profile concerns (from onboarding).
   final hits = concerns.where(product.tags.contains).toList();
   if (hits.isNotEmpty) {
     final delta = (hits.length * 9).clamp(0, 27);
     score += delta;
     reasons.add('Работает с: ${hits.map(_concernRu).join(', ')}');
+  }
+
+  // Scan-derived concerns (vision flagged on the photo) — scored separately
+  // and only for tags the profile didn't already cover, so we don't double-
+  // count the same concern. Weighted slightly less than self-reported.
+  final scanConcerns =
+      (scan?['concerns'] as List?)?.cast<String>() ?? const <String>[];
+  final scanOnly = scanConcerns
+      .where((c) => !concerns.contains(c))
+      .where(product.tags.contains)
+      .toList();
+  if (scanOnly.isNotEmpty) {
+    final delta = (scanOnly.length * 7).clamp(0, 21);
+    score += delta;
+    reasons
+        .add('По скану: ${scanOnly.map(_concernRu).join(', ')}');
+  }
+
+  // Scan-driven nudges. Metrics are 0..100; thresholds below match the
+  // semantic buckets in the vision prompt (50 = norm baseline).
+  if (scan != null) {
+    int? metric(String k) => (scan[k] as num?)?.toInt();
+    final hydration = metric('hydration');
+    final sebum = metric('sebum');
+    final tone = metric('tone');
+    final pores = metric('pores');
+
+    if (hydration != null &&
+        hydration < 50 &&
+        product.tags.contains('dehydration')) {
+      score += 6;
+      reasons.add('Восстанавливает увлажнённость (скан: $hydration/100)');
+    }
+    if (sebum != null && sebum > 60 && product.tags.contains('oiliness')) {
+      score += 6;
+      reasons.add('Помогает с жирностью (скан: $sebum/100)');
+    }
+    if (tone != null &&
+        tone < 55 &&
+        (product.tags.contains('dullness') || product.tags.contains('pih'))) {
+      score += 5;
+      reasons.add('Выравнивает тон (скан: $tone/100)');
+    }
+    if (pores != null && pores < 50 && product.tags.contains('pores')) {
+      score += 5;
+      reasons.add('Сужает поры (скан: $pores/100)');
+    }
   }
 
   // Sensitivity-friendly bonus / active warning.
@@ -2913,6 +2979,10 @@ String _concernRu(String id) => switch (id) {
       'dullness' => 'тусклый тон',
       'redness' => 'покраснения',
       'dehydration' => 'обезвоженность',
+      'oiliness' => 'жирный блеск',
+      'dryness' => 'сухость',
+      'sensitivity' => 'чувствительность',
+      'pores' => 'расширенные поры',
       _ => id,
     };
 

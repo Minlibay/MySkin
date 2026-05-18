@@ -926,14 +926,42 @@ class AiHandlers {
     // Pre-compute top-matched products for this user so Лина can mention
     // them and the frontend can render them as a strip beside her reply.
     final profile = await profiles.get(user.id) ?? <String, dynamic>{};
+    final recentScans = await scans.listForUser(user.id, limit: 1);
+    final recentScan = recentScans.isEmpty ? null : recentScans.first;
+    // Subset of metrics passed to computeMatch so the ranker can react to
+    // the latest photo, not just the static onboarding questionnaire.
+    final scanForMatch = recentScan == null
+        ? null
+        : <String, dynamic>{
+            'hydration': recentScan.hydration,
+            'sebum': recentScan.sebum,
+            'tone': recentScan.tone,
+            'pores': recentScan.pores,
+            'concerns': recentScan.concerns,
+          };
+
     final catalog = await products.list(publicCatalogOnly: true, limit: 200);
     final scored = <({ProductRow p, int score, List<String> reasons})>[];
     for (final p in catalog) {
-      final m = computeMatch(profile: profile, product: p);
+      final m = computeMatch(
+        profile: profile,
+        product: p,
+        scan: scanForMatch,
+      );
       scored.add((p: p, score: m.score, reasons: m.reasons));
     }
     scored.sort((a, b) => b.score.compareTo(a.score));
-    final top = scored.take(8).toList();
+    // Diversify the context window by `kind` so Лина doesn't see eight
+    // cleansers and miss the cream the user actually needs. Cap 2 per kind.
+    final perKindCtx = <String, int>{};
+    final top = <({ProductRow p, int score, List<String> reasons})>[];
+    for (final e in scored) {
+      final n = perKindCtx[e.p.kind] ?? 0;
+      if (n >= 2) continue;
+      perKindCtx[e.p.kind] = n + 1;
+      top.add(e);
+      if (top.length >= 8) break;
+    }
 
     final catalogHint = top
         .map((e) => {
@@ -954,20 +982,45 @@ class AiHandlers {
                 'usage': e.p.usage,
             })
         .toList();
-    final recentScans = await scans.listForUser(user.id, limit: 1);
-    final scanHint = recentScans.isEmpty
+    final scanHint = recentScan == null
         ? null
         : {
-            'score': recentScans.first.score,
-            'hydration': recentScans.first.hydration,
-            'sebum': recentScans.first.sebum,
-            'tone': recentScans.first.tone,
-            'pores': recentScans.first.pores,
-            'zones': recentScans.first.zones,
-            'insight': recentScans.first.insight,
-            'created_at':
-                recentScans.first.createdAt.toUtc().toIso8601String(),
+            'score': recentScan.score,
+            'hydration': recentScan.hydration,
+            'sebum': recentScan.sebum,
+            'tone': recentScan.tone,
+            'pores': recentScan.pores,
+            'zones': recentScan.zones,
+            'insight': recentScan.insight,
+            'concerns': recentScan.concerns,
+            'created_at': recentScan.createdAt.toUtc().toIso8601String(),
           };
+
+    // Pull product ids Лина already surfaced in earlier turns so she can
+    // build on her past recommendations instead of repeating them. We only
+    // keep the most recent ~15 to bound the prompt.
+    final priorRecLabels = <String>[];
+    final seenPriorIds = <String>{};
+    try {
+      final history = await chatMessages.listForUser(user.id, limit: 60);
+      for (final h in history.reversed) {
+        final ps = h['products'];
+        if (ps is! List) continue;
+        for (final raw in ps) {
+          if (raw is! Map) continue;
+          final id = raw['id'];
+          if (id is! String || !seenPriorIds.add(id)) continue;
+          final brand = (raw['brand'] as String?)?.trim() ?? '';
+          final name = (raw['name'] as String?)?.trim() ?? '';
+          final label = [brand, name].where((s) => s.isNotEmpty).join(' ');
+          priorRecLabels.add(label.isEmpty ? id : label);
+          if (priorRecLabels.length >= 15) break;
+        }
+        if (priorRecLabels.length >= 15) break;
+      }
+    } catch (e) {
+      stderr.writeln('chat history fetch failed: $e');
+    }
 
     final enrichedSystem = [
       linaChatSystemPrompt,
@@ -985,6 +1038,12 @@ class AiHandlers {
       'Доступный каталог (топ-${top.length} '
           'по соответствию профилю пользователя):',
       jsonEncode(catalogHint),
+      if (priorRecLabels.isNotEmpty) ...[
+        '',
+        'Ты уже рекомендовала эти средства в прошлых сообщениях: '
+            '${priorRecLabels.join('; ')}. Не предлагай их снова без явной '
+            'просьбы — лучше дополни уход или предложи альтернативу.',
+      ],
       '',
       'Когда уместно, упоминай эти продукты по бренду и названию. '
           'Не выдумывай продукты, которых нет в списке. '
@@ -1016,17 +1075,24 @@ class AiHandlers {
             RegExp(r'"show_products"\s*:\s*true').hasMatch(reply);
       }
 
-      final recommended = showProducts
-          ? top
-              .where((e) => e.score >= 40)
-              .take(5)
-              .map((e) => {
-                    ...e.p.toJson(),
-                    'match_score': e.score,
-                    'match_reasons': e.reasons,
-                  })
-              .toList()
-          : const <Map<String, dynamic>>[];
+      // One product per `kind` so the strip looks like a mini routine
+      // (cleanser + serum + cream + …) instead of five lookalike SKUs.
+      // 60 is "actually a good match" — base is 50, skin-type+concern hits
+      // are required to clear it.
+      final recommended = <Map<String, dynamic>>[];
+      if (showProducts) {
+        final usedKinds = <String>{};
+        for (final e in top) {
+          if (e.score < 60) continue;
+          if (!usedKinds.add(e.p.kind)) continue;
+          recommended.add({
+            ...e.p.toJson(),
+            'match_score': e.score,
+            'match_reasons': e.reasons,
+          });
+          if (recommended.length >= 5) break;
+        }
+      }
 
       // Persist both the user's last message and Лина's reply so the chat
       // history survives app restarts. Best-effort — never blocks the response.
@@ -1298,6 +1364,21 @@ class ScanHandlers {
     if (faceGeom == null && analysis.faceGeom != null) {
       faceGeom = _sanitiseFaceGeom(analysis.faceGeom!);
     }
+    // Vision-derived concern tags live in analysis.meta['ai_concerns'].
+    // Whitelist them against the prompt's fixed vocabulary so a hallucinated
+    // tag can't slip into the catalog ranker.
+    const knownConcerns = {
+      'acne', 'pih', 'redness', 'dehydration', 'dullness', 'aging',
+      'sensitivity', 'oiliness', 'dryness',
+    };
+    final rawConcerns = analysis.meta['ai_concerns'];
+    final concerns = rawConcerns is List
+        ? rawConcerns
+            .map((e) => '$e')
+            .where(knownConcerns.contains)
+            .toSet()
+            .toList()
+        : <String>[];
     final scan = await scans.create(
       userId: user.id,
       photo: bytes,
@@ -1310,6 +1391,7 @@ class ScanHandlers {
       zones: analysis.zones,
       insight: analysis.insight,
       faceGeom: faceGeom,
+      concerns: concerns,
     );
     // Drop a notification into the inbox so the bell shows the unread dot.
     // Failure here must never block the scan response.
