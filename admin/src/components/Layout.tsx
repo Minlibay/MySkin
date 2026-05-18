@@ -23,7 +23,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       <aside className="w-60 shrink-0 p-5 border-r border-black/5 bg-white/40 backdrop-blur-sm flex flex-col">
         <div className="mb-8">
           <div className="font-serif text-2xl text-rose">
-            My<span className="italic">Skin</span>
+            Моя <span className="italic">Кожа</span>
           </div>
           <div className="eyebrow mt-1">Admin · 0.1</div>
         </div>

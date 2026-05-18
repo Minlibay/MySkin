@@ -63,7 +63,7 @@ class _PhoneInputScreenState extends ConsumerState<PhoneInputScreen> {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   const SizedBox(height: AppSpacing.lg),
-                  const EyebrowText('MySkin', color: AppColors.roseDeep),
+                  const EyebrowText('Моя Кожа', color: AppColors.roseDeep),
                   const SizedBox(height: AppSpacing.sm),
                   Text.rich(
                     TextSpan(

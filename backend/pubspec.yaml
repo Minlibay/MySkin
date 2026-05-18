@@ -1,5 +1,5 @@
 name: myskin_backend
-description: Auth + SMS proxy for MySkin app, backed by PostgreSQL.
+description: Auth + SMS proxy for the «Моя Кожа» app, backed by PostgreSQL.
 publish_to: "none"
 version: 0.1.0
 

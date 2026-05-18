@@ -1,4 +1,4 @@
-# MySkin reverse proxy — мойскин.рф (Punycode form for SSL/Caddy).
+# «Моя Кожа» reverse proxy — мойскин.рф (Punycode form for SSL/Caddy).
 #
 # DNS setup in registrar (укажи кириллицей или Punycode — конвертится автоматом):
 #   api.мойскин.рф    A  <vps-ip>     (api.xn--80allhkb1j.xn--p1ai)

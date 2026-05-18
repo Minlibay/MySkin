@@ -1,4 +1,4 @@
-# MySkin — Production Deploy
+# Моя Кожа — Production Deploy
 
 Полный стек (db + backend + admin) контейнеризован. Один `docker compose up -d`
 поднимает всё. Caddy на фронте делает auto-HTTPS через Let's Encrypt.

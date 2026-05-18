@@ -21,7 +21,7 @@ export default function Dashboard() {
     <div>
       <div className="eyebrow text-rose mb-1">Обзор</div>
       <h1 className="font-serif text-4xl mb-8">
-        Сегодня в <span className="italic text-rose">MySkin</span>
+        Сегодня в <span className="italic text-rose">Моей Коже</span>
       </h1>
 
       {loading && <div className="text-ink2">Загружаем статистику…</div>}

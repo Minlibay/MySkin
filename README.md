@@ -1,4 +1,7 @@
-# MySkin
+# Моя Кожа
+
+> (Internal codebase / repo handle: `myskin`. Bundle IDs, Docker container names
+> and Dart package names stay `myskin` to avoid breaking deployed users.)
 
 AI-powered skincare app with two modes: Standard (one-shot) and Dermatologist 2.0 (state-machine driven dialog).
 

@@ -177,7 +177,7 @@ void main(List<String> args) async {
 
   final port = int.parse(env['PORT'] ?? '8080');
   final server = await serve(handler, InternetAddress.anyIPv4, port);
-  stdout.writeln('MySkin backend listening on http://localhost:${server.port}');
+  stdout.writeln('Моя Кожа backend listening on http://localhost:${server.port}');
   if ((env['SMSC_LOGIN'] ?? '').isEmpty) {
     stdout.writeln(
         '⚠  SMSC_LOGIN/SMSC_PASSWORD empty — codes printed to stdout.');

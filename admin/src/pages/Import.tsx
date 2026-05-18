@@ -68,7 +68,7 @@ function BookmarkletInfo() {
               );
             }}
           >
-            ⇪ Импорт в МойСкин
+            ⇪ Импорт в Мою Кожу
           </a>
           <span className="text-ink2 text-xs">
             Левой кнопкой → удерживай → перетащи на панель закладок.
@@ -77,7 +77,7 @@ function BookmarkletInfo() {
         <div className="eyebrow mt-2">Шаг 2 — на goldapple.ru</div>
         <ol className="text-sm text-ink2 list-decimal pl-5 space-y-1">
           <li>Открой страницу товара.</li>
-          <li>Нажми закладку «Импорт в МойСкин».</li>
+          <li>Нажми закладку «Импорт в Мою Кожу».</li>
           <li>
             Откроется новая вкладка с этой админкой и предзаполненной
             карточкой. Проверь, поправь, опубликуй (или сохрани черновик).

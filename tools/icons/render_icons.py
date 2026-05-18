@@ -1,4 +1,4 @@
-"""Render MySkin app icon (v2 — Italic Monogram, Premium) at all required sizes
+"""Render «Моя Кожа» app icon (v2 — Italic Monogram, Premium) at all required sizes
 for iOS and Android.
 
 Composition (1024×1024 canvas):
@@ -13,7 +13,7 @@ Composition (1024×1024 canvas):
               masked by the M's alpha so it only shows on the glyph
   shadow      micro-shadow behind the M, 4px y-offset, 6% wine
 
-No caption, no hairline. Launcher labels the app "MySkin" below the icon
+No caption, no hairline. Launcher labels the app "Моя Кожа" below the icon
 on both platforms — repeating it inside the icon is visual noise and
 illegible at home-screen size.
 

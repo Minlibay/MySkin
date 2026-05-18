@@ -1,6 +1,6 @@
 # App icon renderer
 
-Renders the **MySkin** app icon (v2 — Premium Italic Monogram) into every
+Renders the **«Моя Кожа»** app icon (v2 — Premium Italic Monogram) into every
 size required by iOS and Android, including the Android adaptive-icon
 foreground/background pair.
 

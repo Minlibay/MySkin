@@ -31,7 +31,7 @@ export default function Login() {
       <form onSubmit={onSubmit} className="card w-full max-w-sm p-8">
         <div className="eyebrow text-rose mb-2">Доступ только для админов</div>
         <h1 className="font-serif text-3xl mb-1">
-          MySkin <span className="italic text-rose">admin</span>
+          Моя Кожа <span className="italic text-rose">admin</span>
         </h1>
         <p className="text-ink2 text-sm mb-6">
           Войди логином и паролем, выданным при настройке сервера.

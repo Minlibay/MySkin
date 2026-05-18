@@ -1,6 +1,6 @@
-# MySkin · Admin
+# Моя Кожа · Admin
 
-Лёгкая админка для бэкенда MySkin. React + Vite + TypeScript + Tailwind.
+Лёгкая админка для бэкенда «Моя Кожа». React + Vite + TypeScript + Tailwind.
 
 Использует существующие эндпоинты `/admin/*` нашего backend'а.
 

@@ -1,4 +1,4 @@
-// Tiny fetch wrapper around the MySkin backend admin API.
+// Tiny fetch wrapper around the Моя Кожа backend admin API.
 
 const TOKEN_KEY = 'myskin-admin-token';
 

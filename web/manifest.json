@@ -1,6 +1,6 @@
 {
-    "name": "myskin",
-    "short_name": "myskin",
+    "name": "Моя Кожа",
+    "short_name": "Моя Кожа",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",

@@ -886,7 +886,7 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                 const SizedBox(height: AppSpacing.lg),
                 Center(
                   child: Text(
-                    'MySkin · v0.1.0 · Made with ✿',
+                    'Моя Кожа · v0.1.0 · Made with ✿',
                     style: AppTypography.eyebrow(
                         color: AppColors.textSecondary),
                   ),
