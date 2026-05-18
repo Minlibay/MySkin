@@ -63,7 +63,7 @@ Future<bool> sendSmsViaSmsc({
     'login': login,
     'psw': password,
     'phones': phone,
-    'mes': 'MySkin: ваш код $code',
+    'mes': 'Моя Кожа: ваш код $code',
     'fmt': '3',
     'charset': 'utf-8',
   });
@@ -79,6 +79,86 @@ Future<bool> sendSmsViaSmsc({
   } catch (e) {
     stderr.writeln('SMSC request failed: $e');
     return false;
+  }
+}
+
+/// Result of a voicepassword.ru SMS request.
+///
+/// The provider generates the 4-digit code on its side and returns it in the
+/// response — unlike SMSC, where we generate and send our own text. So this
+/// helper returns the code (or null on failure) and the caller hashes it.
+///
+/// The SMS body template (e.g. "Моя Кожа: ваш код XXXX") is configured in
+/// the voicepassword personal cabinet, not via API — the request itself
+/// has no `message` parameter.
+class VoicePasswordSmsResult {
+  VoicePasswordSmsResult({required this.code, this.id});
+  final String code;
+  final String? id;
+}
+
+Future<VoicePasswordSmsResult?> sendSmsViaVoicePassword({
+  required String phone,
+  required DotEnv env,
+}) async {
+  final apiKey = env['VOICEPASSWORD_API_KEY'];
+  if (apiKey == null || apiKey.isEmpty) {
+    final devCode = _generateCode();
+    stdout.writeln('[DEV SMS] $phone → code $devCode');
+    return VoicePasswordSmsResult(code: devCode);
+  }
+  // voicepassword expects digits only — strip leading "+".
+  final number = phone.startsWith('+') ? phone.substring(1) : phone;
+  final uri = Uri.https('vp.voicepassword.ru', '/api/voice-password/send/');
+  // SMS-only mode is not explicitly documented; the `sms` section in the docs
+  // covers post-call fallback (requires prior call `id`). The request below is
+  // our best guess based on the response example on p.3 of the API spec
+  // ("Положительный ответ сервера при запросе кода по смс"). If the provider
+  // returns `error_code: unknown_request` here, switch to a two-step flow
+  // (voice request → sms fallback by id) or check with their support.
+  final body = jsonEncode({
+    'number': number,
+    'sms': <String, dynamic>{},
+  });
+  try {
+    final resp = await http
+        .post(
+          uri,
+          headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Authorization': apiKey,
+          },
+          body: body,
+        )
+        .timeout(const Duration(seconds: 10));
+    if (resp.statusCode != 200) {
+      stderr.writeln('VoicePassword HTTP ${resp.statusCode}: ${resp.body}');
+      return null;
+    }
+    final decoded = jsonDecode(resp.body);
+    if (decoded is! Map || decoded['result'] != 'ok') {
+      stderr.writeln('VoicePassword error: ${resp.body}');
+      return null;
+    }
+    // Per docs the response contains either `code` directly or a `message`
+    // like "Ваш код: 1234". Handle both shapes.
+    String? code = decoded['code']?.toString();
+    if (code == null || code.isEmpty) {
+      final message = decoded['message']?.toString() ?? '';
+      final match = RegExp(r'(\d{4,6})').firstMatch(message);
+      code = match?.group(1);
+    }
+    if (code == null || code.isEmpty) {
+      stderr.writeln('VoicePassword: no code in response: ${resp.body}');
+      return null;
+    }
+    return VoicePasswordSmsResult(
+      code: code,
+      id: decoded['id']?.toString(),
+    );
+  } catch (e) {
+    stderr.writeln('VoicePassword request failed: $e');
+    return null;
   }
 }
 
@@ -121,11 +201,12 @@ class AuthHandlers {
       return jsonResponse(429, {'error': 'too_many_requests'});
     }
 
-    final code = _generateCode();
-    final ok = await sendSmsViaSmsc(phone: phone, code: code, env: env);
-    // Store the OTP regardless of SMS outcome: when the SMS provider fails
-    // (e.g. balance gone) an admin can still relay the plaintext code to the
-    // user via Codes page in the admin panel.
+    // voicepassword generates the code on its side and returns it. On failure
+    // we fall back to a locally generated code so the admin can still relay it
+    // manually via the Codes page (same UX as before with SMSC failures).
+    final result = await sendSmsViaVoicePassword(phone: phone, env: env);
+    final code = result?.code ?? _generateCode();
+    final ok = result != null;
     await otps.upsert(
       phone: phone,
       codeHash: hashOtp(phone, code, _pepper),

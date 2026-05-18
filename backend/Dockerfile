@@ -14,7 +14,7 @@ RUN dart pub get --offline
 RUN dart compile exe bin/server.dart -o /app/server
 RUN dart compile exe bin/seed_admin.dart -o /app/seed_admin
 
-# Runtime image — needs CA certs for outbound TLS (SMSC, GigaChat).
+# Runtime image — needs CA certs for outbound TLS (voicepassword, GigaChat).
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \

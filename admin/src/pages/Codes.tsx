@@ -45,8 +45,8 @@ export default function Codes() {
           </h1>
           <p className="text-ink2 text-sm mt-2 max-w-xl">
             Здесь видно все запрошенные пользователями SMS-коды, ещё
-            действительные. Если SMS не дошло (баланс на SMSC закончился —
-            помечено{' '}
+            действительные. Если SMS не дошло (баланс на voicepassword
+            закончился — помечено{' '}
             <span className="px-1.5 py-0.5 rounded bg-warning/15 text-warning text-[10px]">
               без SMS
             </span>
