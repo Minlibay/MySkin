@@ -35,6 +35,12 @@ services:
       SMSC_PASSWORD: ${SMSC_PASSWORD:-}
       GIGACHAT_AUTH_KEY: ${GIGACHAT_AUTH_KEY:-}
       GIGACHAT_SCOPE: ${GIGACHAT_SCOPE:-GIGACHAT_API_PERS}
+      # Qwen via Alibaba DashScope. Empty key → provider not available in
+      # admin's AI switcher (the toggle is greyed out).
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:-}
+      QWEN_CHAT_MODEL: ${QWEN_CHAT_MODEL:-qwen-plus}
+      QWEN_VISION_MODEL: ${QWEN_VISION_MODEL:-qwen-vl-max}
+      DASHSCOPE_BASE_URL: ${DASHSCOPE_BASE_URL:-}
       ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
