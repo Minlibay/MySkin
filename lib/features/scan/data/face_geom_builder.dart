@@ -50,13 +50,23 @@ Map<String, dynamic>? buildFaceGeomJson(
       .toList(growable: false);
 
   // ---- Derive zone landmarks from ML Kit DIRECT landmarks ----
-  // We deliberately avoid the face contour for placing zone dots. The
-  // contour traces hair and beard outlines on real users (the outline
-  // around the face polygon, not the underlying skull), so any landmark
-  // derived from it — contour-bottom, contour-width, contour-height —
-  // gets dragged off-face for anyone with a beard or long hair. ML Kit's
-  // point landmarks (eyes, nose base, mouth) are stable: they're keyed to
-  // recognisable features, not the silhouette.
+  // Two hard rules behind the formulas below:
+  //
+  // 1. Use only point landmarks (eyes, noseBase, mouth). Anything derived
+  //    from the face *contour* or even the bounding box gets dragged off
+  //    on bearded/long-haired users — ML Kit traces the silhouette around
+  //    hair/beard, so the box bottom can sit on the chest.
+  //
+  // 2. Apply offsets in the SAME axis they were measured on. Mixing an
+  //    x-normalised distance into a y-normalised lift (as a previous
+  //    revision did) silently scales by the photo aspect ratio — in
+  //    portrait mode (9:16) the lift then doubles and the forehead dot
+  //    lands in the hair.
+  //
+  // The "rule of thirds" of the face — eye line → nose base → chin tip
+  // are equal vertical thirds — is what anchors everything. eyeMidY and
+  // noseBaseY are robust, and their difference gives us a unit ruler in
+  // y-space that's beard-independent.
   final lm = face.landmarks;
   final lEye = lm[FaceLandmarkType.leftEye]?.position;
   final rEye = lm[FaceLandmarkType.rightEye]?.position;
@@ -73,83 +83,79 @@ Map<String, dynamic>? buildFaceGeomJson(
   final bboxW = bboxRight - bboxLeft;
   final bboxCx = (bboxLeft + bboxRight) / 2;
 
-  // Forehead — above the brow line. If we have eyes, lift from the eye
-  // baseline by roughly 1× eye-to-eye distance (the average distance from
-  // pupil to mid-forehead). If only the bbox is available, drop to a
-  // fraction of bbox height with a hard upper bound so longer hair never
-  // pushes the dot off-face.
-  List<double> forehead;
+  // The "third" is the vertical distance from the eye line to the bottom
+  // of the nose. Forehead, t-zone and chin are all expressed in multiples
+  // of this single unit.
+  double? eyeMidX, eyeMidY, third;
   if (lEye != null && rEye != null) {
-    final eyeMidX = (lEye.x + rEye.x) / 2 / imgW;
-    final eyeMidY = (lEye.y + rEye.y) / 2 / imgH;
-    final eyeSpan = (rEye.x - lEye.x).abs() / imgW;
-    final yLifted = eyeMidY - eyeSpan * 0.95;
-    final minY = bboxTop + bboxH * 0.08;
-    forehead = [eyeMidX.clamp(0.0, 1.0), math.max(yLifted, minY).clamp(0.0, 1.0)];
+    eyeMidX = (lEye.x + rEye.x) / 2 / imgW;
+    eyeMidY = (lEye.y + rEye.y) / 2 / imgH;
+    if (noseBase != null) {
+      third = (noseBase.y / imgH) - eyeMidY;
+      if (third <= 0) third = null; // sanity: nose below eyes only
+    }
+  }
+
+  // Forehead — one "third" above the eye line. Clamp so we never go above
+  // the bbox top (would put the dot in the hair).
+  List<double> forehead;
+  if (eyeMidX != null && eyeMidY != null && third != null) {
+    final y = eyeMidY - third;
+    final minY = bboxTop + 0.02;
+    forehead = [eyeMidX.clamp(0.0, 1.0), math.max(y, minY).clamp(0.0, 1.0)];
   } else {
     forehead = [bboxCx, (bboxTop + bboxH * 0.18).clamp(0.0, 1.0)];
   }
 
-  // T-zone — between the eyes on the nose bridge. Eye midpoint horizontal,
-  // halfway down to noseBase vertically (so it lands above the tip, on the
-  // bridge).
+  // T-zone — bridge of the nose, ~40% of the way from eyes to nose base.
   List<double> tzone;
-  if (lEye != null && rEye != null) {
-    final eyeMidX = (lEye.x + rEye.x) / 2 / imgW;
-    final eyeMidY = (lEye.y + rEye.y) / 2 / imgH;
-    final noseY = noseBase != null ? noseBase.y / imgH : eyeMidY + bboxH * 0.18;
+  if (eyeMidX != null && eyeMidY != null && third != null) {
     tzone = [
       eyeMidX.clamp(0.0, 1.0),
-      ((eyeMidY + noseY) / 2).clamp(0.0, 1.0),
+      (eyeMidY + third * 0.40).clamp(0.0, 1.0),
     ];
   } else {
     tzone = [bboxCx, (bboxTop + bboxH * 0.42).clamp(0.0, 1.0)];
   }
 
-  // Cheeks — apple of the cheek sits directly below the eye, at roughly
-  // nose-base height. X = eye.x (slightly pulled toward bbox edge to be
-  // safely on cheek skin, not on the side of the nose). Y = noseBase.y
-  // (lower than the eye-bottom, where the cheek's volume is greatest).
+  // Cheeks — the upper cheek (zygomatic prominence). Y is halfway between
+  // eye line and nose base; X = pupil X. Going lower than the nose base
+  // lands the dot in the beard for thickly bearded users, so we stay at
+  // mid-cheek where visible skin survives even on a heavy beard.
   List<double> leftCheek;
   List<double> rightCheek;
-  if (lEye != null && rEye != null && noseBase != null) {
-    final lEyeX = lEye.x / imgW;
-    final rEyeX = rEye.x / imgW;
-    final noseY = noseBase.y / imgH;
-    // Pull each cheek 25% of the eye-to-bbox-edge distance toward the
-    // outside — this nudges the dot off the side of the nose onto the
-    // cheek proper. ML Kit's eye landmarks sit at pupil centre.
-    final lOut = (bboxLeft - lEyeX) * 0.25;
-    final rOut = (bboxRight - rEyeX) * 0.25;
-    leftCheek = [(lEyeX + lOut).clamp(0.0, 1.0), noseY.clamp(0.0, 1.0)];
-    rightCheek = [(rEyeX + rOut).clamp(0.0, 1.0), noseY.clamp(0.0, 1.0)];
+  if (lEye != null && rEye != null && third != null && eyeMidY != null) {
+    final cheekY = (eyeMidY + third * 0.55).clamp(0.0, 1.0);
+    leftCheek = [(lEye.x / imgW).clamp(0.0, 1.0), cheekY];
+    rightCheek = [(rEye.x / imgW).clamp(0.0, 1.0), cheekY];
   } else {
     leftCheek = [
       (bboxLeft + bboxW * 0.25).clamp(0.0, 1.0),
-      (bboxTop + bboxH * 0.55).clamp(0.0, 1.0),
+      (bboxTop + bboxH * 0.50).clamp(0.0, 1.0),
     ];
     rightCheek = [
       (bboxRight - bboxW * 0.25).clamp(0.0, 1.0),
-      (bboxTop + bboxH * 0.55).clamp(0.0, 1.0),
+      (bboxTop + bboxH * 0.50).clamp(0.0, 1.0),
     ];
   }
 
-  // Chin — below the mouth. Best anchor is the mouth-bottom landmark plus
-  // a third of the mouth-to-bbox-bottom gap (lands on chin pad, not in
-  // the labio-mental crease right under the lip). Hard-cap at 1% inside
-  // bbox.bottom so it never escapes onto the throat/chest, even if our
-  // mouth landmarks were off.
+  // Chin — one "third" below the nose base (rule of thirds). NO bbox use,
+  // so beards/necks that stretch the bbox can't drag the dot down. X from
+  // the mouth midpoint if available, else eye midpoint.
   List<double> chin;
-  if (mouthBot != null) {
-    final mxNum = (mouthLeft != null && mouthRight != null)
-        ? (mouthLeft.x + mouthRight.x) / 2
-        : mouthBot.x.toDouble();
-    final mouthBy = mouthBot.y / imgH;
-    final gap = bboxBot - mouthBy;
-    final chinY = (mouthBy + gap * 0.55).clamp(0.0, bboxBot - 0.01);
-    chin = [nx(mxNum), chinY];
+  if (noseBase != null && third != null) {
+    final chinY = (noseBase.y / imgH + third).clamp(0.0, 1.0);
+    double cx;
+    if (mouthLeft != null && mouthRight != null) {
+      cx = ((mouthLeft.x + mouthRight.x) / 2) / imgW;
+    } else if (mouthBot != null) {
+      cx = mouthBot.x / imgW;
+    } else {
+      cx = eyeMidX ?? bboxCx;
+    }
+    chin = [cx.clamp(0.0, 1.0), chinY];
   } else {
-    chin = [bboxCx, (bboxTop + bboxH * 0.88).clamp(0.0, bboxBot - 0.01)];
+    chin = [bboxCx, (bboxTop + bboxH * 0.88).clamp(0.0, 1.0)];
   }
 
   return {
