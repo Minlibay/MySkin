@@ -1293,6 +1293,16 @@ ScanAnalysis _mergeAiAnalysis(ScanAnalysis local, Map<String, dynamic> ai) {
   );
 }
 
+/// Russian "Месяц YYYY" label for timeline dividers. Locale-agnostic so
+/// we don't depend on intl just for this.
+String _monthLabel(DateTime dt) {
+  const months = [
+    '', 'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
+    'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+  ];
+  return '${months[dt.month]} ${dt.year}';
+}
+
 /// Russian message for a quality-gate rejection. Picks the first critical
 /// warning since they're all "retake the photo" — no need to enumerate.
 String _scanQualityMessage(List<String> warnings) {
@@ -2398,6 +2408,8 @@ class MeHandlers {
     ..put('/me/profile', _withUser(_putProfile))
     ..get('/me/routines', _withUser(_listRoutines))
     ..post('/me/routines', _withUser(_createRoutine))
+    ..get('/me/routines/timeline', _withUser(_routinesTimeline))
+    ..post('/me/routines/<id>/resume', _withUser(_resumeRoutine))
     ..post('/me/derm-sessions', _withUser(_createDermSession))
     ..get('/me/today', _withUser(_today))
     ..post('/me/today/check', _withUser(_checkStep))
@@ -2473,6 +2485,280 @@ class MeHandlers {
       confidence: confidence,
     );
     return jsonResponse(200, {'id': id});
+  }
+
+  /// Re-promote a past routine to "current" by cloning its payload as a
+  /// fresh row. We don't mutate the original — keeping the history immutable
+  /// is the whole point of the timeline; the Today screen reads the newest
+  /// row, so a clone is enough to make it active again.
+  Future<Response> _resumeRoutine(Request req, UserRow user) async {
+    final id = req.params['id']!;
+    final all = await routines.listForUser(user.id, limit: 100);
+    final source = all.firstWhere(
+      (r) => r['id'] == id,
+      orElse: () => const {},
+    );
+    if (source.isEmpty) {
+      return jsonResponse(404, {'error': 'not_found'});
+    }
+    final payload = (source['payload'] as Map?)?.cast<String, dynamic>() ??
+        const <String, dynamic>{};
+    final cloned = {
+      ...payload,
+      'resumed_from': id,
+    };
+    final newId = await routines.create(
+      userId: user.id,
+      kind: source['kind'] as String? ?? 'standard',
+      payload: cloned,
+    );
+    return jsonResponse(200, {'id': newId});
+  }
+
+  /// History view: routines and scans interleaved by date, with per-routine
+  /// adherence + diff vs. previous + scan-score before/after, plus a small
+  /// stats header. One endpoint so the screen never has to fan out.
+  Future<Response> _routinesTimeline(Request req, UserRow user) async {
+    final routineRows = await routines.listForUser(user.id, limit: 60);
+    // Skip blank routines (AI sometimes saves an empty payload alongside a
+    // follow-up question). They aren't real cards.
+    final realRoutines = routineRows.where((r) {
+      final p = r['payload'];
+      if (p is! Map) return false;
+      final m = p['morning'];
+      final e = p['evening'];
+      return (m is List && m.isNotEmpty) || (e is List && e.isNotEmpty);
+    }).toList();
+
+    final scanRows = await scans.listForUser(user.id, limit: 60);
+    final streak = await completions.streak(user.id);
+
+    final now = DateTime.now().toUtc();
+    final completionDays = await completions.completionDaysInRange(
+      userId: user.id,
+      since: now.subtract(const Duration(days: 90)),
+      until: now,
+    );
+    final completionDaySet = completionDays
+        .map((d) => DateTime.utc(d.year, d.month, d.day))
+        .toSet();
+
+    String stepKey(Map<String, dynamic> step) {
+      // `from_shelf` payloads carry product_id; AI payloads use `title`.
+      final pid = step['product_id'];
+      if (pid is String && pid.isNotEmpty) return 'p:$pid';
+      final title = step['title'];
+      if (title is String && title.trim().isNotEmpty) {
+        return 't:${title.trim().toLowerCase()}';
+      }
+      return '?';
+    }
+
+    List<Map<String, dynamic>> stepsOf(Map<String, dynamic> r, String phase) {
+      final payload = (r['payload'] as Map?)?.cast<String, dynamic>();
+      final list = payload?[phase];
+      if (list is! List) return const [];
+      return list
+          .whereType<Map>()
+          .map((m) => m.cast<String, dynamic>())
+          .toList();
+    }
+
+    String stepLabel(Map<String, dynamic> step) {
+      // Shelf step: brand + name (already pre-resolved on save).
+      final brand = (step['brand'] as String?)?.trim();
+      final name = (step['name'] as String?)?.trim();
+      if (brand != null && brand.isNotEmpty && name != null && name.isNotEmpty) {
+        return '$brand $name';
+      }
+      final title = (step['title'] as String?)?.trim();
+      if (title != null && title.isNotEmpty) return title;
+      final kind = (step['kind'] as String?)?.trim();
+      return kind ?? '';
+    }
+
+    String previewLine(Map<String, dynamic> r) {
+      final morning = stepsOf(r, 'morning');
+      final evening = stepsOf(r, 'evening');
+      final all = [...morning, ...evening];
+      final labels =
+          all.map(stepLabel).where((s) => s.isNotEmpty).take(4).toList();
+      return labels.join(' · ');
+    }
+
+    Map<String, List<String>>? diffVsPrev(
+        Map<String, dynamic> current, Map<String, dynamic>? prev) {
+      if (prev == null) return null;
+      if (current['kind'] != prev['kind']) return null; // different sources
+      final currKeys = <String>{
+        for (final s in stepsOf(current, 'morning')) stepKey(s),
+        for (final s in stepsOf(current, 'evening')) stepKey(s),
+      };
+      final prevKeys = <String>{
+        for (final s in stepsOf(prev, 'morning')) stepKey(s),
+        for (final s in stepsOf(prev, 'evening')) stepKey(s),
+      };
+      final currStepsByKey = <String, Map<String, dynamic>>{};
+      final prevStepsByKey = <String, Map<String, dynamic>>{};
+      for (final s in [
+        ...stepsOf(current, 'morning'),
+        ...stepsOf(current, 'evening'),
+      ]) {
+        currStepsByKey[stepKey(s)] = s;
+      }
+      for (final s in [
+        ...stepsOf(prev, 'morning'),
+        ...stepsOf(prev, 'evening'),
+      ]) {
+        prevStepsByKey[stepKey(s)] = s;
+      }
+      final added = currKeys
+          .difference(prevKeys)
+          .map((k) => stepLabel(currStepsByKey[k]!))
+          .where((s) => s.isNotEmpty)
+          .toList();
+      final removed = prevKeys
+          .difference(currKeys)
+          .map((k) => stepLabel(prevStepsByKey[k]!))
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (added.isEmpty && removed.isEmpty) return null;
+      return {'added': added, 'removed': removed};
+    }
+
+    // Scan score helpers — find the closest scan within a window so we can
+    // tag a routine with "Score 65 → 72". Walks the (small) scan list each
+    // time; cheap, doesn't justify indexing here.
+    int? scanScoreAt(DateTime when, {required Duration tolerance}) {
+      Map<String, dynamic>? best;
+      var bestDelta = tolerance;
+      for (final raw in scanRows) {
+        final ts = raw.createdAt;
+        final delta = (ts.difference(when)).abs();
+        if (delta <= bestDelta) {
+          best = {'score': raw.score, 'ts': ts};
+          bestDelta = delta;
+        }
+      }
+      return best == null ? null : best['score'] as int;
+    }
+
+    // Determine which routine the Today screen will pick up — same logic as
+    // `_today` (latest non-empty). We mark it active in the response so the
+    // client doesn't need to redo the resolution.
+    final activeId = realRoutines.isEmpty ? null : realRoutines.first['id'];
+
+    final routineNodes = <Map<String, dynamic>>[];
+    for (var i = 0; i < realRoutines.length; i++) {
+      final r = realRoutines[i];
+      final prev = i + 1 < realRoutines.length ? realRoutines[i + 1] : null;
+      final createdAt = DateTime.parse(r['created_at'] as String).toUtc();
+      // Adherence window: from this routine's creation up to either the
+      // newer routine that replaced it (i-1, since list is newest-first) or
+      // now (capped at 14 days so a long-abandoned routine doesn't show a
+      // miserable 1-of-90 ratio).
+      final nextCreatedAt = i == 0
+          ? null
+          : DateTime.parse(
+              realRoutines[i - 1]['created_at'] as String).toUtc();
+      final winStart = createdAt;
+      final winEnd = nextCreatedAt != null && nextCreatedAt.isBefore(now)
+          ? nextCreatedAt
+          : (winStart.add(const Duration(days: 14)).isBefore(now)
+              ? winStart.add(const Duration(days: 14))
+              : now);
+      var doneDays = 0;
+      var totalDays = 0;
+      for (var d = DateTime.utc(winStart.year, winStart.month, winStart.day);
+          !d.isAfter(DateTime.utc(winEnd.year, winEnd.month, winEnd.day));
+          d = d.add(const Duration(days: 1))) {
+        totalDays++;
+        if (completionDaySet.contains(d)) doneDays++;
+      }
+      // Untouched, just-now routine — don't pretend "0 of 0 days".
+      final adherence = totalDays == 0
+          ? null
+          : {
+              'completed_days': doneDays,
+              'total_days': totalDays,
+              'percent': (doneDays * 100 / totalDays).round(),
+            };
+
+      final scoreBefore =
+          scanScoreAt(createdAt, tolerance: const Duration(days: 7));
+      final scoreAfter = nextCreatedAt != null
+          ? scanScoreAt(nextCreatedAt, tolerance: const Duration(days: 7))
+          : scanScoreAt(now, tolerance: const Duration(days: 21));
+
+      routineNodes.add({
+        'type': 'routine',
+        'id': r['id'],
+        'kind': r['kind'],
+        'created_at': r['created_at'],
+        'is_active': r['id'] == activeId,
+        'steps_preview': previewLine(r),
+        'morning_count': stepsOf(r, 'morning').length,
+        'evening_count': stepsOf(r, 'evening').length,
+        'adherence': adherence,
+        'diff_vs_prev': diffVsPrev(r, prev),
+        'skin_score_before': scoreBefore,
+        'skin_score_after': scoreAfter,
+        'skin_summary': (r['payload'] is Map
+            ? (r['payload'] as Map)['skin_summary']
+            : null),
+      });
+    }
+
+    // Scan nodes — only those that fall within the routine timeline window,
+    // so we don't drag in pre-onboarding scans. Compute delta vs the
+    // immediately older scan for the "+4" chip on the dot.
+    final scanNodes = <Map<String, dynamic>>[];
+    for (var i = 0; i < scanRows.length; i++) {
+      final s = scanRows[i];
+      final prev = i + 1 < scanRows.length ? scanRows[i + 1] : null;
+      scanNodes.add({
+        'type': 'scan',
+        'id': s.id,
+        'created_at': s.createdAt.toUtc().toIso8601String(),
+        'score': s.score,
+        'delta_vs_prev':
+            prev == null ? null : (s.score - prev.score),
+      });
+    }
+
+    // Merge by date, newest first, then insert month dividers.
+    final all = [...routineNodes, ...scanNodes];
+    all.sort((a, b) =>
+        (b['created_at'] as String).compareTo(a['created_at'] as String));
+    final nodes = <Map<String, dynamic>>[];
+    String? currentMonth;
+    for (final n in all) {
+      final dt = DateTime.parse(n['created_at'] as String).toLocal();
+      final key = '${dt.year}-${dt.month.toString().padLeft(2, '0')}';
+      if (key != currentMonth) {
+        currentMonth = key;
+        nodes.add({
+          'type': 'month_divider',
+          'label': _monthLabel(dt),
+          'key': key,
+        });
+      }
+      nodes.add(n);
+    }
+
+    final lastRoutineAdherence = routineNodes.isEmpty
+        ? null
+        : routineNodes.first['adherence'];
+
+    return jsonResponse(200, {
+      'stats': {
+        'total_routines': realRoutines.length,
+        'current_streak_days': streak,
+        'last_routine_adherence': lastRoutineAdherence,
+      },
+      'active_routine_id': activeId,
+      'nodes': nodes,
+    });
   }
 
   Future<Response> _createDermSession(Request req, UserRow user) async {

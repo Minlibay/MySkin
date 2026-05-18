@@ -3050,6 +3050,30 @@ class RoutineCompletionRepository {
     );
   }
 
+  /// Returns the set of UTC dates between [since] and [until] (inclusive)
+  /// on which the user checked at least one step. Used by the timeline
+  /// endpoint to compute per-routine adherence without scanning the whole
+  /// history per routine.
+  Future<List<DateTime>> completionDaysInRange({
+    required String userId,
+    required DateTime since,
+    required DateTime until,
+  }) async {
+    final r = await db.execute(
+      Sql.named('''
+        SELECT DISTINCT day FROM routine_completions
+        WHERE user_id = @u AND day >= @s AND day <= @e
+        ORDER BY day
+      '''),
+      parameters: {
+        'u': userId,
+        's': since.toUtc(),
+        'e': until.toUtc(),
+      },
+    );
+    return r.map((row) => row[0] as DateTime).toList();
+  }
+
   /// Walks back from today, counting consecutive days with at least one completion.
   Future<int> streak(String userId) async {
     final r = await db.execute(

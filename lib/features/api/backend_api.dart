@@ -89,6 +89,24 @@ class BackendApi {
     return items.map(RoutineRecord.fromJson).toList();
   }
 
+  /// Routine + scan history merged into one timeline with stats. Backend
+  /// does the diffing/adherence/sorting work so the screen can stay thin.
+  Future<RoutineTimeline> getRoutinesTimeline() async {
+    final r =
+        await _dio.get('$baseUrl/me/routines/timeline', options: _auth());
+    return RoutineTimeline.fromJson((r.data as Map).cast<String, dynamic>());
+  }
+
+  /// Resume a past routine by cloning it as a fresh row. Today screen picks
+  /// the newest non-empty one, so the clone makes the chosen routine active.
+  Future<String> resumeRoutine(String routineId) async {
+    final r = await _dio.post(
+      '$baseUrl/me/routines/$routineId/resume',
+      options: _auth(),
+    );
+    return (r.data as Map)['id'] as String;
+  }
+
   Future<void> saveRoutine({
     required String kind,
     required RoutineResult result,
@@ -646,6 +664,142 @@ class ChatReply {
   const ChatReply({required this.reply, required this.products});
   final String reply;
   final List<Product> products;
+}
+
+/// Timeline payload from /me/routines/timeline. Nodes are pre-sorted
+/// newest-first and already include the month-divider rows the screen
+/// renders verbatim.
+class RoutineTimeline {
+  RoutineTimeline({
+    required this.totalRoutines,
+    required this.currentStreakDays,
+    required this.lastAdherence,
+    required this.activeRoutineId,
+    required this.nodes,
+  });
+
+  final int totalRoutines;
+  final int currentStreakDays;
+  final RoutineAdherence? lastAdherence;
+  final String? activeRoutineId;
+  final List<TimelineNode> nodes;
+
+  factory RoutineTimeline.fromJson(Map<String, dynamic> j) {
+    final stats = (j['stats'] as Map?)?.cast<String, dynamic>() ?? const {};
+    final rawNodes = ((j['nodes'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => m.cast<String, dynamic>())
+        .toList();
+    return RoutineTimeline(
+      totalRoutines: (stats['total_routines'] as num?)?.toInt() ?? 0,
+      currentStreakDays:
+          (stats['current_streak_days'] as num?)?.toInt() ?? 0,
+      lastAdherence: stats['last_routine_adherence'] is Map
+          ? RoutineAdherence.fromJson(
+              (stats['last_routine_adherence'] as Map)
+                  .cast<String, dynamic>())
+          : null,
+      activeRoutineId: j['active_routine_id'] as String?,
+      nodes: rawNodes.map(TimelineNode.fromJson).toList(),
+    );
+  }
+}
+
+class RoutineAdherence {
+  RoutineAdherence({
+    required this.completedDays,
+    required this.totalDays,
+    required this.percent,
+  });
+  final int completedDays;
+  final int totalDays;
+  final int percent;
+
+  factory RoutineAdherence.fromJson(Map<String, dynamic> j) =>
+      RoutineAdherence(
+        completedDays: (j['completed_days'] as num?)?.toInt() ?? 0,
+        totalDays: (j['total_days'] as num?)?.toInt() ?? 0,
+        percent: (j['percent'] as num?)?.toInt() ?? 0,
+      );
+}
+
+/// One row in the timeline. Discriminated by [type] — 'month_divider',
+/// 'routine', or 'scan'. Fields not relevant to the row's type are null.
+class TimelineNode {
+  TimelineNode({
+    required this.type,
+    this.label,
+    this.id,
+    this.kind,
+    this.createdAt,
+    this.isActive = false,
+    this.stepsPreview,
+    this.morningCount,
+    this.eveningCount,
+    this.adherence,
+    this.diffAdded = const [],
+    this.diffRemoved = const [],
+    this.skinScoreBefore,
+    this.skinScoreAfter,
+    this.skinSummary,
+    this.scanScore,
+    this.scanDeltaVsPrev,
+  });
+
+  final String type;
+  // Month divider
+  final String? label;
+  // Routine + scan share these
+  final String? id;
+  final DateTime? createdAt;
+  // Routine
+  final String? kind;
+  final bool isActive;
+  final String? stepsPreview;
+  final int? morningCount;
+  final int? eveningCount;
+  final RoutineAdherence? adherence;
+  final List<String> diffAdded;
+  final List<String> diffRemoved;
+  final int? skinScoreBefore;
+  final int? skinScoreAfter;
+  final String? skinSummary;
+  // Scan
+  final int? scanScore;
+  final int? scanDeltaVsPrev;
+
+  factory TimelineNode.fromJson(Map<String, dynamic> j) {
+    final type = j['type'] as String;
+    final diff = (j['diff_vs_prev'] as Map?)?.cast<String, dynamic>();
+    return TimelineNode(
+      type: type,
+      label: j['label'] as String?,
+      id: j['id'] as String?,
+      kind: j['kind'] as String?,
+      createdAt: j['created_at'] is String
+          ? DateTime.tryParse(j['created_at'] as String)
+          : null,
+      isActive: j['is_active'] as bool? ?? false,
+      stepsPreview: j['steps_preview'] as String?,
+      morningCount: (j['morning_count'] as num?)?.toInt(),
+      eveningCount: (j['evening_count'] as num?)?.toInt(),
+      adherence: j['adherence'] is Map
+          ? RoutineAdherence.fromJson(
+              (j['adherence'] as Map).cast<String, dynamic>())
+          : null,
+      diffAdded: ((diff?['added'] as List?) ?? const [])
+          .map((e) => '$e')
+          .toList(),
+      diffRemoved: ((diff?['removed'] as List?) ?? const [])
+          .map((e) => '$e')
+          .toList(),
+      skinScoreBefore: (j['skin_score_before'] as num?)?.toInt(),
+      skinScoreAfter: (j['skin_score_after'] as num?)?.toInt(),
+      skinSummary: j['skin_summary'] as String?,
+      scanScore: (j['score'] as num?)?.toInt(),
+      scanDeltaVsPrev: (j['delta_vs_prev'] as num?)?.toInt(),
+    );
+  }
 }
 
 final backendApiProvider = Provider<BackendApi>((ref) {
