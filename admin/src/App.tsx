@@ -3,6 +3,7 @@ import { useAuth } from './auth';
 import Layout from './components/Layout';
 import Codes from './pages/Codes';
 import Dashboard from './pages/Dashboard';
+import Import from './pages/Import';
 import Legal from './pages/Legal';
 import Login from './pages/Login';
 import Moderation from './pages/Moderation';
@@ -31,6 +32,7 @@ export default function App() {
         <Route path="/users" element={<Users />} />
         <Route path="/users/:id" element={<UserDetail />} />
         <Route path="/products" element={<Products />} />
+        <Route path="/import" element={<Import />} />
         <Route path="/partners" element={<Partners />} />
         <Route path="/moderation" element={<Moderation />} />
         <Route path="/codes" element={<Codes />} />

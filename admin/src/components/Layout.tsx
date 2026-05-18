@@ -7,6 +7,7 @@ const NAV = [
   { to: '/', label: 'Дашборд', icon: '◆' },
   { to: '/users', label: 'Юзеры', icon: '◌' },
   { to: '/products', label: 'Каталог', icon: '◇' },
+  { to: '/import', label: 'Импорт', icon: '⇪' },
   { to: '/partners', label: 'Партнёры', icon: '◐' },
   { to: '/moderation', label: 'Модерация', icon: '◭' },
   { to: '/codes', label: 'Коды', icon: '⎘' },

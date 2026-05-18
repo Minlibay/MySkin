@@ -21,24 +21,47 @@ export type ProductFormResult = {
   }[];
 };
 
+/// Pre-populated values for a new product (e.g. imported via the Golden Apple
+/// bookmarklet). Photos arrive as data URLs and are marked dirty so they
+/// upload on save just like a manual file pick.
+export type ProductPrefill = {
+  slug?: string;
+  brand?: string;
+  name?: string;
+  kind?: string;
+  description?: string;
+  priceRub?: number;
+  buyUrl?: string;
+  composition?: string;
+  precautions?: string;
+  usage?: string;
+  extraInfo?: string;
+  ingredients?: string[];
+  photoDataUrl?: string;
+  photoMime?: string;
+  extraPhotoDataUrls?: { dataUrl: string; mime: string }[];
+};
+
 export default function ProductForm({
   initial,
+  prefill,
   onCancel,
   onSave,
 }: {
   initial?: AdminProduct;
+  prefill?: ProductPrefill;
   onCancel: () => void;
   onSave: (r: ProductFormResult) => Promise<void>;
 }) {
-  const [slug, setSlug] = useState(initial?.slug ?? '');
-  const [brand, setBrand] = useState(initial?.brand ?? '');
-  const [name, setName] = useState(initial?.name ?? '');
-  const [kind, setKind] = useState(initial?.kind ?? 'serum');
+  const [slug, setSlug] = useState(initial?.slug ?? prefill?.slug ?? '');
+  const [brand, setBrand] = useState(initial?.brand ?? prefill?.brand ?? '');
+  const [name, setName] = useState(initial?.name ?? prefill?.name ?? '');
+  const [kind, setKind] = useState(initial?.kind ?? prefill?.kind ?? 'serum');
   const [description, setDescription] = useState(
-    initial?.description ?? ''
+    initial?.description ?? prefill?.description ?? ''
   );
   const [priceRub, setPriceRub] = useState<number>(
-    initial?.price_rub ?? 0
+    initial?.price_rub ?? prefill?.priceRub ?? 0
   );
   const [accentColor, setAccentColor] = useState(
     initial?.accent_color ?? '#D98FA3'
@@ -46,11 +69,19 @@ export default function ProductForm({
   const [routinePhase, setRoutinePhase] = useState(
     initial?.routine_phase ?? 'any'
   );
-  const [buyUrl, setBuyUrl] = useState(initial?.buy_url ?? '');
-  const [composition, setComposition] = useState(initial?.composition ?? '');
-  const [precautions, setPrecautions] = useState(initial?.precautions ?? '');
-  const [usage, setUsage] = useState(initial?.usage ?? '');
-  const [extraInfo, setExtraInfo] = useState(initial?.extra_info ?? '');
+  const [buyUrl, setBuyUrl] = useState(
+    initial?.buy_url ?? prefill?.buyUrl ?? ''
+  );
+  const [composition, setComposition] = useState(
+    initial?.composition ?? prefill?.composition ?? ''
+  );
+  const [precautions, setPrecautions] = useState(
+    initial?.precautions ?? prefill?.precautions ?? ''
+  );
+  const [usage, setUsage] = useState(initial?.usage ?? prefill?.usage ?? '');
+  const [extraInfo, setExtraInfo] = useState(
+    initial?.extra_info ?? prefill?.extraInfo ?? ''
+  );
   const [isActive, setIsActive] = useState(initial?.is_active ?? false);
   const [gentle, setGentle] = useState(initial?.gentle ?? false);
   const [tags, setTags] = useState<string[]>(initial?.tags ?? []);
@@ -58,26 +89,39 @@ export default function ProductForm({
     initial?.skin_types ?? []
   );
   const [ingredients, setIngredients] = useState<string[]>(
-    initial?.ingredients ?? []
+    initial?.ingredients ?? prefill?.ingredients ?? []
   );
   const [ingInput, setIngInput] = useState('');
   const [photoUrl, setPhotoUrl] = useState<string | null>(
-    initial?.has_photo ? api.productPhotoUrl(initial.id) : null
+    initial?.has_photo
+      ? api.productPhotoUrl(initial.id)
+      : prefill?.photoDataUrl ?? null
   );
-  const [photoMime, setPhotoMime] = useState<string>('image/jpeg');
-  const [photoChanged, setPhotoChanged] = useState(false);
+  const [photoMime, setPhotoMime] = useState<string>(
+    prefill?.photoMime ?? 'image/jpeg'
+  );
+  // Treat prefill photo as a fresh upload so it gets POSTed on save.
+  const [photoChanged, setPhotoChanged] = useState(!!prefill?.photoDataUrl);
   // Slots 2-4. Each entry tracks its own dataUrl + mime + dirty flag so we
   // only PATCH/DELETE on the server for slots the user actually touched.
   const initialSlots = initial?.photo_slots ?? (initial?.has_photo ? [1] : []);
   const [extraSlots, setExtraSlots] = useState<
     { dataUrl: string | null; mime: string; changed: boolean }[]
   >(() => {
-    return [2, 3, 4].map((s) => ({
-      dataUrl: initialSlots.includes(s)
-        ? api.productPhotoUrl(initial!.id, s)
-        : null,
-      mime: 'image/jpeg',
-      changed: false,
+    if (initial) {
+      return [2, 3, 4].map((s) => ({
+        dataUrl: initialSlots.includes(s)
+          ? api.productPhotoUrl(initial.id, s)
+          : null,
+        mime: 'image/jpeg',
+        changed: false,
+      }));
+    }
+    const extras = prefill?.extraPhotoDataUrls ?? [];
+    return [0, 1, 2].map((i) => ({
+      dataUrl: extras[i]?.dataUrl ?? null,
+      mime: extras[i]?.mime ?? 'image/jpeg',
+      changed: !!extras[i]?.dataUrl,
     }));
   });
   const [busy, setBusy] = useState(false);
