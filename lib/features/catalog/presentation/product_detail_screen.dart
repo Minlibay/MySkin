@@ -93,6 +93,9 @@ class _ProductDetailScreenState extends ConsumerState<ProductDetailScreen> {
     setState(() => _addingToShelf = true);
     try {
       await ref.read(backendApiProvider).addToShelf(productId: p.id);
+      ref
+          .read(productTelemetryProvider)
+          .shelfAdd(p.id, ProductSurface.productDetail);
       if (!mounted) return;
       setState(() => _onShelf = true);
       ScaffoldMessenger.of(context).showSnackBar(

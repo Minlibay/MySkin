@@ -933,7 +933,15 @@ class ProductEventRepository {
   ProductEventRepository(this.db);
   final Pool db;
 
-  static const _validKinds = {'impression', 'open', 'buy_click'};
+  /// `shelf_add` lets us measure the conversion step between Лина's
+  /// recommendation and the user actually committing to use the product —
+  /// the most important data point for tuning the matcher.
+  static const _validKinds = {
+    'impression',
+    'open',
+    'buy_click',
+    'shelf_add',
+  };
   static const _validSurfaces = {
     'catalog',
     'recommendation',
@@ -1003,6 +1011,7 @@ class ProductEventRepository {
           COUNT(*) FILTER (WHERE kind = 'impression')::int,
           COUNT(*) FILTER (WHERE kind = 'open')::int,
           COUNT(*) FILTER (WHERE kind = 'buy_click')::int,
+          COUNT(*) FILTER (WHERE kind = 'shelf_add')::int,
           COUNT(DISTINCT user_id) FILTER (WHERE kind = 'open')::int
         FROM product_events
         WHERE product_id = @p AND created_at >= @since
@@ -1014,7 +1023,8 @@ class ProductEventRepository {
       'impressions': row[0] as int,
       'opens': row[1] as int,
       'buy_clicks': row[2] as int,
-      'unique_openers': row[3] as int,
+      'shelf_adds': row[3] as int,
+      'unique_openers': row[4] as int,
     };
   }
 
@@ -1033,7 +1043,8 @@ class ProductEventRepository {
           d.day,
           COALESCE(SUM(CASE WHEN e.kind = 'impression' THEN 1 END), 0)::int,
           COALESCE(SUM(CASE WHEN e.kind = 'open' THEN 1 END), 0)::int,
-          COALESCE(SUM(CASE WHEN e.kind = 'buy_click' THEN 1 END), 0)::int
+          COALESCE(SUM(CASE WHEN e.kind = 'buy_click' THEN 1 END), 0)::int,
+          COALESCE(SUM(CASE WHEN e.kind = 'shelf_add' THEN 1 END), 0)::int
         FROM days d
         LEFT JOIN product_events e
           ON e.product_id = @p
@@ -1049,6 +1060,7 @@ class ProductEventRepository {
               'impressions': row[1] as int,
               'opens': row[2] as int,
               'buy_clicks': row[3] as int,
+              'shelf_adds': row[4] as int,
             })
         .toList();
   }

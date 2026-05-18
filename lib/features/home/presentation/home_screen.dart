@@ -9,6 +9,7 @@ import '../../../core/widgets/glow_background.dart';
 import '../../../core/widgets/lina_avatar.dart';
 import '../../../core/widgets/metric_ring.dart';
 import '../../ai/domain/models.dart';
+import '../../../core/telemetry/product_telemetry.dart';
 import '../../api/backend_api.dart';
 import '../../catalog/domain/product.dart';
 import '../../catalog/presentation/product_bottle.dart';
@@ -226,7 +227,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   }
 }
 
-class _MatchedProductsStrip extends StatelessWidget {
+class _MatchedProductsStrip extends ConsumerWidget {
   const _MatchedProductsStrip({
     required this.future,
     required this.onOpen,
@@ -238,7 +239,7 @@ class _MatchedProductsStrip extends StatelessWidget {
   final VoidCallback? onOpenCatalog;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return SizedBox(
       height: 210,
       child: FutureBuilder<List<Product>>(
@@ -260,6 +261,14 @@ class _MatchedProductsStrip extends StatelessWidget {
           if (items.isEmpty) {
             return _EmptyStrip(onOpenCatalog: onOpenCatalog);
           }
+          // Fire impressions for everything in the strip on first paint —
+          // ProductTelemetry dedups per session, so re-renders are free.
+          final telemetry = ref.read(productTelemetryProvider);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            for (final p in items) {
+              telemetry.impression(p.id, ProductSurface.recommendation);
+            }
+          });
           return ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: items.length,
@@ -267,7 +276,10 @@ class _MatchedProductsStrip extends StatelessWidget {
             separatorBuilder: (_, __) => const SizedBox(width: 12),
             itemBuilder: (_, i) => _MatchedProductCard(
               product: items[i],
-              onTap: () => onOpen?.call(items[i]),
+              onTap: () {
+                telemetry.open(items[i].id, ProductSurface.recommendation);
+                onOpen?.call(items[i]);
+              },
             ),
           );
         },

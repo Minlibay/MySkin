@@ -29,12 +29,13 @@ String _surfaceKey(ProductSurface s) => switch (s) {
       ProductSurface.favorites => 'favorites',
     };
 
-enum ProductEventKind { impression, open, buyClick }
+enum ProductEventKind { impression, open, buyClick, shelfAdd }
 
 String _kindKey(ProductEventKind k) => switch (k) {
       ProductEventKind.impression => 'impression',
       ProductEventKind.open => 'open',
       ProductEventKind.buyClick => 'buy_click',
+      ProductEventKind.shelfAdd => 'shelf_add',
     };
 
 /// Batched catalog interaction reporter. Single instance per app run.
@@ -80,6 +81,13 @@ class ProductTelemetry {
 
   void buyClick(String productId, ProductSurface surface) {
     _enqueue(productId, ProductEventKind.buyClick, surface);
+  }
+
+  /// Fired when a user commits a product to their shelf. This is the
+  /// strongest conversion signal we have — opens are curiosity, buy_clicks
+  /// are intent, but a shelf-add says "I'm going to use this".
+  void shelfAdd(String productId, ProductSurface surface) {
+    _enqueue(productId, ProductEventKind.shelfAdd, surface);
   }
 
   void _enqueue(
