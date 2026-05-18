@@ -91,9 +91,13 @@ class ChatMessage {
       json = null;
     }
     if (json == null || json['text'] is! String) {
+      // Backend now sanitises Лина's replies, but old builds / mid-deploy
+      // requests may still arrive malformed. Try to salvage just the
+      // `"text": "..."` field rather than dumping raw JSON into the chat.
+      final salvaged = _salvageTextField(cleaned);
       return ChatMessage(
         role: ChatRole.assistant,
-        content: raw.trim(),
+        content: salvaged ?? raw.trim(),
         products: products,
       );
     }
@@ -116,11 +120,26 @@ class ChatMessage {
   }
 
   static String _stripFence(String s) {
-    if (s.startsWith('```')) {
-      var t = s.replaceFirst(RegExp(r'^```[a-zA-Z]*\n?'), '');
-      if (t.endsWith('```')) t = t.substring(0, t.length - 3);
+    if (s.startsWith('```') || s.startsWith("'''")) {
+      var t = s.replaceFirst(RegExp(r"""^[`']{3,}[a-zA-Z]*\n?"""), '');
+      t = t.replaceFirst(RegExp(r"""[`']{3,}\s*$"""), '');
       return t.trim();
     }
     return s;
+  }
+
+  /// Last-ditch attempt to pluck Лина's user-visible text out of a malformed
+  /// JSON reply. Looks for the first `"text": "..."` substring and decodes
+  /// the captured string content. Returns null if nothing usable found.
+  static String? _salvageTextField(String s) {
+    final m = RegExp(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"').firstMatch(s);
+    if (m == null) return null;
+    final raw = m.group(1) ?? '';
+    if (raw.isEmpty) return null;
+    try {
+      return (jsonDecode('"$raw"') as String).trim();
+    } catch (_) {
+      return raw.trim();
+    }
   }
 }

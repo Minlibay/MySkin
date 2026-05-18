@@ -1087,6 +1087,71 @@ Map<String, dynamic>? _sanitiseFaceGeom(Map<String, dynamic> raw) {
   };
 }
 
+/// Normalise Лина's raw model output into a JSON envelope the mobile parser
+/// is guaranteed to read. The vision/chat models occasionally truncate,
+/// wrap in ``` fences, use smart quotes, or drop a comma — the client then
+/// falls back to "show raw text" and the user sees literal JSON in chat.
+///
+/// Strategy:
+///   1. Try parsing as-is (after fence strip). If valid AND has a non-empty
+///      `text` field — pass through.
+///   2. Try to salvage just the `"text": "..."` substring via regex. Wrap
+///      it (plus show_products flag if we can spot one) in a fresh, valid
+///      JSON envelope.
+///   3. Last resort — treat the whole reply as plain text and wrap it.
+String _sanitiseLinaReply(String raw) {
+  final stripped = _stripJsonFences(raw.trim());
+  // Happy path.
+  try {
+    final parsed = parseJsonReply(stripped);
+    final text = parsed['text'];
+    if (text is String && text.trim().isNotEmpty) {
+      return stripped;
+    }
+  } catch (_) {/* fall through to salvage */}
+
+  // Salvage `text` field by regex. JSON string escapes (\\" \\n \\u…) make
+  // a hand-written regex fragile, but we only need to find the opening
+  // quote-text-closing-quote span. The pattern below skips escaped quotes.
+  final m =
+      RegExp(r'"text"\s*:\s*"((?:[^"\\]|\\.)*)"', dotAll: true)
+          .firstMatch(stripped);
+  if (m != null) {
+    // Unescape by wrapping back in quotes and decoding.
+    String text;
+    try {
+      text = jsonDecode('"${m.group(1)}"') as String;
+    } catch (_) {
+      text = m.group(1) ?? '';
+    }
+    final showProducts =
+        RegExp(r'"show_products"\s*:\s*true').hasMatch(stripped);
+    return jsonEncode({
+      'text': text,
+      'show_products': showProducts,
+    });
+  }
+
+  // Couldn't even find a text field — show whatever the model returned as
+  // a plain message so the chat never bottoms out into raw JSON braces.
+  return jsonEncode({
+    'text': stripped.isEmpty
+        ? 'Прости, я сейчас не смогла сформулировать ответ. Попробуй ещё раз?'
+        : stripped,
+    'show_products': false,
+  });
+}
+
+String _stripJsonFences(String s) {
+  // Match 3+ of either backtick or apostrophe at the start/end, with an
+  // optional `json` language tag right after the opening fence. Character
+  // class avoids the awkward string concat for the apostrophe.
+  final opening =
+      RegExp(r'''^[`']{3,}\s*(?:json)?\s*\n?''', caseSensitive: false);
+  final closing = RegExp(r'''[`']{3,}\s*$''');
+  return s.replaceFirst(opening, '').replaceFirst(closing, '').trim();
+}
+
 class AiHandlers {
   AiHandlers({
     required this.sessions,
@@ -1405,21 +1470,26 @@ class AiHandlers {
       // reads the active `ai_provider` setting plus the provider-specific
       // `*_chat_model` override per call. Handlers pass `null` and stay
       // provider-agnostic.
-      final reply = await giga.chatWithMessages(
+      final rawReply = await giga.chatWithMessages(
         systemPrompt: enrichedSystem,
         messages: messages,
       );
+      // Normalise the model output into a guaranteed-parseable JSON envelope
+      // before sending it to the client. The mobile parser otherwise falls
+      // through to "show raw text" when JSON is malformed — and bad JSON
+      // happens often enough (truncated, wrapped in ``` fences, smart-quoted)
+      // that we always sanitise here.
+      final reply = _sanitiseLinaReply(rawReply);
 
       // Only surface products when Лина explicitly flagged this turn as a
-      // product recommendation. Falls back to a regex sniff if the JSON
-      // body is malformed but contains the flag verbatim.
+      // product recommendation. Reply is now guaranteed-parseable.
       var showProducts = false;
       try {
         final parsed = parseJsonReply(reply);
         showProducts = parsed['show_products'] == true;
       } catch (_) {
         showProducts =
-            RegExp(r'"show_products"\s*:\s*true').hasMatch(reply);
+            RegExp(r'"show_products"\s*:\s*true').hasMatch(rawReply);
       }
 
       // One product per `kind` so the strip looks like a mini routine
