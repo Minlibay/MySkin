@@ -98,57 +98,81 @@ Map<String, dynamic>? buildFaceGeomJson(
     tzone = [forehead[0], (forehead[1] + faceH * 0.30).clamp(0.0, 1.0)];
   }
 
-  // Cheeks — apple of the cheek: vertically aligned with the bottom of the
-  // nose bridge (about 60% down the face), horizontally pulled in 12% from
-  // the contour edge so the dot sits on skin, not on the jaw line.
-  double cheekY;
-  if (nose.isNotEmpty) {
-    // noseBridge bottom = nose tip → cheek apple is roughly at that Y.
-    cheekY = nose.last.y / imgH;
-  } else {
-    cheekY = (faceTop + faceH * 0.55).clamp(0.0, 1.0);
+  // Cheeks and chin used to be derived from the face contour (cheek edges
+  // pulled in from leftmost/rightmost contour points; chin a fraction of
+  // the way down to the contour bottom). That breaks badly on bearded
+  // faces because ML Kit traces the contour around the beard, so both
+  // faceH and the contour bottom run far past the actual jaw. We now
+  // anchor cheeks and chin to facial proportions instead — brows, nose
+  // tip and lower lip don't move with hair/beard volume.
+
+  // Inter-brow midpoint and brow width — stable face-size reference that
+  // ignores beards/hairlines. Brow width here = horizontal span of both
+  // brows combined, which is close to inter-pupillary × 2.4.
+  double? browMidX;
+  double? browWidth;
+  if (lBrow.isNotEmpty && rBrow.isNotEmpty) {
+    final lx = lBrow.map((p) => p.x.toDouble()).toList();
+    final rx = rBrow.map((p) => p.x.toDouble()).toList();
+    final lMean = lx.reduce((a, b) => a + b) / lx.length / imgW;
+    final rMean = rx.reduce((a, b) => a + b) / rx.length / imgW;
+    browMidX = (lMean + rMean) / 2;
+    browWidth = (rMean - lMean).abs();
   }
-  // Find leftmost / rightmost contour points within a band around cheekY.
-  // ±10% face-h is wide enough to find points even when contour is sparse.
-  final band = contour
-      .where((p) => (p[1] - cheekY).abs() < faceH * 0.10)
-      .toList();
+
+  // Nose tip Y (bottom of nose bridge contour) anchors the cheek-apple
+  // height; nose top Y anchors chin via rule-of-thirds.
+  final noseTipY = nose.isNotEmpty ? nose.last.y / imgH : null;
+  final noseTopY = nose.isNotEmpty ? nose.first.y / imgH : null;
+
+  // Cheeks — at nose tip height, offset from the face midline by half a
+  // brow-width on each side. Falls back to bbox-based positions only when
+  // brow/nose contours are missing.
+  double cheekY = noseTipY ?? (faceTop + faceH * 0.55);
   List<double> leftCheek;
   List<double> rightCheek;
-  if (band.length >= 2) {
-    final lEdge = band.reduce((a, b) => a[0] < b[0] ? a : b);
-    final rEdge = band.reduce((a, b) => a[0] > b[0] ? a : b);
-    leftCheek = [
-      (lEdge[0] + faceW * 0.12).clamp(0.0, 1.0),
-      cheekY.clamp(0.0, 1.0),
-    ];
-    rightCheek = [
-      (rEdge[0] - faceW * 0.12).clamp(0.0, 1.0),
-      cheekY.clamp(0.0, 1.0),
-    ];
+  if (browMidX != null && browWidth != null && browWidth > 0) {
+    final dx = browWidth * 0.50;
+    leftCheek = [(browMidX - dx).clamp(0.0, 1.0), cheekY.clamp(0.0, 1.0)];
+    rightCheek = [(browMidX + dx).clamp(0.0, 1.0), cheekY.clamp(0.0, 1.0)];
   } else {
     leftCheek = [
-      (faceLeft + faceW * 0.22).clamp(0.0, 1.0),
+      (faceLeft + faceW * 0.25).clamp(0.0, 1.0),
       cheekY.clamp(0.0, 1.0),
     ];
     rightCheek = [
-      (faceRight - faceW * 0.22).clamp(0.0, 1.0),
+      (faceRight - faceW * 0.25).clamp(0.0, 1.0),
       cheekY.clamp(0.0, 1.0),
     ];
   }
 
-  // Chin — pad below the lower lip. The lower-lip contour gives us a stable
-  // reference; we drop the dot ~45% of the way between lip and contour
-  // bottom so it lands on the chin proper, not in the labio-mental crease
-  // (the natural fold right under the lip) or on the throat.
+  // Chin — rule of thirds: lip-to-chin distance ≈ nose-top-to-lip distance.
+  // This holds regardless of beard volume. Falls back to lip + a small
+  // bbox-relative pad when nose/lip contours are missing.
   List<double> chin;
-  final bottom = contour.reduce((a, b) => a[1] > b[1] ? a : b);
   if (lowerLip.isNotEmpty) {
-    final lipY =
+    final lipBottomY =
         lowerLip.map((p) => p.y).reduce(math.max) / imgH;
-    final chinY = lipY + (bottom[1] - lipY) * 0.55;
-    chin = [bottom[0], chinY.clamp(0.0, 1.0)];
+    final lipMeanX =
+        lowerLip.map((p) => p.x).reduce((a, b) => a + b) /
+            lowerLip.length /
+            imgW;
+    double chinY;
+    if (noseTopY != null) {
+      // Distance from nose-top to lower-lip equals lower-lip to chin tip.
+      chinY = lipBottomY + (lipBottomY - noseTopY);
+    } else {
+      chinY = lipBottomY + faceH * 0.10;
+    }
+    // Don't let chin pop below the face bbox — that would put it on the
+    // throat/chest even when our proportions go a bit off.
+    final bboxBot = ny(face.boundingBox.bottom);
+    chin = [
+      lipMeanX.clamp(0.0, 1.0),
+      math.min(chinY, bboxBot - 0.01).clamp(0.0, 1.0),
+    ];
   } else {
+    final bottom = contour.reduce((a, b) => a[1] > b[1] ? a : b);
     chin = [bottom[0], (bottom[1] - faceH * 0.06).clamp(0.0, 1.0)];
   }
 
