@@ -197,44 +197,107 @@ FeedSnapshot parseFeed(String xml, {Set<String>? onlyCategoryIds}) {
   return FeedSnapshot(categories: categories, offers: offers);
 }
 
-/// Cheap heuristic: maps a feed category name / `Тип продукта` param /
-/// product name to our canonical `kind` taxonomy. The product-type param
-/// is the most specific signal so it wins; the rest are fallbacks.
+/// Maps a feed offer to our canonical `kind`. Three layers, strongest first:
+///
+///   1. **`Тип продукта` exact-prefix match** — the feed's product-type
+///      param is a well-formed taxonomy ("крем для лица", "маски для лица",
+///      "флюид для лица", …). When it's set we trust it absolutely. This
+///      prevents misclassification when the product name accidentally
+///      contains a competing token ("Mask Glow крем для лица" was previously
+///      tagged `mask` because the rule for "маск" matched before "крем").
+///
+///   2. **Word-boundary regex** on the same string the strict layer missed,
+///      then categoryName, then productName. Boundaries (`\b…\b`) avoid
+///      "крем" matching inside "kremlin", "маск" matching inside "маскара",
+///      etc.
+///
+///   3. Returns null → caller picks a default ('serum' in the importer).
 String? guessKind(String categoryName, String productName,
     {String productType = ''}) {
-  // Order matters: more specific tokens first (eye_cream before cream).
-  const rules = [
-    ('крем для глаз', 'eye_cream'),
-    ('сыворотка для глаз', 'eye_serum'),
-    ('eye cream', 'eye_cream'),
-    ('патч', 'eye_patch'),
-    ('пэд', 'pad'),
-    ('скраб', 'scrub'),
-    ('пилинг', 'peeling'),
-    ('маск', 'mask'),
-    ('тоник', 'toner'),
-    ('эссенц', 'essence'),
-    ('сывор', 'serum'),
-    ('спф', 'spf'),
-    ('spf', 'spf'),
-    ('защита от солнц', 'spf'),
-    ('очищ', 'cleanser'),
-    ('умыв', 'cleanser'),
-    ('демакияж', 'cleanser'),
-    ('масло для лица', 'moisturizer'),
-    ('флюид', 'moisturizer'),
-    ('эмульсия', 'moisturizer'),
-    ('крем-гель', 'moisturizer'),
-    ('крем для лица', 'moisturizer'),
-    ('крем', 'moisturizer'),
+  // Layer 1: strict productType mapping. Pulled from the actual feed dump.
+  // Keys are lowercase, matched as startsWith so suffixes (volume, line)
+  // don't trip the dictionary.
+  const productTypeMap = <String, String>{
+    'крем для лица': 'moisturizer',
+    'крем-гель для лица': 'moisturizer',
+    'крем-гель': 'moisturizer',
+    'флюид для лица': 'moisturizer',
+    'флюид': 'moisturizer',
+    'эмульсия для лица': 'moisturizer',
+    'эмульсия': 'moisturizer',
+    'масло для лица': 'moisturizer',
+    'крем для глаз': 'eye_cream',
+    'сыворотка для глаз': 'eye_serum',
+    'патчи для глаз': 'eye_patch',
+    'патчи': 'eye_patch',
+    'маски для лица': 'mask',
+    'маски': 'mask',
+    'тканевые маски': 'mask',
+    'сыворотка для лица': 'serum',
+    'сыворотка': 'serum',
+    'эссенция': 'essence',
+    'тоник для лица': 'toner',
+    'тоник': 'toner',
+    'тонер': 'toner',
+    'пэды': 'pad',
+    'диски': 'pad',
+    'скраб для лица': 'scrub',
+    'скраб': 'scrub',
+    'пилинг для лица': 'peeling',
+    'пилинг': 'peeling',
+    'средство для умывания': 'cleanser',
+    'гель для умывания': 'cleanser',
+    'пенка для умывания': 'cleanser',
+    'мусс для умывания': 'cleanser',
+    'мицеллярная вода': 'cleanser',
+    'средство для демакияжа': 'cleanser',
+    'санскрин': 'spf',
+    'солнцезащитный крем': 'spf',
+    'крем с spf': 'spf',
+  };
+  final pt = productType.toLowerCase().trim();
+  if (pt.isNotEmpty) {
+    for (final entry in productTypeMap.entries) {
+      if (pt.startsWith(entry.key)) return entry.value;
+    }
+  }
+
+  // Layer 2: word-boundary regex over the remaining signals. Order matters
+  // (more specific patterns first) — "крем для глаз" before "крем", etc.
+  // Boundaries kill the false-positive where "маска" matched in "маскара".
+  const rules = <(String, String)>[
+    (r'крем\s+для\s+глаз', 'eye_cream'),
+    (r'сыворотка\s+для\s+глаз', 'eye_serum'),
+    (r'eye\s+cream', 'eye_cream'),
+    (r'\bпатч\w*', 'eye_patch'),
+    (r'\bпэд\w*|тонер[- ]пэд', 'pad'),
+    (r'\bскраб\w*', 'scrub'),
+    (r'\bпилинг\w*', 'peeling'),
+    (r'\bмаск[аиу]\b|\bмаски\b|тканев\w+\s+маск', 'mask'),
+    (r'\bтоник\w*|\bтонер\w*', 'toner'),
+    (r'\bэссенц\w*', 'essence'),
+    (r'\bсыворот\w*', 'serum'),
+    (r'\bspf\b|санскрин|солнцезащит', 'spf'),
+    (r'\bочищ\w*|\bумыв\w*|демакияж', 'cleanser'),
+    (r'крем-?гель\s+для\s+лица|крем\s+для\s+лица|\bкрем\w*\s+ночн|\bкрем\w*\s+дневн',
+        'moisturizer'),
+    (r'\bфлюид\w*|\bэмульсия\b|масло\s+для\s+лица', 'moisturizer'),
   ];
-  // Try in priority order: product type → category → product name.
+  // Same priority chain: productType → categoryName → productName.
   for (final source in [productType, categoryName, productName]) {
     if (source.isEmpty) continue;
     final hay = source.toLowerCase();
     for (final r in rules) {
-      if (hay.contains(r.$1)) return r.$2;
+      if (RegExp(r.$1).hasMatch(hay)) return r.$2;
     }
+  }
+  // Final fallback for "крем" tokens that didn't carry a "для лица" suffix —
+  // try a loose "крем" match on the product name only, since category names
+  // tend to be too vague ("Для лица" matches everything).
+  final pn = productName.toLowerCase();
+  if (RegExp(r'\bкрем\w*').hasMatch(pn) &&
+      !RegExp(r'для\s+тела|для\s+рук|для\s+ног').hasMatch(pn)) {
+    return 'moisturizer';
   }
   return null;
 }
