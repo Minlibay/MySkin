@@ -343,6 +343,55 @@ bool guessIsActive(List<String> ingredients) {
   return false;
 }
 
+/// Returns true when the offer is for face / eye skincare — what we actually
+/// want in the catalog. Filters out body / hand / feet / nail / lash / brow
+/// products even when their Назначение happens to overlap with skincare
+/// purposes ("увлажнение" applies just as well to body lotion).
+///
+/// Signal priority:
+///   1. `Область применения` (face / body / nails / brows / lashes / lips
+///      / neck-and-decollete). When set and free of "лицо" / "глаза", we
+///      reject — body lotion with "лицо,тело" still passes because the
+///      face is in the list.
+///   2. `Тип продукта` explicit body categories ("крем для тела" etc.).
+///   3. Product name keyword sweep for "для тела / рук / ног / волос".
+bool isFaceProduct(FeedOffer offer) {
+  final area = (offer.params['Область применения'] ?? '').toLowerCase();
+  if (area.isNotEmpty) {
+    // Face areas we consider in-scope. Anything outside this set with no
+    // face/eye mention is rejected.
+    const faceAreas = ['лицо', 'глаза'];
+    final mentionsFace = faceAreas.any(area.contains);
+    if (!mentionsFace) return false;
+  }
+  final pt = (offer.params['Тип продукта'] ?? '').toLowerCase();
+  if (pt.isNotEmpty) {
+    const nonFaceTypes = [
+      'для тела',
+      'для рук',
+      'для ног',
+      'для волос',
+      'для ногтей',
+      'для ресниц',
+      'для бровей',
+      'для губ',
+    ];
+    if (nonFaceTypes.any(pt.contains)) return false;
+  }
+  final name = offer.name.toLowerCase();
+  const nameBlockers = [
+    'для тела',
+    'для рук',
+    'для ног',
+    'для волос',
+    'body lotion',
+    'hand cream',
+    'foot cream',
+  ];
+  if (nameBlockers.any(name.contains)) return false;
+  return true;
+}
+
 /// Returns true when the offer is meant for sensitive / reactive skin.
 /// Signals:
 ///   - `Гипоаллергенно` param is "true"

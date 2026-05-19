@@ -1124,20 +1124,21 @@ class AdminHandlers {
           productType: productType,
         );
 
-        // Primary moderation gate: reject offers that aren't actually
-        // skincare. Two signals must agree for an offer to count as
-        // "wanted" — we need either a recognised kind from our taxonomy
-        // OR at least one concern tag derived from Назначение. Makeup
-        // brushes, pincettes and tool kits fail both (kind = null because
-        // productType is "кисти для макияжа" / "пинцеты", and Назначение
-        // is "для пудры/контуринга" which maps to nothing).
+        // Primary moderation gate. Two filters here:
+        //   a) skincare-shape check: a recognised kind OR a derived
+        //      concern tag from Назначение. Tool kits and brushes fail
+        //      both.
+        //   b) face-only check: Область применения / Тип продукта /
+        //      product name must not place this in body / hand / nail /
+        //      lash / brow / lip / hair territory.
+        // An offer needs to pass BOTH gates. Failing either drops the
+        // offer and removes any previous import of the same external_id.
         final hasUsableKind = guessedKind != null;
         final hasConcernTags = offer.derivedTags.isNotEmpty;
-        if (!hasUsableKind && !hasConcernTags) {
+        final isFace = isFaceProduct(offer);
+        if ((!hasUsableKind && !hasConcernTags) || !isFace) {
           skipped++;
           if (existing != null) {
-            // Previously imported under the old, less-strict importer —
-            // delete so admins don't have to clean the catalog by hand.
             await products.delete(existing.id);
             deletedJunk++;
           }
