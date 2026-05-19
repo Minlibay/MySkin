@@ -1776,7 +1776,26 @@ class AiHandlers {
             'concerns': recentScan.concerns,
           };
 
-    final catalog = await products.list(publicCatalogOnly: true, limit: 200);
+    // Cheap Russian keyword intent on the user's last message: if she's
+    // clearly asking about a specific kind (e.g. "посоветуй сыворотку") or
+    // concern ("от пигментации"), we filter the catalog at the DB level and
+    // skip per-kind diversity, so Лина sees 12 real candidates instead of a
+    // kind-soup. With 9000+ products this is the difference between her
+    // surfacing the best serum and surfacing whatever cleanser sorts first
+    // alphabetically.
+    final intent = _detectChatIntent(messages.last['content'] as String);
+
+    // Catalog scope:
+    //  - intent → SQL pre-filter, fetch all matching rows (usually <1k).
+    //  - no intent → fetch the entire approved catalog (capped at 10k as a
+    //    safety belt). computeMatch is in-memory and fast enough; the win is
+    //    that Лина finally sees rows past the alphabetical 200-cutoff.
+    final catalog = await products.list(
+      kind: intent.kind,
+      concern: intent.concern,
+      publicCatalogOnly: true,
+      limit: 10000,
+    );
     final scored = <({ProductRow p, ProductMatch m})>[];
     for (final p in catalog) {
       final m = computeMatch(
@@ -1791,16 +1810,23 @@ class AiHandlers {
       scored.add((p: p, m: m));
     }
     scored.sort((a, b) => b.m.score.compareTo(a.m.score));
-    // Diversify the context window by `kind` so Лина doesn't see eight
-    // cleansers and miss the cream the user actually needs. Cap 2 per kind.
+    // Context window for the LLM:
+    //  - explicit kind intent ⇒ no per-kind cap, take the top 12 of that kind
+    //    so Лина can really compare options.
+    //  - otherwise ⇒ cap 2 per kind, top 12 total, so she still gets a
+    //    mini-routine spread (cleanser + serum + cream + …) instead of eight
+    //    near-identical SKUs.
     final perKindCtx = <String, int>{};
     final top = <({ProductRow p, ProductMatch m})>[];
+    final kindCapped = intent.kind == null;
     for (final e in scored) {
-      final n = perKindCtx[e.p.kind] ?? 0;
-      if (n >= 2) continue;
-      perKindCtx[e.p.kind] = n + 1;
+      if (kindCapped) {
+        final n = perKindCtx[e.p.kind] ?? 0;
+        if (n >= 2) continue;
+        perKindCtx[e.p.kind] = n + 1;
+      }
       top.add(e);
-      if (top.length >= 8) break;
+      if (top.length >= 12) break;
     }
 
     final catalogHint = top
@@ -1960,8 +1986,17 @@ class AiHandlers {
         jsonEncode(routineHint),
       ],
       '',
-      'Доступный каталог (топ-${top.length} '
-          'по соответствию профилю пользователя):',
+      if (intent.kind != null || intent.concern != null)
+        'Похоже, пользователь спрашивает про '
+            '${[
+              if (intent.kind != null) 'категорию «${intent.kind}»',
+              if (intent.concern != null) 'проблему «${intent.concern}»',
+            ].join(' и ')}. '
+            'Каталог ниже уже отфильтрован под этот запрос и отсортирован '
+            'по соответствию пользователю — топ-${top.length} вариантов.',
+      if (intent.kind == null && intent.concern == null)
+        'Доступный каталог (топ-${top.length} '
+            'по соответствию профилю пользователя, по 2 на категорию):',
       jsonEncode(catalogHint),
       if (priorRecLabels.isNotEmpty) ...[
         '',
@@ -2013,10 +2048,15 @@ class AiHandlers {
       // old additive 60 since score is now proper achieved/possible.
       final recommended = <Map<String, dynamic>>[];
       if (showProducts) {
+        // With an explicit kind intent ("посоветуй сыворотку") it's fine
+        // to surface up to 5 of the same kind — that's what the user asked
+        // for. Without intent we keep the mini-routine strip (one per kind)
+        // so the row reads as a thought-through set, not five lookalikes.
         final usedKinds = <String>{};
+        final allowSameKind = intent.kind != null;
         for (final e in top) {
           if (e.m.score < 70) continue;
-          if (!usedKinds.add(e.p.kind)) continue;
+          if (!allowSameKind && !usedKinds.add(e.p.kind)) continue;
           recommended.add({
             ...e.p.toJson(),
             'match_score': e.m.score,
@@ -2056,6 +2096,37 @@ class AiHandlers {
     }
   }
 
+  /// Cheap intent detector for the user's last chat message — returns the
+  /// canonical `kind` (cleanser/serum/…) and/or `concern` (acne/pigmentation/
+  /// …) the user is asking about. Russian-only by design; the chat is RU-first.
+  /// Returns nulls when no clear signal is found and Лина should keep her
+  /// kind-diverse default context.
+  ({String? kind, String? concern}) _detectChatIntent(String message) {
+    final m = message.toLowerCase().replaceAll('ё', 'е');
+
+    // Concern keywords first — "крем для век от тёмных кругов" should map
+    // concern=dark_circles, kind=eye_cream. Order inside the list matters
+    // only for which kind wins on overlapping matches (eye_cream over
+    // moisturizer, eye_serum over serum, etc.).
+    String? concern;
+    for (final entry in _concernPatterns.entries) {
+      if (entry.value.hasMatch(m)) {
+        concern = entry.key;
+        break;
+      }
+    }
+
+    String? kind;
+    for (final entry in _kindPatterns.entries) {
+      if (entry.value.hasMatch(m)) {
+        kind = entry.key;
+        break;
+      }
+    }
+
+    return (kind: kind, concern: concern);
+  }
+
   Future<Response> _dermAnalyze(Request req, UserRow user) async {
     final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
     final profile = body['profile'] as Map<String, dynamic>? ?? const {};
@@ -2077,6 +2148,51 @@ class AiHandlers {
     }
   }
 }
+
+/// Russian-language keyword → canonical product `kind`. Order matters:
+/// eye-area kinds come before generic `serum` / `moisturizer` so
+/// "крем для век" maps to eye_cream, not moisturizer. Patterns are matched
+/// case-insensitively against the user's lowercased message with `ё` → `е`.
+final Map<String, RegExp> _kindPatterns = {
+  'eye_patch': RegExp(r'патч'),
+  'eye_serum': RegExp(r'сыворотк\w*\s+(для\s+глаз|для\s+век|под\s+глаз)'),
+  'eye_cream': RegExp(
+      r'(крем|гель)\w*\s+(для\s+глаз|для\s+век|под\s+глаз|вокруг\s+глаз)'),
+  'spf': RegExp(r'(spf|санскрин|солнцезащ|солнечн|защит\w*\s+от\s+солнца)'),
+  'cleanser': RegExp(r'(очищ|умыван|умывалк|пенк|гель\s+для\s+умыв)'),
+  'scrub': RegExp(r'скраб'),
+  'peeling': RegExp(r'пилинг'),
+  'toner': RegExp(r'тоник'),
+  'pad': RegExp(r'(пэд|пад\w*\s+для\s+лица)'),
+  'essence': RegExp(r'эссенц'),
+  'mask': RegExp(r'маск'),
+  'serum': RegExp(r'сыворотк'),
+  'moisturizer': RegExp(r'(увлажн\w*\s+крем|крем\w*\s+для\s+лица|^крем|\bкрем\b)'),
+};
+
+/// Russian-language keyword → canonical concern tag from
+/// [knownConcerns]. Same lowercase-with-`ё`-normalised input as kinds.
+final Map<String, RegExp> _concernPatterns = {
+  'dark_circles': RegExp(r'(темн\w*\s+круг|круг\w*\s+под\s+глаз)'),
+  'puffiness': RegExp(r'(отеч|отёч|мешк\w*\s+под\s+глаз)'),
+  'acne': RegExp(r'(акне|прыщ|воспал|высыпан)'),
+  'blackheads': RegExp(r'(черн\w*\s+точк|комедон)'),
+  'pih': RegExp(r'постакне'),
+  'pores': RegExp(r'пор[ыа]'),
+  'oiliness': RegExp(r'(жирн\w*\s+кож|жирн\w*\s+блеск|сальн|лоснит)'),
+  'dehydration': RegExp(r'(обезвож|увлажн)'),
+  'dryness': RegExp(r'(сухост|сухая\s+кож|стянутост|шелуш)'),
+  'redness': RegExp(r'покрасн'),
+  'rosacea': RegExp(r'(купероз|розацеа|сосудист\w*\s+сеточк)'),
+  'sensitivity': RegExp(r'чувствит'),
+  'wrinkles': RegExp(r'морщин'),
+  'aging': RegExp(r'(стар(ен|ост)|anti-?age|антивозраст|возрастн)'),
+  'elasticity': RegExp(r'(упруг|эластич|тонус\s+кож)'),
+  'pigmentation': RegExp(r'(пигментац|пятн\w*\s+на\s+коже|пигментн)'),
+  'dullness': RegExp(r'(сиян|тускл|блекл)'),
+  'texture': RegExp(r'(рельеф|неровн\w*\s+текстур|неровн\w*\s+тон)'),
+  'barrier': RegExp(r'барьер'),
+};
 
 ScanAnalysis _mergeAiAnalysis(ScanAnalysis local, Map<String, dynamic> ai) {
   int clamp(num? v, int fallback) {
