@@ -33,7 +33,7 @@ target 'Runner' do
   # Pin Sentry-Cocoa: sentry_flutter 8.14.2 expects the older
   # SentryBinaryImageCache.image(...) API; newer Sentry pods renamed it
   # and the archive fails with "has no member 'image'".
-  pod 'Sentry/HybridSDK', '8.49.2'
+  pod 'Sentry/HybridSDK', '8.46.0'
 
   flutter_install_all_ios_pods File.dirname(File.realpath(__FILE__))
   target 'RunnerTests' do
