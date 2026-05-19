@@ -56,7 +56,7 @@ export default function Feed() {
       const code = String(e).replace(/^.*ApiError:?\s*/, '');
       setError(
         code === 'feed_download_failed'
-          ? 'Не получилось скачать фид. Возможно, ещё генерируется на стороне поставщика — попробуй через минуту.'
+          ? 'Поставщик так и не отдал фид за 5 минут (обычно advcake генерирует за 1–3 минуты). Подожди минуту и нажми ещё раз — кэш у них уже должен быть готов.'
           : `Не удалось получить превью: ${code}`
       );
     } finally {
@@ -143,13 +143,21 @@ export default function Feed() {
             маркировку.
           </div>
         </label>
-        <button
-          className="btn-primary"
-          onClick={runPreview}
-          disabled={loadingPreview || !url.trim()}
-        >
-          {loadingPreview ? 'Загружаем…' : 'Получить категории'}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            className="btn-primary"
+            onClick={runPreview}
+            disabled={loadingPreview || !url.trim()}
+          >
+            {loadingPreview ? 'Загружаем…' : 'Получить категории'}
+          </button>
+          {loadingPreview && (
+            <span className="text-xs text-ink2">
+              Advcake первый раз генерирует фид 1–3 минуты. Не закрывай
+              вкладку.
+            </span>
+          )}
+        </div>
       </div>
 
       {error && (

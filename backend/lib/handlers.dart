@@ -1330,22 +1330,45 @@ class AdminHandlers {
     return jsonResponse(200, {'ok': true, 'published': n});
   }
 
-  /// HTTP GET the feed body. Feed URLs may briefly return HTTP 425 "feed
-  /// not ready" — caller should retry / re-trigger from UI rather than
-  /// hold a connection here.
+  /// HTTP GET the feed body, with retries for the advcake "not ready"
+  /// dance: their first hit on a feed URL kicks off generation and
+  /// answers HTTP 425 with `{message: "Feed is not ready yet…"}`. The
+  /// real XML lands a minute or two later when we re-poll. We retry up
+  /// to ~5 minutes total before giving up.
   Future<String?> _downloadFeed(String url) async {
-    try {
-      final resp = await http
-          .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 60));
-      if (resp.statusCode != 200) return null;
-      final body = utf8.decode(resp.bodyBytes, allowMalformed: true);
-      if (body.contains('not ready')) return null;
-      return body;
-    } catch (e) {
-      stderr.writeln('Feed download failed: $e');
-      return null;
+    const delaysSec = [0, 15, 30, 45, 60, 60, 60];
+    for (var i = 0; i < delaysSec.length; i++) {
+      if (delaysSec[i] > 0) {
+        await Future<void>.delayed(Duration(seconds: delaysSec[i]));
+      }
+      try {
+        final resp = await http
+            .get(Uri.parse(url))
+            .timeout(const Duration(seconds: 60));
+        if (resp.statusCode == 200) {
+          final body =
+              utf8.decode(resp.bodyBytes, allowMalformed: true);
+          if (body.contains('not ready')) {
+            stdout.writeln(
+                '[feed] still generating (attempt ${i + 1}/${delaysSec.length})…');
+            continue;
+          }
+          return body;
+        }
+        // 425 (Too Early) is advcake's "regenerating" code. Anything
+        // else other than 5xx is a hard error.
+        if (resp.statusCode != 425 && resp.statusCode < 500) {
+          stderr.writeln(
+              'Feed download HTTP ${resp.statusCode}, giving up.');
+          return null;
+        }
+        stdout.writeln(
+            '[feed] HTTP ${resp.statusCode} (attempt ${i + 1}/${delaysSec.length})…');
+      } catch (e) {
+        stderr.writeln('Feed download attempt ${i + 1} failed: $e');
+      }
     }
+    return null;
   }
 
   /// Builds a stable slug for a feed-imported product. The external id is
