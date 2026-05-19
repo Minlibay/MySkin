@@ -11,6 +11,7 @@ import 'package:shelf_router/shelf_router.dart';
 
 import 'package:uuid/uuid.dart';
 import 'ai_client.dart';
+import 'feed_importer.dart';
 import 'gigachat.dart';
 import 'repos.dart';
 import 'taxonomy.dart';
@@ -374,6 +375,9 @@ class AdminHandlers {
         _withAdmin(_approveProductModeration))
     ..post('/admin/products/<id>/moderate/reject',
         _withAdmin(_rejectProductModeration))
+    // Feed import (advcake / Golden Apple etc)
+    ..post('/admin/feed/preview', _withAdmin(_feedPreview))
+    ..post('/admin/feed/import', _withAdmin(_feedImport))
     // Self-service password change
     ..post('/admin/change-password', _withAdmin(_changeOwnPassword));
 
@@ -1012,6 +1016,173 @@ class AdminHandlers {
     }
     await admins.setPassword(adminId, BCrypt.hashpw(next, BCrypt.gensalt()));
     return jsonResponse(200, {'ok': true});
+  }
+
+  /// Downloads the feed at [body.url], parses it, returns the category list
+  /// (with offer counts) plus a sample offer so the admin can decide which
+  /// categories to import. No DB writes.
+  Future<Response> _feedPreview(Request req) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final url = (body['url'] as String? ?? '').trim();
+    if (url.isEmpty) return jsonResponse(400, {'error': 'missing_url'});
+    final xml = await _downloadFeed(url);
+    if (xml == null) {
+      return jsonResponse(502, {'error': 'feed_download_failed'});
+    }
+    final snap = parseFeed(xml);
+    final cats = snap.categories.values
+        .where((c) => c.offerCount > 0)
+        .toList()
+      ..sort((a, b) => b.offerCount.compareTo(a.offerCount));
+    return jsonResponse(200, {
+      'total_offers': snap.offers.length,
+      'categories': cats
+          .map((c) => {
+                'id': c.id,
+                'name': c.name,
+                'offer_count': c.offerCount,
+              })
+          .toList(),
+      'sample': snap.offers.isEmpty
+          ? null
+          : {
+              'external_id': snap.offers.first.externalId,
+              'name': snap.offers.first.name,
+              'brand': snap.offers.first.brand,
+              'price_rub': snap.offers.first.priceRub,
+              'category_id': snap.offers.first.categoryId,
+              'picture':
+                  snap.offers.first.pictures.isEmpty ? null : snap.offers.first.pictures.first,
+            },
+    });
+  }
+
+  /// Imports offers from the feed into the catalog. Body:
+  ///   { url, category_ids: [..], ad_marker_text: "Реклама. …", source: "advcake" }
+  /// All imported products start as `draft` so the admin can review before
+  /// publishing, and carry the ad marker by default (every advcake offer is
+  /// an affiliate link).
+  Future<Response> _feedImport(Request req) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final url = (body['url'] as String? ?? '').trim();
+    if (url.isEmpty) return jsonResponse(400, {'error': 'missing_url'});
+    final categoryIds = ((body['category_ids'] as List?) ?? const [])
+        .map((e) => '$e')
+        .toSet();
+    if (categoryIds.isEmpty) {
+      return jsonResponse(400, {'error': 'no_categories_selected'});
+    }
+    final adMarkerText =
+        (body['ad_marker_text'] as String?)?.trim() ?? '';
+    final source =
+        (body['source'] as String?)?.trim().isNotEmpty == true
+            ? (body['source'] as String).trim()
+            : 'advcake';
+
+    final xml = await _downloadFeed(url);
+    if (xml == null) {
+      return jsonResponse(502, {'error': 'feed_download_failed'});
+    }
+    final snap = parseFeed(xml, onlyCategoryIds: categoryIds);
+
+    var inserted = 0;
+    var updated = 0;
+    var skipped = 0;
+    final errors = <Map<String, String>>[];
+
+    for (final offer in snap.offers) {
+      try {
+        final existing = await products.findByExternal(
+            source: source, externalId: offer.externalId);
+        final categoryName =
+            snap.categories[offer.categoryId]?.name ?? '';
+        final kind = guessKind(categoryName, offer.name) ?? 'serum';
+        final slug = existing?.slug ??
+            _externalSlug(offer.brand, offer.name, offer.externalId);
+        final p = ProductRow(
+          id: existing?.id ?? _uuid.v4(),
+          slug: slug,
+          brand: offer.brand,
+          name: offer.name,
+          kind: existing?.kind ?? kind,
+          description: offer.description ?? '',
+          priceRub: offer.priceRub,
+          accentColor: existing?.accentColor ?? '#D98FA3',
+          ingredients: existing?.ingredients ?? const [],
+          tags: existing?.tags ?? const [],
+          skinTypes: existing?.skinTypes ?? const [],
+          isActive: existing?.isActive ?? false,
+          gentle: existing?.gentle ?? false,
+          routinePhase: existing?.routinePhase ?? 'any',
+          status: existing?.status ?? 'draft',
+          buyUrl: offer.url,
+          composition: offer.composition ?? existing?.composition,
+          precautions: offer.precautions ?? existing?.precautions,
+          usage: offer.usage ?? existing?.usage,
+          extraInfo: existing?.extraInfo,
+          adMarkerVisible:
+              existing?.adMarkerVisible ?? adMarkerText.isNotEmpty,
+          adMarkerText: existing?.adMarkerText ??
+              (adMarkerText.isEmpty ? null : adMarkerText),
+          externalId: offer.externalId,
+          externalSource: source,
+          externalPictureUrl:
+              offer.pictures.isEmpty ? null : offer.pictures.first,
+        );
+        await products.upsert(p);
+        if (existing == null) {
+          inserted++;
+        } else {
+          updated++;
+        }
+      } catch (e) {
+        skipped++;
+        if (errors.length < 20) {
+          errors.add({
+            'external_id': offer.externalId,
+            'error': e.toString(),
+          });
+        }
+      }
+    }
+
+    return jsonResponse(200, {
+      'ok': true,
+      'inserted': inserted,
+      'updated': updated,
+      'skipped': skipped,
+      'total': snap.offers.length,
+      if (errors.isNotEmpty) 'errors': errors,
+    });
+  }
+
+  /// HTTP GET the feed body. Feed URLs may briefly return HTTP 425 "feed
+  /// not ready" — caller should retry / re-trigger from UI rather than
+  /// hold a connection here.
+  Future<String?> _downloadFeed(String url) async {
+    try {
+      final resp = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 60));
+      if (resp.statusCode != 200) return null;
+      final body = utf8.decode(resp.bodyBytes, allowMalformed: true);
+      if (body.contains('not ready')) return null;
+      return body;
+    } catch (e) {
+      stderr.writeln('Feed download failed: $e');
+      return null;
+    }
+  }
+
+  /// Builds a stable slug for a feed-imported product. The external id is
+  /// suffixed so two products with the same brand+name (different sizes,
+  /// variants) don't collide on slug.
+  String _externalSlug(String brand, String name, String externalId) {
+    final base = '$brand-$name'
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9а-яё]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+    return base.isEmpty ? 'p-$externalId' : '$base-$externalId';
   }
 
   Future<Response> _assignBrand(Request req) async {

@@ -271,6 +271,48 @@ export const api = {
     });
   },
 
+  // ===== Feed import =====
+  feedPreview(url: string) {
+    return this.request<{
+      total_offers: number;
+      categories: Array<{ id: string; name: string; offer_count: number }>;
+      sample: {
+        external_id: string;
+        name: string;
+        brand: string;
+        price_rub: number;
+        category_id: string;
+        picture: string | null;
+      } | null;
+    }>('/admin/feed/preview', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+  },
+  feedImport(params: {
+    url: string;
+    categoryIds: string[];
+    adMarkerText: string;
+    source?: string;
+  }) {
+    return this.request<{
+      ok: boolean;
+      inserted: number;
+      updated: number;
+      skipped: number;
+      total: number;
+      errors?: Array<{ external_id: string; error: string }>;
+    }>('/admin/feed/import', {
+      method: 'POST',
+      body: JSON.stringify({
+        url: params.url,
+        category_ids: params.categoryIds,
+        ad_marker_text: params.adMarkerText,
+        source: params.source ?? 'advcake',
+      }),
+    });
+  },
+
   changePassword(currentPassword: string, newPassword: string) {
     return this.request<{ ok: boolean }>('/admin/change-password', {
       method: 'POST',

@@ -1159,6 +1159,9 @@ class ProductRow {
     this.extraInfo,
     this.adMarkerVisible = false,
     this.adMarkerText,
+    this.externalId,
+    this.externalSource,
+    this.externalPictureUrl,
   });
 
   final String id;
@@ -1190,6 +1193,14 @@ class ProductRow {
   /// text at the bottom in a small semi-transparent font.
   final bool adMarkerVisible;
   final String? adMarkerText;
+  /// Identifier from an external source (e.g. Golden Apple itemId for
+  /// products imported via the advcake feed). Combined with [externalSource]
+  /// it's the dedup key for re-running the feed importer.
+  final String? externalId;
+  final String? externalSource;
+  /// Original picture URL from the external source — kept so the admin can
+  /// pull the image lazily without re-parsing the feed.
+  final String? externalPictureUrl;
 
   static ProductRow fromRow(List<dynamic> r) {
     List<String> arr(int i) =>
@@ -1222,6 +1233,9 @@ class ProductRow {
       extraInfo: r.length > 23 ? r[23] as String? : null,
       adMarkerVisible: r.length > 24 ? (r[24] as bool? ?? false) : false,
       adMarkerText: r.length > 25 ? r[25] as String? : null,
+      externalId: r.length > 26 ? r[26] as String? : null,
+      externalSource: r.length > 27 ? r[27] as String? : null,
+      externalPictureUrl: r.length > 28 ? r[28] as String? : null,
     );
   }
 
@@ -1252,6 +1266,9 @@ class ProductRow {
         'extra_info': extraInfo,
         'ad_marker_visible': adMarkerVisible,
         'ad_marker_text': adMarkerText,
+        'external_id': externalId,
+        'external_source': externalSource,
+        'external_picture_url': externalPictureUrl,
       };
 }
 
@@ -1264,7 +1281,8 @@ class ProductRepository {
       'ingredients, tags, skin_types, is_active_ingredient, gentle, '
       'routine_phase, status, photo IS NOT NULL, buy_url, moderation_status, '
       'moderation_reason, submitted_by_partner_id, composition, precautions, '
-      'usage_instructions, extra_info, ad_marker_visible, ad_marker_text';
+      'usage_instructions, extra_info, ad_marker_visible, ad_marker_text, '
+      'external_id, external_source, external_picture_url';
 
   Future<List<ProductRow>> list({
     String? kind,
@@ -1804,12 +1822,14 @@ class ProductRepository {
           ingredients, tags, skin_types, is_active_ingredient, gentle,
           routine_phase, status, buy_url, composition, precautions,
           usage_instructions, extra_info, brand_id,
-          ad_marker_visible, ad_marker_text
+          ad_marker_visible, ad_marker_text,
+          external_id, external_source, external_picture_url
         ) VALUES (
           @id, @slug, @brand, @name, @kind, @desc, @price, @ac,
           @ing::jsonb, @tags::jsonb, @st::jsonb, @ai, @g, @rp, @status,
           @buy_url, @comp, @prec, @use, @extra, @brand_id,
-          @adv, @adt
+          @adv, @adt,
+          @ex_id, @ex_src, @ex_pic
         )
         ON CONFLICT (slug) DO UPDATE SET
           brand = EXCLUDED.brand, name = EXCLUDED.name, kind = EXCLUDED.kind,
@@ -1825,7 +1845,10 @@ class ProductRepository {
           extra_info = EXCLUDED.extra_info,
           brand_id = EXCLUDED.brand_id,
           ad_marker_visible = EXCLUDED.ad_marker_visible,
-          ad_marker_text = EXCLUDED.ad_marker_text
+          ad_marker_text = EXCLUDED.ad_marker_text,
+          external_id = EXCLUDED.external_id,
+          external_source = EXCLUDED.external_source,
+          external_picture_url = EXCLUDED.external_picture_url
       '''),
       parameters: {
         'id': p.id,
@@ -1851,8 +1874,24 @@ class ProductRepository {
         'brand_id': brandId,
         'adv': p.adMarkerVisible,
         'adt': p.adMarkerText,
+        'ex_id': p.externalId,
+        'ex_src': p.externalSource,
+        'ex_pic': p.externalPictureUrl,
       },
     );
+  }
+
+  /// Find a product by its external-source identity. Used by the feed
+  /// importer to detect re-imports — same offer in same feed updates the
+  /// existing row instead of duplicating.
+  Future<ProductRow?> findByExternal(
+      {required String source, required String externalId}) async {
+    final r = await db.execute(
+      Sql.named(
+          'SELECT $_cols FROM products WHERE external_source = @s AND external_id = @e LIMIT 1'),
+      parameters: {'s': source, 'e': externalId},
+    );
+    return r.isEmpty ? null : ProductRow.fromRow(r.first);
   }
 
   /// Looks up `brands.id` by case-insensitive name (CITEXT column). If the

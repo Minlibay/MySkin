@@ -8,6 +8,7 @@ const NAV = [
   { to: '/users', label: 'Юзеры', icon: '◌' },
   { to: '/products', label: 'Каталог', icon: '◇' },
   { to: '/import', label: 'Импорт', icon: '⇪' },
+  { to: '/feed', label: 'Фид', icon: '⇲' },
   { to: '/partners', label: 'Партнёры', icon: '◐' },
   { to: '/moderation', label: 'Модерация', icon: '◭' },
   { to: '/codes', label: 'Коды', icon: '⎘' },
