@@ -682,11 +682,15 @@ class AdminHandlers {
       return jsonResponse(409, {'error': 'slug_taken'});
     }
     final tags = ((body['tags'] as List?) ?? const []).cast<String>();
-    final skinTypes =
+    var skinTypes =
         ((body['skin_types'] as List?) ?? const []).cast<String>();
     final status = (body['status'] as String?)?.trim() ?? 'draft';
-    // Drafts can be incomplete (admin work-in-progress). Publishing them
-    // requires the same rankable-metadata bar as partner submissions.
+    // Publishing with no skin_types defaults to 'all' — most cosmetic
+    // products fit any type, and forcing the admin to retick a chip every
+    // time produced exactly zero useful signal in practice.
+    if (status == 'published' && skinTypes.isEmpty) {
+      skinTypes = const ['all'];
+    }
     if (status == 'published') {
       final metaError =
           _validateAdminProductMetadata(tags: tags, skinTypes: skinTypes);
@@ -798,9 +802,14 @@ class AdminHandlers {
       final mergedTags = body.containsKey('tags')
           ? ((body['tags'] as List?) ?? const []).cast<String>()
           : existing.tags;
-      final mergedSkin = body.containsKey('skin_types')
+      var mergedSkin = body.containsKey('skin_types')
           ? ((body['skin_types'] as List?) ?? const []).cast<String>()
           : existing.skinTypes;
+      // Same auto-default as create: empty skin_types on publish → "all".
+      if (mergedSkin.isEmpty) {
+        mergedSkin = const ['all'];
+        body['skin_types'] = mergedSkin;
+      }
       final metaError = _validateAdminProductMetadata(
           tags: mergedTags, skinTypes: mergedSkin);
       if (metaError != null) return metaError;
@@ -817,12 +826,9 @@ class AdminHandlers {
     required List<String> tags,
     required List<String> skinTypes,
   }) {
-    if (skinTypes.isEmpty) {
-      return jsonResponse(400, {
-        'error': 'missing_skin_types',
-        'message': 'Cannot publish: укажи хотя бы один skin_type (или "all").',
-      });
-    }
+    // Empty skin_types is no longer a hard error — feed-imported products
+    // with no `Тип кожи` from the source default to "all" silently in the
+    // caller, and the ranker treats missing data as a neutral signal.
     final badSkinTypes =
         skinTypes.where((s) => !knownSkinTypes.contains(s)).toList();
     if (badSkinTypes.isNotEmpty) {
@@ -832,15 +838,12 @@ class AdminHandlers {
         'allowed': knownSkinTypes.toList(),
       });
     }
-    final concernTags = tags.where(knownConcerns.contains).toList();
-    if (concernTags.isEmpty) {
-      return jsonResponse(400, {
-        'error': 'missing_concern_tag',
-        'message': 'Cannot publish: добавь минимум один тег-проблему '
-            'из канонического списка.',
-        'allowed_concerns': knownConcerns.toList(),
-      });
-    }
+    // Concern tags are also optional now — many cosmetic products are
+    // general-use (toners, gentle cleansers) and shouldn't be blocked from
+    // publishing just because we don't have a specific concern to file
+    // them under. They still rank neutrally in the matcher; the only
+    // validation we keep is "no junk tags" (caller filters against
+    // knownConcerns before persisting).
     return null;
   }
 
@@ -1150,9 +1153,15 @@ class AdminHandlers {
           tags: existing != null && existing.tags.isNotEmpty
               ? existing.tags
               : offer.derivedTags,
+          // Skin types: feed value when present, else default to 'all'.
+          // Most cosmetic products are universal — without this fallback
+          // every freshly imported draft fails the publish validator with
+          // missing_skin_types and admin has to retype the same chip.
           skinTypes: existing != null && existing.skinTypes.isNotEmpty
               ? existing.skinTypes
-              : offer.derivedSkinTypes,
+              : (offer.derivedSkinTypes.isNotEmpty
+                  ? offer.derivedSkinTypes
+                  : const ['all']),
           // `isActive` / `gentle` default to false in our model, so we
           // can't tell "admin set false" apart from "never touched".
           // Only fill from feed when the row is new; on re-import we
