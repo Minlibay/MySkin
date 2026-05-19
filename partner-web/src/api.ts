@@ -284,12 +284,27 @@ export const PRODUCT_KINDS: Array<{ id: string; label: string }> = [
 ];
 
 export const PRODUCT_TAGS: Array<{ id: string; label: string }> = [
-  { id: 'acne', label: 'Акне' },
+  { id: 'acne', label: 'Акне / прыщи' },
+  { id: 'blackheads', label: 'Чёрные точки' },
   { id: 'pih', label: 'Постакне' },
-  { id: 'aging', label: 'Anti-age' },
-  { id: 'dullness', label: 'Тусклость' },
-  { id: 'redness', label: 'Покраснения' },
+  { id: 'pores', label: 'Расширенные поры' },
+  { id: 'oiliness', label: 'Жирный блеск' },
+  { id: 'dryness', label: 'Сухость' },
   { id: 'dehydration', label: 'Обезвоженность' },
+  { id: 'redness', label: 'Покраснения' },
+  { id: 'rosacea', label: 'Розацеа / купероз' },
+  { id: 'sensitivity', label: 'Чувствительная кожа' },
+  { id: 'irritation', label: 'Раздражение' },
+  { id: 'aging', label: 'Признаки старения' },
+  { id: 'wrinkles', label: 'Морщины' },
+  { id: 'elasticity', label: 'Упругость и плотность' },
+  { id: 'dullness', label: 'Тусклый тон' },
+  { id: 'pigmentation', label: 'Пигментация' },
+  { id: 'texture', label: 'Неровный рельеф' },
+  { id: 'dark_circles', label: 'Круги под глазами' },
+  { id: 'puffiness', label: 'Отёчность' },
+  { id: 'barrier', label: 'Восстановление барьера' },
+  { id: 'post_procedure', label: 'После процедур' },
 ];
 
 export const SKIN_TYPES: Array<{ id: string; label: string }> = [

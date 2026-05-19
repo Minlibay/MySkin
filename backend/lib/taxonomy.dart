@@ -11,16 +11,34 @@ library;
 /// matching. Anything outside this set is dropped on scan ingest and
 /// rejected on partner product publish.
 const Set<String> knownConcerns = {
+  // Inflammatory / blemishes
   'acne',
+  'blackheads',
   'pih',
-  'redness',
-  'dehydration',
-  'dullness',
-  'aging',
-  'sensitivity',
+  'pores',
+  // Oil / hydration balance
   'oiliness',
   'dryness',
-  'pores',
+  'dehydration',
+  // Reactivity
+  'redness',
+  'rosacea',
+  'sensitivity',
+  'irritation',
+  // Aging
+  'aging',
+  'wrinkles',
+  'elasticity',
+  // Tone & texture
+  'dullness',
+  'pigmentation',
+  'texture',
+  // Eye area
+  'dark_circles',
+  'puffiness',
+  // Barrier
+  'barrier',
+  'post_procedure',
 };
 
 /// Skin types the matcher recognises. `all` means "fits any type".

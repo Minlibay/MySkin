@@ -220,11 +220,24 @@ class _Filters extends StatelessWidget {
 
   static const _concerns = [
     ('acne', 'Акне'),
+    ('blackheads', 'Чёрные точки'),
     ('pih', 'Постакне'),
-    ('aging', 'Anti-age'),
-    ('dullness', 'Сияние'),
-    ('redness', 'Покраснения'),
+    ('pores', 'Поры'),
+    ('oiliness', 'Жирность'),
+    ('dryness', 'Сухость'),
     ('dehydration', 'Увлажнение'),
+    ('redness', 'Покраснения'),
+    ('rosacea', 'Купероз'),
+    ('sensitivity', 'Чувствительность'),
+    ('aging', 'Anti-age'),
+    ('wrinkles', 'Морщины'),
+    ('elasticity', 'Упругость'),
+    ('dullness', 'Сияние'),
+    ('pigmentation', 'Пигментация'),
+    ('texture', 'Рельеф'),
+    ('dark_circles', 'Круги под глазами'),
+    ('puffiness', 'Отёчность'),
+    ('barrier', 'Барьер'),
   ];
 
   @override

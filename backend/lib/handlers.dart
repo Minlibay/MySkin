@@ -2160,7 +2160,7 @@ const _zoneInsightSystemPrompt = '''
 {
   "issue": "1–2 предложения о том, что происходит с зоной (по делу)",
   "remedies": ["1–3 ингредиента/действия, без брендов"],
-  "concern": "один из: acne | pih | aging | dullness | redness | dehydration"
+  "concern": "один из: acne | blackheads | pih | pores | oiliness | dryness | dehydration | redness | rosacea | sensitivity | aging | wrinkles | dullness | pigmentation | texture | dark_circles | puffiness | barrier"
 }
 
 issue — до 240 символов. Каждый remedy — до 100 символов.

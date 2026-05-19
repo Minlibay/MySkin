@@ -379,7 +379,7 @@ const visionScanSystemPrompt = '''
   "pores": 0,
   "zones": {"forehead": 0, "nose": 0, "left_cheek": 0, "right_cheek": 0, "chin": 0},
   "insight": "одна короткая фраза-вывод",
-  "concerns": ["acne", "dehydration", "redness", "pih", "dullness", "aging"],
+  "concerns": ["acne", "blackheads", "pih", "pores", "oiliness", "dryness", "dehydration", "redness", "rosacea", "sensitivity", "aging", "wrinkles", "dullness", "pigmentation", "texture", "dark_circles", "puffiness", "barrier"],
   "quality_warnings": [],
   "face": {
     "bbox": [x0, y0, x1, y1],
@@ -399,8 +399,14 @@ const visionScanSystemPrompt = '''
   pores — закрытость пор (выше = меньше видны)
 
 concerns — список тегов из строго фиксированного набора:
-acne, pih, redness, dehydration, dullness, aging, sensitivity, oiliness, dryness.
-Включай только то, что реально видно на фото.
+acne, blackheads, pih, pores, oiliness, dryness, dehydration,
+redness, rosacea, sensitivity, irritation,
+aging, wrinkles, elasticity,
+dullness, pigmentation, texture,
+dark_circles, puffiness,
+barrier, post_procedure.
+Включай только то, что реально видно на фото. Не выдумывай — лучше
+вернуть пустой массив, чем повесить тег "просто на всякий".
 
 quality_warnings — массив строк, если что-то мешает анализу
 ("no_face_detected", "too_dark", "too_blurry", "too_far"). Пустой массив — норм.
