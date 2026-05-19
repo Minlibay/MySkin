@@ -26,6 +26,7 @@ type ImportResult = {
   inserted: number;
   updated: number;
   skipped: number;
+  deleted_junk: number;
   total: number;
   photos_fetched: number;
   photos_failed: number;
@@ -239,7 +240,15 @@ export default function Feed() {
           <ul className="text-sm space-y-1 text-ink2">
             <li>Создано: {result.inserted}</li>
             <li>Обновлено (по external_id): {result.updated}</li>
-            <li>Пропущено: {result.skipped}</li>
+            <li>
+              Пропущено как не-skincare: {result.skipped}
+              {result.deleted_junk > 0 && (
+                <span className="text-warning">
+                  {' '}
+                  · удалено из предыдущих импортов: {result.deleted_junk}
+                </span>
+              )}
+            </li>
             <li>Всего в выбранных категориях: {result.total}</li>
             <li>
               Скачано фото: {result.photos_fetched}

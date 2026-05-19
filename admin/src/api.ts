@@ -312,6 +312,7 @@ export const api = {
       inserted: number;
       updated: number;
       skipped: number;
+      deleted_junk: number;
       total: number;
       photos_fetched: number;
       photos_failed: number;

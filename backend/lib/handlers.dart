@@ -1103,6 +1103,7 @@ class AdminHandlers {
     var inserted = 0;
     var updated = 0;
     var skipped = 0;
+    var deletedJunk = 0;
     var photosFetched = 0;
     var photosFailed = 0;
     final errors = <Map<String, String>>[];
@@ -1114,12 +1115,32 @@ class AdminHandlers {
         final categoryName =
             snap.categories[offer.categoryId]?.name ?? '';
         final productType = offer.params['Тип продукта'] ?? '';
-        final kind = guessKind(
-              categoryName,
-              offer.name,
-              productType: productType,
-            ) ??
-            'serum';
+        final guessedKind = guessKind(
+          categoryName,
+          offer.name,
+          productType: productType,
+        );
+
+        // Primary moderation gate: reject offers that aren't actually
+        // skincare. Two signals must agree for an offer to count as
+        // "wanted" — we need either a recognised kind from our taxonomy
+        // OR at least one concern tag derived from Назначение. Makeup
+        // brushes, pincettes and tool kits fail both (kind = null because
+        // productType is "кисти для макияжа" / "пинцеты", and Назначение
+        // is "для пудры/контуринга" which maps to nothing).
+        final hasUsableKind = guessedKind != null;
+        final hasConcernTags = offer.derivedTags.isNotEmpty;
+        if (!hasUsableKind && !hasConcernTags) {
+          skipped++;
+          if (existing != null) {
+            // Previously imported under the old, less-strict importer —
+            // delete so admins don't have to clean the catalog by hand.
+            await products.delete(existing.id);
+            deletedJunk++;
+          }
+          continue;
+        }
+        final kind = guessedKind ?? 'serum';
         // Derived flags for new products. Existing rows keep whatever the
         // admin already set — guards on each field below.
         final derivedActive = guessIsActive(offer.derivedIngredients);
@@ -1257,6 +1278,7 @@ class AdminHandlers {
       'inserted': inserted,
       'updated': updated,
       'skipped': skipped,
+      'deleted_junk': deletedJunk,
       'total': snap.offers.length,
       'photos_fetched': photosFetched,
       'photos_failed': photosFailed,

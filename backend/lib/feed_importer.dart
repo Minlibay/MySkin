@@ -439,9 +439,14 @@ const Set<String> knownConcernsLocal = {
 };
 
 /// Splits a free-form INCI composition string into individual ingredient
-/// tags. Mirrors the admin form's paste-shortcut so feed-imported INCI
-/// lists end up identical to manually pasted ones: comma / semicolon /
+/// tags. Mirrors the admin form's paste-shortcut: comma / semicolon /
 /// newline separators, trailing periods stripped, case-insensitive dedupe.
+///
+/// Also drops "label:value" style pieces — feed compositions for makeup
+/// brushes and tools look like "Ворс:натурон,премиальная коза.
+/// Феррул:латунь" which produces nonsense chips like "Ворс:натурон". Real
+/// INCI names never contain a colon, so any piece with one is a label
+/// pair, not an ingredient.
 List<String> _splitIngredients(String raw) {
   if (raw.trim().isEmpty) return const [];
   final seen = <String>{};
@@ -450,6 +455,8 @@ List<String> _splitIngredients(String raw) {
     var t = piece.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (t.endsWith('.')) t = t.substring(0, t.length - 1).trim();
     if (t.isEmpty) continue;
+    if (t.contains(':')) continue; // label:value, not an ingredient
+    if (t.length > 80) continue; // descriptive sentence, not an INCI name
     final key = t.toLowerCase();
     if (seen.add(key)) out.add(t);
   }
