@@ -43,6 +43,7 @@ class FeedOffer {
     this.params = const {},
     this.derivedTags = const [],
     this.derivedSkinTypes = const [],
+    this.derivedIngredients = const [],
   });
 
   final String externalId;
@@ -64,6 +65,10 @@ class FeedOffer {
   final List<String> derivedTags;
   /// Skin types derived from `Тип кожи` ('all' / 'sensitive' when present).
   final List<String> derivedSkinTypes;
+  /// INCI tags split out of the `Состав` param. Feed compositions are
+  /// already comma-separated, so we just normalise to one ingredient per
+  /// chip and let the admin curate.
+  final List<String> derivedIngredients;
 }
 
 /// Top-level parsed feed view returned by [parseFeed] / [previewFeed].
@@ -139,6 +144,8 @@ FeedSnapshot parseFeed(String xml, {Set<String>? onlyCategoryIds}) {
     final skinTypeRaw = paramMap['Тип кожи'] ?? '';
     final derivedTags = _derivedTags(purpose, skinTypeRaw);
     final derivedSkin = _derivedSkinTypes(skinTypeRaw);
+    final derivedIngredients =
+        _splitIngredients(paramMap['Состав'] ?? '');
 
     offers.add(FeedOffer(
       externalId: externalId,
@@ -151,7 +158,12 @@ FeedSnapshot parseFeed(String xml, {Set<String>? onlyCategoryIds}) {
         paramMap['Описание товара'],
         _childText(o, 'description'),
       ]).maybeCleanHtml(),
-      composition: _firstNonEmpty([paramMap['Состав']]).maybeCleanHtml(),
+      // We deliberately leave the long-form `composition` empty when the
+      // feed only carries an INCI list — that list belongs in
+      // `ingredients` (chip tags), not the "О составе" prose block. The
+      // long-form field stays available for admins to fill in editorial
+      // notes about the formulation.
+      composition: null,
       // Feed key is "Как использовать" — earlier guesses ("Применение")
       // never matched, so usage stayed empty. We also accept the
       // alternative names some partner feeds use.
@@ -178,6 +190,7 @@ FeedSnapshot parseFeed(String xml, {Set<String>? onlyCategoryIds}) {
       params: paramMap,
       derivedTags: derivedTags,
       derivedSkinTypes: derivedSkin,
+      derivedIngredients: derivedIngredients,
     ));
   }
 
@@ -267,6 +280,24 @@ const Set<String> knownConcernsLocal = {
   'dark_circles', 'puffiness',
   'barrier', 'post_procedure',
 };
+
+/// Splits a free-form INCI composition string into individual ingredient
+/// tags. Mirrors the admin form's paste-shortcut so feed-imported INCI
+/// lists end up identical to manually pasted ones: comma / semicolon /
+/// newline separators, trailing periods stripped, case-insensitive dedupe.
+List<String> _splitIngredients(String raw) {
+  if (raw.trim().isEmpty) return const [];
+  final seen = <String>{};
+  final out = <String>[];
+  for (final piece in raw.split(RegExp(r'[,;\n]+'))) {
+    var t = piece.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (t.endsWith('.')) t = t.substring(0, t.length - 1).trim();
+    if (t.isEmpty) continue;
+    final key = t.toLowerCase();
+    if (seen.add(key)) out.add(t);
+  }
+  return out;
+}
 
 List<String> _derivedSkinTypes(String raw) {
   final hay = raw.toLowerCase();

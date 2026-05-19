@@ -1119,7 +1119,12 @@ class AdminHandlers {
           description: offer.description ?? '',
           priceRub: offer.priceRub,
           accentColor: existing?.accentColor ?? '#D98FA3',
-          ingredients: existing?.ingredients ?? const [],
+          // Composition string from the feed is split into individual INCI
+          // chips (admin paste-shortcut format). Existing curated lists
+          // win — never overwrite manual edits on re-import.
+          ingredients: existing != null && existing.ingredients.isNotEmpty
+              ? existing.ingredients
+              : offer.derivedIngredients,
           // Derived concern tags only fill the empty-tags case — once admin
           // curates them manually, we never overwrite.
           tags: existing != null && existing.tags.isNotEmpty
