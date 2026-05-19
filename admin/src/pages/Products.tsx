@@ -2,31 +2,50 @@ import { useEffect, useState } from 'react';
 import { AdminProduct, PRODUCT_KINDS, api } from '../api';
 import ProductForm, { ProductFormResult } from '../components/ProductForm';
 
+const PAGE_SIZE = 50;
+
 export default function Products() {
   const [items, setItems] = useState<AdminProduct[]>([]);
+  const [total, setTotal] = useState(0);
+  const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(false);
   const [q, setQ] = useState('');
   const [kind, setKind] = useState<string>('');
   const [editing, setEditing] = useState<AdminProduct | null>(null);
   const [creating, setCreating] = useState(false);
 
-  async function load() {
+  async function load(opts: { resetPage?: boolean; gotoOffset?: number } = {}) {
+    const targetOffset =
+      opts.gotoOffset != null
+        ? opts.gotoOffset
+        : opts.resetPage
+        ? 0
+        : offset;
     setLoading(true);
     try {
       const r = await api.productList({
         q: q || undefined,
         kind: kind || undefined,
+        limit: PAGE_SIZE,
+        offset: targetOffset,
       });
       setItems(r.items);
+      setTotal(r.total);
+      setOffset(r.offset);
     } finally {
       setLoading(false);
     }
   }
 
   useEffect(() => {
-    load();
+    load({ resetPage: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const pageStart = total === 0 ? 0 : offset + 1;
+  const pageEnd = Math.min(offset + items.length, total);
+  const canPrev = offset > 0;
+  const canNext = offset + PAGE_SIZE < total;
 
   async function uploadPhotoIfAny(
     id: string,
@@ -56,11 +75,10 @@ export default function Products() {
     const created = await api.productCreate(r.input);
     await uploadPhotoIfAny(created.id, r.photo);
     await syncExtraPhotos(created.id, r.extraPhotos);
-    setItems((arr) => [
-      { ...created, has_photo: !!r.photo || created.has_photo },
-      ...arr,
-    ]);
     setCreating(false);
+    // Reload so the new product lands wherever the brand-name sort puts
+    // it and the total count stays accurate.
+    await load({ resetPage: true });
   }
 
   async function onUpdate(r: ProductFormResult) {
@@ -84,7 +102,9 @@ export default function Products() {
   async function onDelete(p: AdminProduct) {
     if (!confirm(`Удалить «${p.name}»?`)) return;
     await api.productDelete(p.id);
-    setItems((arr) => arr.filter((x) => x.id !== p.id));
+    // Reload current page so total / pagination stays consistent (and a
+    // freed slot at the bottom backfills from the next page).
+    await load();
   }
 
   return (
@@ -95,6 +115,12 @@ export default function Products() {
           <h1 className="font-serif text-4xl">
             Все <span className="italic text-rose">продукты</span>
           </h1>
+          <div className="text-sm text-ink2 mt-2">
+            Всего в каталоге: <b>{total}</b>
+            {(q || kind) && total > 0 && (
+              <span> · показано {pageStart}–{pageEnd}</span>
+            )}
+          </div>
         </div>
         <button onClick={() => setCreating(true)} className="btn-primary">
           + Новый продукт
@@ -108,7 +134,7 @@ export default function Products() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') load();
+            if (e.key === 'Enter') load({ resetPage: true });
           }}
         />
         <select
@@ -116,7 +142,7 @@ export default function Products() {
           value={kind}
           onChange={(e) => {
             setKind(e.target.value);
-            setTimeout(load, 0);
+            setTimeout(() => load({ resetPage: true }), 0);
           }}
         >
           <option value="">Все типы</option>
@@ -126,7 +152,11 @@ export default function Products() {
             </option>
           ))}
         </select>
-        <button className="btn-ghost" onClick={load} disabled={loading}>
+        <button
+          className="btn-ghost"
+          onClick={() => load({ resetPage: true })}
+          disabled={loading}
+        >
           Найти
         </button>
       </div>
@@ -245,6 +275,36 @@ export default function Products() {
           </tbody>
         </table>
       </div>
+
+      {total > 0 && (
+        <div className="flex items-center justify-between mt-4 text-sm">
+          <div className="text-ink2">
+            Показано <b>{pageStart}–{pageEnd}</b> из <b>{total}</b>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="btn-ghost h-9 px-3 text-xs"
+              disabled={!canPrev || loading}
+              onClick={() =>
+                load({ gotoOffset: Math.max(0, offset - PAGE_SIZE) })
+              }
+            >
+              ← Назад
+            </button>
+            <span className="text-ink2 text-xs px-2">
+              Страница {Math.floor(offset / PAGE_SIZE) + 1} из{' '}
+              {Math.max(1, Math.ceil(total / PAGE_SIZE))}
+            </span>
+            <button
+              className="btn-ghost h-9 px-3 text-xs"
+              disabled={!canNext || loading}
+              onClick={() => load({ gotoOffset: offset + PAGE_SIZE })}
+            >
+              Вперёд →
+            </button>
+          </div>
+        </div>
+      )}
 
       {(creating || editing) && (
         <ProductForm

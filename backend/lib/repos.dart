@@ -1340,6 +1340,56 @@ class ProductRepository {
     return rows.map(ProductRow.fromRow).toList();
   }
 
+  /// Counts rows that would be returned by `list()` with the same filters,
+  /// ignoring limit/offset. Used to drive admin-side pagination ("1–60 of
+  /// 802") without re-running the full query.
+  Future<int> count({
+    String? kind,
+    String? concern,
+    String? query,
+    String? status,
+    String? moderationStatus,
+    String? submittedByPartnerId,
+    bool publicCatalogOnly = false,
+  }) async {
+    final params = <String, dynamic>{};
+    final where = <String>[];
+    if (kind != null && kind.isNotEmpty) {
+      where.add('kind = @kind');
+      params['kind'] = kind;
+    }
+    if (concern != null && concern.isNotEmpty) {
+      where.add('tags @> @concern::jsonb');
+      params['concern'] = jsonEncode([concern]);
+    }
+    if (query != null && query.trim().isNotEmpty) {
+      where.add('(name ILIKE @q OR brand ILIKE @q)');
+      params['q'] = '%${query.trim()}%';
+    }
+    if (status != null && status.isNotEmpty) {
+      where.add('status = @status');
+      params['status'] = status;
+    }
+    if (moderationStatus != null && moderationStatus.isNotEmpty) {
+      where.add('moderation_status = @mstatus');
+      params['mstatus'] = moderationStatus;
+    }
+    if (submittedByPartnerId != null && submittedByPartnerId.isNotEmpty) {
+      where.add('submitted_by_partner_id = @partner');
+      params['partner'] = submittedByPartnerId;
+    }
+    if (publicCatalogOnly) {
+      where.add("status = 'published'");
+      where.add("moderation_status = 'approved'");
+    }
+    final clause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
+    final r = await db.execute(
+      Sql.named('SELECT COUNT(*)::int FROM products $clause'),
+      parameters: params,
+    );
+    return (r.first[0] as int?) ?? 0;
+  }
+
   /// Create a new product on behalf of a partner. Lands in the moderation
   /// queue (`moderation_status='pending'`) and `status='draft'` so the
   /// mobile catalog never sees it before admin sign-off.

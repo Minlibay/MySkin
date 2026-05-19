@@ -96,14 +96,26 @@ export const api = {
     );
   },
 
-  productList(params: { q?: string; kind?: string } = {}) {
+  productList(
+    params: {
+      q?: string;
+      kind?: string;
+      limit?: number;
+      offset?: number;
+    } = {}
+  ) {
     const qs = new URLSearchParams();
     if (params.q) qs.set('q', params.q);
     if (params.kind) qs.set('kind', params.kind);
+    if (params.limit != null) qs.set('limit', String(params.limit));
+    if (params.offset != null) qs.set('offset', String(params.offset));
     const suffix = qs.toString() ? `?${qs.toString()}` : '';
-    return this.request<{ items: AdminProduct[] }>(
-      `/admin/products${suffix}`
-    );
+    return this.request<{
+      items: AdminProduct[];
+      total: number;
+      limit: number;
+      offset: number;
+    }>(`/admin/products${suffix}`);
   },
 
   productCreate(input: ProductInput) {

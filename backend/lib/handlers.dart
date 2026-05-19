@@ -652,19 +652,31 @@ class AdminHandlers {
 
   Future<Response> _listProducts(Request req) async {
     final qp = req.url.queryParameters;
+    final limit = (int.tryParse(qp['limit'] ?? '') ?? 60).clamp(1, 500);
+    final offset = (int.tryParse(qp['offset'] ?? '') ?? 0).clamp(0, 1 << 30);
     final items = await products.list(
       kind: qp['kind'],
       query: qp['q'],
       moderationStatus: qp['moderation_status'],
-      limit: int.tryParse(qp['limit'] ?? '') ?? 200,
-      offset: int.tryParse(qp['offset'] ?? '') ?? 0,
+      limit: limit,
+      offset: offset,
+    );
+    final total = await products.count(
+      kind: qp['kind'],
+      query: qp['q'],
+      moderationStatus: qp['moderation_status'],
     );
     final enriched = <Map<String, dynamic>>[];
     for (final p in items) {
       final slots = await products.photoSlots(p.id);
       enriched.add({...p.toJson(), 'photo_slots': slots});
     }
-    return jsonResponse(200, {'items': enriched});
+    return jsonResponse(200, {
+      'items': enriched,
+      'total': total,
+      'limit': limit,
+      'offset': offset,
+    });
   }
 
   Future<Response> _createProduct(Request req) async {
