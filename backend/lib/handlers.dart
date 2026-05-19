@@ -2751,6 +2751,10 @@ class CatalogHandlers {
 
   Future<Response> _list(Request req, UserRow user) async {
     final qp = req.url.queryParameters;
+    // Default limit bumped to 500 so the personalised re-ranking below sees
+    // the whole catalog, not just the first 60 by brand/name.
+    final limit = int.tryParse(qp['limit'] ?? '') ?? 500;
+    final offset = int.tryParse(qp['offset'] ?? '') ?? 0;
     final items = await products.list(
       kind: qp['kind'],
       concern: qp['concern'],
@@ -2758,25 +2762,43 @@ class CatalogHandlers {
       // Mobile catalog must only show items that are both published AND
       // moderation-approved. Backed by index `products_moderation_status_idx`.
       publicCatalogOnly: true,
-      limit: int.tryParse(qp['limit'] ?? '') ?? 60,
-      offset: int.tryParse(qp['offset'] ?? '') ?? 0,
+      limit: limit,
+      offset: offset,
     );
     final profile = await profiles.get(user.id) ?? <String, dynamic>{};
     final scan = await _scanForMatch(user.id);
     // Single fetch of all favourite ids → O(1) membership check per row, no
     // n+1 query as we walk the catalog list.
     final favIds = (await favorites.listIds(user.id)).toSet();
+    final scored = items.map((p) {
+      final m = computeMatch(profile: profile, product: p, scan: scan);
+      return (p: p, m: m);
+    }).toList();
+    // Personalised rank: blocked rows sink to the bottom, then reliable
+    // matches (confidence ≥ 40) come before low-confidence ones, then by
+    // score desc, confidence desc. List sort is stable, so within a tier we
+    // keep the brand/name order from the DB.
+    scored.sort((a, b) {
+      final ab = a.m.blocked ? 1 : 0;
+      final bb = b.m.blocked ? 1 : 0;
+      if (ab != bb) return ab - bb;
+      final ar = (a.m.confidence) >= 40 ? 0 : 1;
+      final br = (b.m.confidence) >= 40 ? 0 : 1;
+      if (ar != br) return ar - br;
+      final byScore = b.m.score.compareTo(a.m.score);
+      if (byScore != 0) return byScore;
+      return b.m.confidence.compareTo(a.m.confidence);
+    });
     return jsonResponse(200, {
-      'items': items.map((p) {
-        final m = computeMatch(profile: profile, product: p, scan: scan);
+      'items': scored.map((e) {
         return {
-          ...p.toJson(),
-          'match_score': m.score,
-          'match_confidence': m.confidence,
-          'match_reasons': m.reasons,
-          'match_warnings': m.warnings,
-          'match_blocked': m.blocked,
-          'is_favorite': favIds.contains(p.id),
+          ...e.p.toJson(),
+          'match_score': e.m.score,
+          'match_confidence': e.m.confidence,
+          'match_reasons': e.m.reasons,
+          'match_warnings': e.m.warnings,
+          'match_blocked': e.m.blocked,
+          'is_favorite': favIds.contains(e.p.id),
         };
       }).toList(),
     });
