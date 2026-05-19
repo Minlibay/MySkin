@@ -1088,6 +1088,8 @@ class AdminHandlers {
     var inserted = 0;
     var updated = 0;
     var skipped = 0;
+    var photosFetched = 0;
+    var photosFailed = 0;
     final errors = <Map<String, String>>[];
 
     for (final offer in snap.offers) {
@@ -1135,6 +1137,43 @@ class AdminHandlers {
         } else {
           updated++;
         }
+
+        // Pull up to 4 pictures into product photo slots. We skip the
+        // fetch for products that already have a photo on this slot from
+        // a previous run (no clobbering admin-uploaded shots). Per-offer
+        // photos run in parallel; the for-each loop above stays sequential
+        // so total concurrency tops out at 4 image fetches at a time.
+        final existingSlots =
+            existing == null ? <int>{} : (await products.photoSlots(p.id)).toSet();
+        final fetches = <Future<void>>[];
+        for (var i = 0;
+            i < offer.pictures.length && i < 4;
+            i++) {
+          final slot = i + 1;
+          if (existingSlots.contains(slot)) continue;
+          final url = offer.pictures[i];
+          fetches.add(() async {
+            final pic = await _fetchPicture(url);
+            if (pic == null) {
+              photosFailed++;
+              return;
+            }
+            try {
+              await products.setPhoto(
+                id: p.id,
+                bytes: pic.bytes,
+                mime: pic.mime,
+                slot: slot,
+              );
+              photosFetched++;
+            } catch (e) {
+              photosFailed++;
+              stderr.writeln(
+                  'Feed import: photo save failed for ${p.id} slot $slot: $e');
+            }
+          }());
+        }
+        if (fetches.isNotEmpty) await Future.wait(fetches);
       } catch (e) {
         skipped++;
         if (errors.length < 20) {
@@ -1152,8 +1191,40 @@ class AdminHandlers {
       'updated': updated,
       'skipped': skipped,
       'total': snap.offers.length,
+      'photos_fetched': photosFetched,
+      'photos_failed': photosFailed,
       if (errors.isNotEmpty) 'errors': errors,
     });
+  }
+
+  /// Downloads one image from the feed's picture URL. Returns null on any
+  /// failure (timeout, non-200, suspicious size, unreadable). MIME is
+  /// derived from the response header, falling back to the URL extension.
+  Future<({List<int> bytes, String mime})?> _fetchPicture(String url) async {
+    try {
+      final resp = await http
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 15));
+      if (resp.statusCode != 200) return null;
+      if (resp.bodyBytes.isEmpty) return null;
+      if (resp.bodyBytes.length > 6 * 1024 * 1024) return null;
+      var mime = resp.headers['content-type']?.split(';').first.trim() ?? '';
+      if (mime.isEmpty || !mime.startsWith('image/')) {
+        final lower = url.toLowerCase();
+        if (lower.endsWith('.png')) {
+          mime = 'image/png';
+        } else if (lower.endsWith('.webp')) {
+          mime = 'image/webp';
+        } else if (lower.endsWith('.avif')) {
+          mime = 'image/avif';
+        } else {
+          mime = 'image/jpeg';
+        }
+      }
+      return (bytes: resp.bodyBytes, mime: mime);
+    } catch (_) {
+      return null;
+    }
   }
 
   /// HTTP GET the feed body. Feed URLs may briefly return HTTP 425 "feed

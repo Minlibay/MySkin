@@ -27,6 +27,8 @@ type ImportResult = {
   updated: number;
   skipped: number;
   total: number;
+  photos_fetched: number;
+  photos_failed: number;
   errors?: Array<{ external_id: string; error: string }>;
 };
 
@@ -239,6 +241,15 @@ export default function Feed() {
             <li>Обновлено (по external_id): {result.updated}</li>
             <li>Пропущено: {result.skipped}</li>
             <li>Всего в выбранных категориях: {result.total}</li>
+            <li>
+              Скачано фото: {result.photos_fetched}
+              {result.photos_failed > 0 && (
+                <span className="text-warning">
+                  {' '}
+                  · не удалось: {result.photos_failed}
+                </span>
+              )}
+            </li>
           </ul>
           {result.errors && result.errors.length > 0 && (
             <details className="mt-4">

@@ -9,7 +9,16 @@
 
 api.xn--80allhkb1j.xn--p1ai {
     encode zstd gzip
-    reverse_proxy backend:8080
+    reverse_proxy backend:8080 {
+        # Feed-import requests can take 5+ minutes when the backend pulls
+        # hundreds of product photos in parallel — default 30s read timeout
+        # would kill the response mid-flight. Override only the read side;
+        # connect/write stay snappy.
+        transport http {
+            read_timeout 15m
+            response_header_timeout 15m
+        }
+    }
     request_body {
         # Photos can be up to ~6MB after base64 inflation.
         max_size 10MB

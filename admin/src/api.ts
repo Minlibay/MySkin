@@ -301,6 +301,8 @@ export const api = {
       updated: number;
       skipped: number;
       total: number;
+      photos_fetched: number;
+      photos_failed: number;
       errors?: Array<{ external_id: string; error: string }>;
     }>('/admin/feed/import', {
       method: 'POST',
