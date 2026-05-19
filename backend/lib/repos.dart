@@ -1772,17 +1772,22 @@ class ProductRepository {
   }
 
   Future<void> upsert(ProductRow p) async {
+    // products.brand_id has been NOT NULL since migration 017_partners.
+    // Resolve (or auto-create) the brand row matching p.brand before the
+    // insert so admin-flow creates don't violate the FK. Brand creation
+    // here is idempotent — CITEXT-unique name handles concurrent races.
+    final brandId = await _resolveBrandId(p.brand);
     await db.execute(
       Sql.named('''
         INSERT INTO products (
           id, slug, brand, name, kind, description, price_rub, accent_color,
           ingredients, tags, skin_types, is_active_ingredient, gentle,
           routine_phase, status, buy_url, composition, precautions,
-          usage_instructions, extra_info
+          usage_instructions, extra_info, brand_id
         ) VALUES (
           @id, @slug, @brand, @name, @kind, @desc, @price, @ac,
           @ing::jsonb, @tags::jsonb, @st::jsonb, @ai, @g, @rp, @status,
-          @buy_url, @comp, @prec, @use, @extra
+          @buy_url, @comp, @prec, @use, @extra, @brand_id
         )
         ON CONFLICT (slug) DO UPDATE SET
           brand = EXCLUDED.brand, name = EXCLUDED.name, kind = EXCLUDED.kind,
@@ -1795,7 +1800,8 @@ class ProductRepository {
           composition = EXCLUDED.composition,
           precautions = EXCLUDED.precautions,
           usage_instructions = EXCLUDED.usage_instructions,
-          extra_info = EXCLUDED.extra_info
+          extra_info = EXCLUDED.extra_info,
+          brand_id = EXCLUDED.brand_id
       '''),
       parameters: {
         'id': p.id,
@@ -1818,8 +1824,43 @@ class ProductRepository {
         'prec': p.precautions,
         'use': p.usage,
         'extra': p.extraInfo,
+        'brand_id': brandId,
       },
     );
+  }
+
+  /// Looks up `brands.id` by case-insensitive name (CITEXT column). If the
+  /// brand doesn't exist yet, creates it as `approved` so admin-created
+  /// products go live immediately. Returns the brand's UUID.
+  Future<String> _resolveBrandId(String brandName) async {
+    final found = await db.execute(
+      Sql.named('SELECT id FROM brands WHERE name = @n LIMIT 1'),
+      parameters: {'n': brandName},
+    );
+    if (found.isNotEmpty) return found.first[0] as String;
+    final id = _uuid.v4();
+    final slug = brandName
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9]+'), '-')
+        .replaceAll(RegExp(r'^-+|-+$'), '');
+    try {
+      await db.execute(
+        Sql.named('''
+          INSERT INTO brands (id, name, slug, status)
+          VALUES (@id, @n, @s, 'approved')
+        '''),
+        parameters: {'id': id, 'n': brandName, 's': slug.isEmpty ? id : slug},
+      );
+      return id;
+    } on ServerException catch (e) {
+      if (e.code != '23505') rethrow;
+      // Race lost — another writer just created the same brand. Re-fetch.
+      final r = await db.execute(
+        Sql.named('SELECT id FROM brands WHERE name = @n LIMIT 1'),
+        parameters: {'n': brandName},
+      );
+      return r.first[0] as String;
+    }
   }
 }
 
