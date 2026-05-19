@@ -107,6 +107,28 @@ export default function Products() {
     await load();
   }
 
+  const [publishing, setPublishing] = useState(false);
+  async function onPublishAllDrafts() {
+    if (
+      !confirm(
+        'Опубликовать ВСЕ черновики в каталоге?\n\n' +
+          'Пустые "Подходит для типов кожи" автоматически станут "Все типы".'
+      )
+    ) {
+      return;
+    }
+    setPublishing(true);
+    try {
+      const r = await api.publishAllDrafts();
+      alert(`Опубликовано: ${r.published} товаров.`);
+      await load();
+    } catch (e) {
+      alert(`Не удалось опубликовать: ${e}`);
+    } finally {
+      setPublishing(false);
+    }
+  }
+
   return (
     <div>
       <div className="flex items-end justify-between mb-6">
@@ -122,9 +144,19 @@ export default function Products() {
             )}
           </div>
         </div>
-        <button onClick={() => setCreating(true)} className="btn-primary">
-          + Новый продукт
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onPublishAllDrafts}
+            className="btn-ghost"
+            disabled={publishing || loading}
+            title="Опубликовать все черновики в каталоге"
+          >
+            {publishing ? 'Публикуем…' : '● Опубликовать черновики'}
+          </button>
+          <button onClick={() => setCreating(true)} className="btn-primary">
+            + Новый продукт
+          </button>
+        </div>
       </div>
 
       <div className="flex gap-3 mb-4">

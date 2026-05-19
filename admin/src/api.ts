@@ -118,6 +118,13 @@ export const api = {
     }>(`/admin/products${suffix}`);
   },
 
+  publishAllDrafts() {
+    return this.request<{ ok: boolean; published: number }>(
+      '/admin/products/publish-drafts',
+      { method: 'POST' }
+    );
+  },
+
   productCreate(input: ProductInput) {
     return this.request<AdminProduct>('/admin/products', {
       method: 'POST',

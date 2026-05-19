@@ -1766,6 +1766,25 @@ class ProductRepository {
     );
   }
 
+  /// Mass-publish: flips every draft to `published` and backfills empty
+  /// `skin_types` with `['all']` so the publish-validator's softened rule
+  /// (no-skintypes → all) is consistent on bulk and per-row flows. Returns
+  /// the count of rows affected.
+  Future<int> publishAllDrafts() async {
+    final r = await db.execute(
+      Sql.named('''
+        UPDATE products
+          SET status = 'published',
+              skin_types = CASE
+                WHEN jsonb_array_length(skin_types) = 0 THEN '["all"]'::jsonb
+                ELSE skin_types
+              END
+          WHERE status = 'draft'
+      '''),
+    );
+    return r.affectedRows;
+  }
+
   /// Patch only the fields that are present in [patch]. Returns the new row.
   Future<ProductRow?> update(String id, Map<String, dynamic> patch) async {
     final existing = await findById(id);

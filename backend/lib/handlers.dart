@@ -378,6 +378,9 @@ class AdminHandlers {
     // Feed import (advcake / Golden Apple etc)
     ..post('/admin/feed/preview', _withAdmin(_feedPreview))
     ..post('/admin/feed/import', _withAdmin(_feedImport))
+    // Bulk publish: flips all current drafts to `published`
+    ..post('/admin/products/publish-drafts',
+        _withAdmin(_publishAllDrafts))
     // Self-service password change
     ..post('/admin/change-password', _withAdmin(_changeOwnPassword));
 
@@ -1314,6 +1317,16 @@ class AdminHandlers {
     } catch (_) {
       return null;
     }
+  }
+
+  /// Bulk-flips every draft to `published`. Used after a feed import
+  /// when the admin has reviewed the new rows and wants them live in one
+  /// click instead of editing each card. Empty skin_types backfill to
+  /// `['all']` inside the SQL so the bulk path matches the per-row
+  /// validator behaviour.
+  Future<Response> _publishAllDrafts(Request req) async {
+    final n = await products.publishAllDrafts();
+    return jsonResponse(200, {'ok': true, 'published': n});
   }
 
   /// HTTP GET the feed body. Feed URLs may briefly return HTTP 425 "feed
