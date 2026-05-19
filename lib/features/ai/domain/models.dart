@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../../catalog/domain/product.dart';
+
 class SkinProfile {
   const SkinProfile({
     this.name,
@@ -84,17 +86,45 @@ class RoutineStep {
     required this.title,
     required this.ingredients,
     required this.explanation,
+    this.kind,
+    this.product,
+    this.recommendation,
   });
 
   final String title;
   final List<String> ingredients;
   final String explanation;
 
-  factory RoutineStep.fromJson(Map<String, dynamic> j) => RoutineStep(
-        title: j['title'] as String? ?? j['step'] as String? ?? '',
-        ingredients: (j['ingredients'] as List?)?.cast<String>() ?? const [],
-        explanation: j['explanation'] as String? ?? '',
-      );
+  /// Canonical product `kind` the backend inferred for this step
+  /// (cleanser/serum/moisturizer/…). Null when the title didn't match.
+  final String? kind;
+
+  /// Concrete product from the user's shelf that fulfils this step.
+  final Product? product;
+
+  /// Personalised top-1 catalog match for this kind, sent only when the
+  /// shelf doesn't already cover this step. Drives the "Купить" CTA.
+  final Product? recommendation;
+
+  factory RoutineStep.fromJson(Map<String, dynamic> j) {
+    Product? parseProd(dynamic v) {
+      if (v is! Map<String, dynamic>) return null;
+      try {
+        return Product.fromJson(v);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    return RoutineStep(
+      title: j['title'] as String? ?? j['step'] as String? ?? '',
+      ingredients: (j['ingredients'] as List?)?.cast<String>() ?? const [],
+      explanation: j['explanation'] as String? ?? '',
+      kind: j['kind'] as String?,
+      product: parseProd(j['product']),
+      recommendation: parseProd(j['recommendation']),
+    );
+  }
 }
 
 class RoutineResult {

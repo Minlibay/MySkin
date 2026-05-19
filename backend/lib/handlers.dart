@@ -1726,7 +1726,90 @@ class AiHandlers {
         systemPrompt: standardSystemPrompt,
         userMessage: userMsg.toString(),
       );
-      return jsonResponse(200, parseJsonReply(raw));
+      final parsed = parseJsonReply(raw);
+
+      // Bind each step to a real product so the quick-recommend screen shows
+      // a bottle the user can buy (or already owns), not just an ingredient
+      // pill list. Shelf-have wins over a catalog recommendation when both
+      // would fit.
+      try {
+        Map<String, dynamic>? scanForMatch;
+        try {
+          final s = await scans.listForUser(user.id, limit: 1);
+          if (s.isNotEmpty) {
+            scanForMatch = {
+              'hydration': s.first.hydration,
+              'sebum': s.first.sebum,
+              'tone': s.first.tone,
+              'pores': s.first.pores,
+              'concerns': s.first.concerns,
+            };
+          }
+        } catch (_) {/* tolerate scan miss */}
+
+        // Build shelf index keyed by phase + kind, same shape the binder
+        // expects. Custom products belong to both phases (no phase metadata).
+        final shelfByKind =
+            <String, Map<String, List<Map<String, dynamic>>>>{
+          'morning': {},
+          'evening': {},
+        };
+        void indexShelf(String phase, Map<String, dynamic> json) {
+          final k = (json['kind'] as String? ?? '').toLowerCase();
+          if (k.isEmpty) return;
+          (shelfByKind[phase] ??= {}).putIfAbsent(k, () => []).add(json);
+        }
+        try {
+          final shelfItems = await shelf.list(user.id);
+          for (final it in shelfItems) {
+            if (it.status != 'have') continue;
+            final json = {...it.product.toJson(), 'is_custom': false};
+            final phase = it.product.routinePhase.toLowerCase();
+            if (phase == 'morning' || phase == 'any' || phase.isEmpty) {
+              indexShelf('morning', json);
+            }
+            if (phase == 'evening' || phase == 'any' || phase.isEmpty) {
+              indexShelf('evening', json);
+            }
+          }
+        } catch (e) {
+          stderr.writeln('generate shelf fetch failed: $e');
+        }
+
+        final binder = _RoutineProductBinder(
+          products: products,
+          profile: profile,
+          scan: scanForMatch,
+        );
+
+        List<Map<String, dynamic>> coerce(dynamic v) {
+          if (v is! List) return const [];
+          return [
+            for (final e in v)
+              if (e is Map<String, dynamic>) e,
+          ];
+        }
+
+        // The AI may use either `morning`/`evening` or the legacy
+        // `morning_routine`/`evening_routine` keys — match the same fall-back
+        // order RoutineResult.fromJson uses on the client.
+        final morningKey =
+            parsed['morning_routine'] is List ? 'morning_routine' : 'morning';
+        final eveningKey =
+            parsed['evening_routine'] is List ? 'evening_routine' : 'evening';
+        final morning = coerce(parsed[morningKey]);
+        final evening = coerce(parsed[eveningKey]);
+        await binder.bindSteps(morning,
+            shelfByKind: shelfByKind['morning']);
+        await binder.bindSteps(evening,
+            shelfByKind: shelfByKind['evening']);
+        parsed[morningKey] = morning;
+        parsed[eveningKey] = evening;
+      } catch (e) {
+        stderr.writeln('generate step binding failed: $e');
+      }
+
+      return jsonResponse(200, parsed);
     } on AiException catch (e) {
       stderr.writeln('GigaChat /generate failed: $e');
       return jsonResponse(502, {'error': 'ai_failed', 'message': e.message});
@@ -2145,6 +2228,91 @@ class AiHandlers {
       return jsonResponse(502, {'error': 'ai_failed', 'message': e.message});
     } on FormatException catch (e) {
       return jsonResponse(502, {'error': 'ai_bad_json', 'message': '$e'});
+    }
+  }
+}
+
+/// Detect the canonical product `kind` for a routine step using the same
+/// Russian keyword regexes as the chat intent detector. Looks at title and
+/// explanation — ingredient lists alone are too noisy ("вода, глицерин"
+/// matches everything).
+String? _kindForRoutineStep(Map<String, dynamic> step) {
+  final text = [
+    step['title'] as String? ?? step['step'] as String? ?? '',
+    step['explanation'] as String? ?? '',
+  ].join(' ').toLowerCase().replaceAll('ё', 'е');
+  if (text.trim().isEmpty) return null;
+  for (final e in _kindPatterns.entries) {
+    if (e.value.hasMatch(text)) return e.key;
+  }
+  return null;
+}
+
+/// Walks the AI-generated routine and attaches a real product to every step
+/// it can: prefers an item the user already owns (shelf, status='have', same
+/// phase), falls back to the personalised top-1 from the catalog when the
+/// shelf doesn't cover this `kind`. Recommendation lookups are cached per
+/// kind so a morning+evening routine with the same step doesn't double-query.
+class _RoutineProductBinder {
+  _RoutineProductBinder({
+    required this.products,
+    required this.profile,
+    this.scan,
+  });
+
+  final ProductRepository products;
+  final Map<String, dynamic> profile;
+  final Map<String, dynamic>? scan;
+
+  final Map<String, Map<String, dynamic>?> _cache = {};
+
+  Future<Map<String, dynamic>?> recommendForKind(String kind) async {
+    if (_cache.containsKey(kind)) return _cache[kind];
+    try {
+      final rows = await products.list(
+        kind: kind,
+        publicCatalogOnly: true,
+        limit: 300,
+      );
+      ProductRow? bestRow;
+      ProductMatch? bestMatch;
+      for (final p in rows) {
+        final m = computeMatch(profile: profile, product: p, scan: scan);
+        if (m.blocked || m.confidence < 40) continue;
+        if (bestMatch == null || m.score > bestMatch.score) {
+          bestRow = p;
+          bestMatch = m;
+        }
+      }
+      if (bestRow == null) return _cache[kind] = null;
+      return _cache[kind] = {
+        ...bestRow.toJson(),
+        'match_score': bestMatch!.score,
+        'match_confidence': bestMatch.confidence,
+        'match_reasons': bestMatch.reasons,
+        'match_warnings': bestMatch.warnings,
+      };
+    } catch (e) {
+      stderr.writeln('routine recommendation fetch failed for $kind: $e');
+      return _cache[kind] = null;
+    }
+  }
+
+  Future<void> bindSteps(
+    List<Map<String, dynamic>> steps, {
+    Map<String, List<Map<String, dynamic>>>? shelfByKind,
+  }) async {
+    for (final step in steps) {
+      final kind = _kindForRoutineStep(step);
+      if (kind == null) continue;
+      step['kind'] = kind;
+      final shelf = shelfByKind?[kind];
+      if (shelf != null && shelf.isNotEmpty) {
+        step['product'] = shelf.first;
+      } else {
+        final rec = await recommendForKind(kind);
+        if (rec != null) step['recommendation'] = rec;
+      }
     }
   }
 }
@@ -3884,69 +4052,17 @@ class MeHandlers {
       }
     } catch (_) {/* fall through with null scan */}
 
-    final recommendationCache = <String, Map<String, dynamic>?>{};
-    Future<Map<String, dynamic>?> recommendForKind(String kind) async {
-      if (recommendationCache.containsKey(kind)) {
-        return recommendationCache[kind];
-      }
-      try {
-        final rows = await products.list(
-          kind: kind,
-          publicCatalogOnly: true,
-          limit: 300,
-        );
-        ProductRow? bestRow;
-        ProductMatch? bestMatch;
-        for (final p in rows) {
-          final m = computeMatch(
-            profile: profile,
-            product: p,
-            scan: scanForMatch,
-          );
-          if (m.blocked || m.confidence < 40) continue;
-          if (bestMatch == null || m.score > bestMatch.score) {
-            bestRow = p;
-            bestMatch = m;
-          }
-        }
-        if (bestRow == null) {
-          return recommendationCache[kind] = null;
-        }
-        return recommendationCache[kind] = {
-          ...bestRow.toJson(),
-          'match_score': bestMatch!.score,
-          'match_confidence': bestMatch.confidence,
-          'match_reasons': bestMatch.reasons,
-          'match_warnings': bestMatch.warnings,
-        };
-      } catch (e) {
-        stderr.writeln('today recommendation fetch failed for $kind: $e');
-        return recommendationCache[kind] = null;
-      }
-    }
-
-    Future<List<Map<String, dynamic>>> stepsBound(String phase) async {
-      final steps = _stepsWithDone(latest, phase, done);
-      for (final step in steps) {
-        final kind = _kindForStep(step);
-        if (kind == null) continue;
-        step['kind'] = kind;
-        final fromShelf = shelfByKind[phase]?[kind];
-        if (fromShelf != null && fromShelf.isNotEmpty) {
-          // First matching shelf item wins. Users typically own one product
-          // per kind; if they own multiple, the alphabetical order from the
-          // shelf list is the deterministic pick.
-          step['product'] = fromShelf.first;
-        } else {
-          final rec = await recommendForKind(kind);
-          if (rec != null) step['recommendation'] = rec;
-        }
-      }
-      return steps;
-    }
-
-    final morningSteps = await stepsBound('morning');
-    final eveningSteps = await stepsBound('evening');
+    final binder = _RoutineProductBinder(
+      products: products,
+      profile: profile,
+      scan: scanForMatch,
+    );
+    final morningSteps = _stepsWithDone(latest, 'morning', done);
+    final eveningSteps = _stepsWithDone(latest, 'evening', done);
+    await binder.bindSteps(morningSteps,
+        shelfByKind: shelfByKind['morning']);
+    await binder.bindSteps(eveningSteps,
+        shelfByKind: shelfByKind['evening']);
 
     return jsonResponse(200, {
       'date': dayUtc.toIso8601String(),
@@ -3961,21 +4077,6 @@ class MeHandlers {
     });
   }
 
-  /// Detect the canonical product `kind` for a routine step using the same
-  /// Russian keyword regexes as the chat intent detector. Looks at title and
-  /// explanation — ingredient lists alone are too noisy ("вода, глицерин"
-  /// matches everything).
-  String? _kindForStep(Map<String, dynamic> step) {
-    final text = [
-      step['title'] as String? ?? '',
-      step['explanation'] as String? ?? '',
-    ].join(' ').toLowerCase().replaceAll('ё', 'е');
-    if (text.trim().isEmpty) return null;
-    for (final e in _kindPatterns.entries) {
-      if (e.value.hasMatch(text)) return e.key;
-    }
-    return null;
-  }
 
   /// Mirror of CatalogHandlers._customToJson — duplicated here so MeHandlers
   /// doesn't have to depend on CatalogHandlers just to surface custom items

@@ -9,6 +9,7 @@ import '../../../core/widgets/medical_disclaimer_note.dart';
 import '../../../core/widgets/metric_ring.dart';
 import '../../../core/widgets/routine_card.dart';
 import '../../ai/domain/models.dart';
+import '../../catalog/domain/product.dart';
 
 class RoutineScreen extends StatelessWidget {
   const RoutineScreen({
@@ -16,11 +17,13 @@ class RoutineScreen extends StatelessWidget {
     required this.result,
     this.onFollowUp,
     this.onBack,
+    this.onOpenProduct,
   });
 
   final RoutineResult result;
   final VoidCallback? onFollowUp;
   final VoidCallback? onBack;
+  final ValueChanged<Product>? onOpenProduct;
 
   @override
   Widget build(BuildContext context) {
@@ -104,6 +107,9 @@ class RoutineScreen extends StatelessWidget {
               title: steps[i].title,
               ingredients: steps[i].ingredients,
               explanation: steps[i].explanation,
+              product: steps[i].product,
+              recommendation: steps[i].recommendation,
+              onOpenProduct: onOpenProduct,
             ),
           ),
         ),

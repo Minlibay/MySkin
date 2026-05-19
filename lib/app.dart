@@ -332,6 +332,11 @@ class _AppShellState extends ConsumerState<_AppShell> {
         return RoutineScreen(
           result: _lastResult!,
           onBack: () => setState(() => _view = _Shell.home),
+          onOpenProduct: (Product p) => setState(() {
+            _previousView = _Shell.standardResult;
+            _openProductSlug = p.slug;
+            _view = _Shell.productDetail;
+          }),
         );
       case _Shell.derm2:
         return Derm2Screen(
