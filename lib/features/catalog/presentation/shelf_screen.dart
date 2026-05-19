@@ -648,13 +648,18 @@ class _RoutinePreviewSheet extends StatelessWidget {
 
   static const _kindLabel = {
     'cleanser': 'Очищение',
+    'scrub': 'Скраб',
+    'peeling': 'Пилинг',
     'toner': 'Тоник',
+    'pad': 'Пэды',
     'essence': 'Эссенция',
+    'mask': 'Маска',
+    'eye_patch': 'Патчи для глаз',
     'serum': 'Сыворотка',
+    'eye_serum': 'Сыворотка для глаз',
+    'eye_cream': 'Крем для глаз',
     'moisturizer': 'Крем',
     'spf': 'SPF',
-    'mask': 'Маска',
-    'eye_cream': 'Крем для глаз',
   };
 
   @override

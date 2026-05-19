@@ -47,13 +47,18 @@ class _AddCustomProductScreenState
 
   static const _kinds = <(String, String)>[
     ('cleanser', 'Очищение'),
+    ('scrub', 'Скраб'),
+    ('peeling', 'Пилинг'),
     ('toner', 'Тоник'),
+    ('pad', 'Пэды'),
     ('essence', 'Эссенция'),
+    ('mask', 'Маска'),
+    ('eye_patch', 'Патчи для глаз'),
     ('serum', 'Сыворотка'),
+    ('eye_serum', 'Сыворотка для глаз'),
+    ('eye_cream', 'Крем для глаз'),
     ('moisturizer', 'Крем'),
     ('spf', 'SPF'),
-    ('mask', 'Маска'),
-    ('eye_cream', 'Крем для глаз'),
   ];
 
   static const _paoOptions = <int>[3, 6, 9, 12, 18, 24, 36];

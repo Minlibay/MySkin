@@ -466,13 +466,18 @@ export type ProductInput = {
 
 export const PRODUCT_KINDS: Array<{ id: string; label: string }> = [
   { id: 'cleanser', label: 'Очищение' },
+  { id: 'scrub', label: 'Скраб' },
+  { id: 'peeling', label: 'Пилинг' },
   { id: 'toner', label: 'Тоник' },
+  { id: 'pad', label: 'Пэды' },
   { id: 'essence', label: 'Эссенция' },
+  { id: 'mask', label: 'Маска' },
+  { id: 'eye_patch', label: 'Патчи для глаз' },
   { id: 'serum', label: 'Сыворотка' },
+  { id: 'eye_serum', label: 'Сыворотка для глаз' },
+  { id: 'eye_cream', label: 'Крем для глаз' },
   { id: 'moisturizer', label: 'Крем' },
   { id: 'spf', label: 'SPF' },
-  { id: 'mask', label: 'Маска' },
-  { id: 'eye_cream', label: 'Крем для глаз' },
 ];
 
 export const PRODUCT_TAGS: Array<{ id: string; label: string }> = [

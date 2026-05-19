@@ -228,13 +228,18 @@ class Product {
 
   String get kindLabel => switch (kind) {
         'cleanser' => 'Очищение',
+        'scrub' => 'Скраб',
+        'peeling' => 'Пилинг',
         'toner' => 'Тоник',
+        'pad' => 'Пэды',
         'essence' => 'Эссенция',
+        'mask' => 'Маска',
+        'eye_patch' => 'Патчи для глаз',
         'serum' => 'Сыворотка',
+        'eye_serum' => 'Сыворотка для глаз',
+        'eye_cream' => 'Крем для глаз',
         'moisturizer' => 'Крем',
         'spf' => 'Защита SPF',
-        'mask' => 'Маска',
-        'eye_cream' => 'Крем для глаз',
         _ => kind,
       };
 }

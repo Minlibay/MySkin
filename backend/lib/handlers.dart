@@ -2426,8 +2426,9 @@ class CatalogHandlers {
       return jsonResponse(400, {'error': 'missing_fields'});
     }
     const allowedKinds = {
-      'cleanser', 'toner', 'essence', 'serum', 'moisturizer',
-      'spf', 'mask', 'eye_cream',
+      'cleanser', 'scrub', 'peeling', 'toner', 'pad', 'essence',
+      'mask', 'eye_patch', 'serum', 'eye_serum', 'eye_cream',
+      'moisturizer', 'spf',
     };
     if (!allowedKinds.contains(kind)) {
       return jsonResponse(400, {'error': 'invalid_kind'});
@@ -2632,15 +2633,26 @@ class CatalogHandlers {
   /// Anything not in this list ends up at the tail in the order it was
   /// added — so unusual `kind` values (admin custom categories, partner
   /// experiments) still appear but don't break the flow.
+  /// Canonical layer order for a daily routine. Weekly-cadence items
+  /// (scrub, peeling, mask) sit where they'd be applied on the days they
+  /// run — between cleansing and toner-stage products. Eye-area items
+  /// land just before moisturiser so the eye cream isn't smothered by
+  /// face cream sliding into it. Gaps left in the numbering so future
+  /// kinds can slot in without renumbering everything.
   static const _stepOrder = <String, int>{
     'cleanser': 0,
-    'toner': 1,
-    'essence': 2,
-    'mask': 3,
-    'serum': 4,
-    'eye_cream': 5,
-    'moisturizer': 6,
-    'spf': 7,
+    'scrub': 5,
+    'peeling': 10,
+    'toner': 15,
+    'pad': 20,
+    'essence': 25,
+    'mask': 30,
+    'eye_patch': 35,
+    'serum': 40,
+    'eye_serum': 45,
+    'eye_cream': 50,
+    'moisturizer': 55,
+    'spf': 60,
   };
 
   /// Generates a morning + evening routine from products the user already

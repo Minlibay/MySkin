@@ -208,6 +208,14 @@ class _Filters extends StatelessWidget {
     ('moisturizer', 'Крем'),
     ('spf', 'SPF'),
     ('essence', 'Эссенция'),
+    ('mask', 'Маска'),
+    ('eye_cream', 'Крем для глаз'),
+    ('eye_patch', 'Патчи для глаз'),
+    ('eye_serum', 'Сыворотка для глаз'),
+    ('toner', 'Тоник'),
+    ('pad', 'Пэды'),
+    ('scrub', 'Скраб'),
+    ('peeling', 'Пилинг'),
   ];
 
   static const _concerns = [
