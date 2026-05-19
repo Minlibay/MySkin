@@ -174,7 +174,13 @@ class BackendApi {
   }
 
   Future<Product> getProduct(String slug) async {
-    final r = await _dio.get('$baseUrl/catalog/$slug', options: _auth());
+    // Slugs imported from RU feeds keep Cyrillic letters — they have to be
+    // percent-encoded before going into the URL path, otherwise Dio sends
+    // raw UTF-8 bytes and the backend router can't match the route.
+    final r = await _dio.get(
+      '$baseUrl/catalog/${Uri.encodeComponent(slug)}',
+      options: _auth(),
+    );
     return Product.fromJson(r.data as Map<String, dynamic>);
   }
 
