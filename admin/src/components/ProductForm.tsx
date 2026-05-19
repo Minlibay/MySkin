@@ -144,12 +144,65 @@ export default function ProductForm({
     setFn(arr.includes(v) ? arr.filter((x) => x !== v) : [...arr, v]);
   }
 
+  /// Split a free-form INCI string into individual tags. Accepts comma OR
+  /// semicolon separators (sometimes used on EU packaging) and a stray
+  /// trailing period. Drops empties and existing entries.
+  function splitInci(s: string): string[] {
+    return s
+      .split(/[,;\n]+/)
+      .map((x) => x.replace(/\.$/, '').trim())
+      .filter((x) => x.length > 0);
+  }
+
   function addIngredient() {
-    const v = ingInput.trim();
-    if (v && !ingredients.includes(v)) {
-      setIngredients([...ingredients, v]);
+    const pieces = splitInci(ingInput);
+    if (pieces.length === 0) {
+      setIngInput('');
+      return;
+    }
+    const seen = new Set(ingredients.map((x) => x.toLowerCase()));
+    const additions: string[] = [];
+    for (const p of pieces) {
+      const key = p.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      additions.push(p);
+    }
+    if (additions.length > 0) {
+      setIngredients([...ingredients, ...additions]);
     }
     setIngInput('');
+  }
+
+  /// Splits on the fly while the user pastes / types — anything followed by
+  /// a comma graduates to a chip, the trailing partial token stays in the
+  /// input so the user can keep typing the next ingredient.
+  function onIngInputChange(value: string) {
+    if (!/[,;\n]/.test(value)) {
+      setIngInput(value);
+      return;
+    }
+    const parts = value.split(/[,;\n]+/);
+    const tail = parts.pop() ?? '';
+    const pieces = parts
+      .map((x) => x.replace(/\.$/, '').trim())
+      .filter((x) => x.length > 0);
+    if (pieces.length === 0) {
+      setIngInput(tail);
+      return;
+    }
+    const seen = new Set(ingredients.map((x) => x.toLowerCase()));
+    const additions: string[] = [];
+    for (const p of pieces) {
+      const key = p.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      additions.push(p);
+    }
+    if (additions.length > 0) {
+      setIngredients([...ingredients, ...additions]);
+    }
+    setIngInput(tail);
   }
 
   function onPickFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -475,13 +528,16 @@ export default function ProductForm({
             />
           </Field>
 
-          <Field label="Ключевые ингредиенты (INCI)">
+          <Field
+            label="Ключевые ингредиенты (INCI)"
+            help="Можно вставить весь состав целиком — он разобьётся на отдельные теги по запятым."
+          >
             <div className="flex gap-2 mb-2">
               <input
                 className="input flex-1"
                 value={ingInput}
-                onChange={(e) => setIngInput(e.target.value)}
-                placeholder="Например: Niacinamide"
+                onChange={(e) => onIngInputChange(e.target.value)}
+                placeholder="Aqua, Niacinamide, Glycerin, Sodium Hyaluronate…"
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') {
                     e.preventDefault();
