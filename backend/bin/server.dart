@@ -105,6 +105,7 @@ void main(List<String> args) async {
     events: productEvents,
     shelf: shelf,
     customShelf: customShelf,
+    products: products,
   );
   final catalog = CatalogHandlers(
     sessions: sessions,

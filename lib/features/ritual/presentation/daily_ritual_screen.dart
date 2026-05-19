@@ -243,6 +243,7 @@ class _Body extends StatelessWidget {
             ? _StepState.done
             : (i == activeIdx ? _StepState.active : _StepState.upcoming),
         onTap: () => onToggle(_steps[i]),
+        onOpenProduct: onOpenProduct,
       ));
       if (i < _steps.length - 1) out.add(const SizedBox(height: 8));
     }
@@ -513,21 +514,23 @@ class _RingPainter extends CustomPainter {
 
 enum _StepState { upcoming, active, done }
 
-class _StepCard extends StatelessWidget {
+class _StepCard extends ConsumerWidget {
   const _StepCard({
     required this.step,
     required this.order,
     required this.state,
     required this.onTap,
+    this.onOpenProduct,
   });
 
   final TodayStep step;
   final int order;
   final _StepState state;
   final VoidCallback onTap;
+  final ValueChanged<Product>? onOpenProduct;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final isActive = state == _StepState.active;
     final isDone = state == _StepState.done;
     return AnimatedContainer(
@@ -598,7 +601,9 @@ class _StepCard extends StatelessWidget {
                             overflow: TextOverflow.ellipsis,
                           ),
                         ],
-                        if (step.ingredients.isNotEmpty) ...[
+                        if (step.product == null &&
+                            step.recommendation == null &&
+                            step.ingredients.isNotEmpty) ...[
                           const SizedBox(height: 8),
                           Wrap(
                             spacing: 6,
@@ -625,6 +630,25 @@ class _StepCard extends StatelessWidget {
                                 .toList(),
                           ),
                         ],
+                        if (step.product != null) ...[
+                          const SizedBox(height: 10),
+                          _StepProductChip(
+                            product: step.product!,
+                            isOwned: true,
+                            onTap: onOpenProduct == null
+                                ? null
+                                : () => onOpenProduct!(step.product!),
+                          ),
+                        ] else if (step.recommendation != null) ...[
+                          const SizedBox(height: 10),
+                          _StepProductChip(
+                            product: step.recommendation!,
+                            isOwned: false,
+                            onTap: onOpenProduct == null
+                                ? null
+                                : () => onOpenProduct!(step.recommendation!),
+                          ),
+                        ],
                       ],
                     ),
                   ),
@@ -632,6 +656,145 @@ class _StepCard extends StatelessWidget {
               ),
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+/// Compact bottle+name chip rendered inside a step card. Two modes:
+///  * isOwned=true → "С полки" badge, the user already has this exact product.
+///  * isOwned=false → "Купить рекомендованное" CTA, top match from catalog.
+/// Either way, tapping opens the product detail.
+class _StepProductChip extends ConsumerWidget {
+  const _StepProductChip({
+    required this.product,
+    required this.isOwned,
+    this.onTap,
+  });
+
+  final Product product;
+  final bool isOwned;
+  final VoidCallback? onTap;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final photoUrl = product.hasPhoto
+        ? (product.isCustom
+            ? ref.read(backendApiProvider).customProductPhotoUrl(product.id)
+            : ref.read(backendApiProvider).productPhotoUrl(product.id))
+        : null;
+    return Material(
+      color: Colors.white.withOpacity(0.85),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(14),
+        side: BorderSide(
+          color: isOwned
+              ? AppColors.primaryAccent.withOpacity(0.4)
+              : AppColors.divider,
+        ),
+      ),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(14),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.all(8),
+          child: Row(
+            children: [
+              ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: SizedBox(
+                  width: 40,
+                  height: 52,
+                  child: photoUrl != null
+                      ? Image.network(
+                          photoUrl,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) =>
+                              _BottleFallback(color: product.accentColor),
+                        )
+                      : _BottleFallback(color: product.accentColor),
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      isOwned ? 'С ПОЛКИ' : 'РЕКОМЕНДУЕТ ЛИНА',
+                      style: AppTypography.eyebrow(color: AppColors.roseDeep)
+                          .copyWith(fontSize: 9),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      product.brand,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.caption.copyWith(
+                        fontSize: 11,
+                        color: AppColors.textSecondary,
+                        height: 1.1,
+                      ),
+                    ),
+                    Text(
+                      product.name,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: AppTypography.body.copyWith(
+                        fontSize: 13,
+                        height: 1.2,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 6),
+              if (!isOwned)
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: AppColors.roseDeep,
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  child: Text(
+                    'Купить',
+                    style: AppTypography.caption.copyWith(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: Colors.white,
+                    ),
+                  ),
+                )
+              else
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  size: 18,
+                  color: AppColors.textSecondary,
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _BottleFallback extends StatelessWidget {
+  const _BottleFallback({required this.color});
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topCenter,
+          end: Alignment.bottomCenter,
+          colors: [Colors.white, color],
         ),
       ),
     );
@@ -737,13 +900,19 @@ class _ShelfSection extends StatelessWidget {
   }
 }
 
-class _ShelfMiniCard extends StatelessWidget {
+class _ShelfMiniCard extends ConsumerWidget {
   const _ShelfMiniCard({required this.product, this.onTap});
   final Product product;
   final VoidCallback? onTap;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final api = ref.read(backendApiProvider);
+    final photoUrl = product.hasPhoto
+        ? (product.isCustom
+            ? api.customProductPhotoUrl(product.id)
+            : api.productPhotoUrl(product.id))
+        : null;
     return SizedBox(
       width: 140,
       child: Material(
@@ -760,18 +929,19 @@ class _ShelfMiniCard extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Container(
-                  height: 70,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.white,
-                        product.accentColor,
-                      ],
-                    ),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: SizedBox(
+                    height: 70,
+                    width: double.infinity,
+                    child: photoUrl != null
+                        ? Image.network(
+                            photoUrl,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                                _BottleFallback(color: product.accentColor),
+                          )
+                        : _BottleFallback(color: product.accentColor),
                   ),
                 ),
                 const SizedBox(height: 8),

@@ -3392,6 +3392,7 @@ class MeHandlers {
     required this.events,
     required this.shelf,
     required this.customShelf,
+    required this.products,
   });
 
   final SessionRepository sessions;
@@ -3405,6 +3406,7 @@ class MeHandlers {
   final ProductEventRepository events;
   final UserProductRepository shelf;
   final UserCustomProductRepository customShelf;
+  final ProductRepository products;
 
   Router router() => Router()
     ..get('/me/profile', _withUser(_getProfile))
@@ -3819,6 +3821,17 @@ class MeHandlers {
     // fall into both buckets since they don't carry phase metadata.
     final shelfMorning = <Map<String, dynamic>>[];
     final shelfEvening = <Map<String, dynamic>>[];
+    // Same items keyed by `kind` per phase — used below to match a step
+    // ("Очищение") to a real product the user already owns.
+    final shelfByKind = <String, Map<String, List<Map<String, dynamic>>>>{
+      'morning': {},
+      'evening': {},
+    };
+    void indexByKind(String phase, Map<String, dynamic> json) {
+      final k = (json['kind'] as String? ?? '').toLowerCase();
+      if (k.isEmpty) return;
+      (shelfByKind[phase] ??= {}).putIfAbsent(k, () => []).add(json);
+    }
     try {
       final items = await shelf.list(user.id);
       for (final it in items) {
@@ -3832,9 +3845,11 @@ class MeHandlers {
         final phase = it.product.routinePhase.toLowerCase();
         if (phase == 'morning' || phase == 'any' || phase.isEmpty) {
           shelfMorning.add(json);
+          indexByKind('morning', json);
         }
         if (phase == 'evening' || phase == 'any' || phase.isEmpty) {
           shelfEvening.add(json);
+          indexByKind('evening', json);
         }
       }
       final customs = await customShelf.list(user.id);
@@ -3844,22 +3859,122 @@ class MeHandlers {
         final json = _customToJson(c);
         shelfMorning.add(json);
         shelfEvening.add(json);
+        indexByKind('morning', json);
+        indexByKind('evening', json);
       }
     } catch (e) {
       stderr.writeln('today shelf fetch failed: $e');
     }
+
+    // Per-step product binding: try the shelf first, then fall back to a
+    // catalog recommendation. Profile + last scan drive the ranker so the
+    // "Купить" suggestion is personalised, not just the top-selling SKU.
+    final profile = await profiles.get(user.id) ?? <String, dynamic>{};
+    Map<String, dynamic>? scanForMatch;
+    try {
+      final s = await scans.listForUser(user.id, limit: 1);
+      if (s.isNotEmpty) {
+        scanForMatch = {
+          'hydration': s.first.hydration,
+          'sebum': s.first.sebum,
+          'tone': s.first.tone,
+          'pores': s.first.pores,
+          'concerns': s.first.concerns,
+        };
+      }
+    } catch (_) {/* fall through with null scan */}
+
+    final recommendationCache = <String, Map<String, dynamic>?>{};
+    Future<Map<String, dynamic>?> recommendForKind(String kind) async {
+      if (recommendationCache.containsKey(kind)) {
+        return recommendationCache[kind];
+      }
+      try {
+        final rows = await products.list(
+          kind: kind,
+          publicCatalogOnly: true,
+          limit: 300,
+        );
+        ProductRow? bestRow;
+        ProductMatch? bestMatch;
+        for (final p in rows) {
+          final m = computeMatch(
+            profile: profile,
+            product: p,
+            scan: scanForMatch,
+          );
+          if (m.blocked || m.confidence < 40) continue;
+          if (bestMatch == null || m.score > bestMatch.score) {
+            bestRow = p;
+            bestMatch = m;
+          }
+        }
+        if (bestRow == null) {
+          return recommendationCache[kind] = null;
+        }
+        return recommendationCache[kind] = {
+          ...bestRow.toJson(),
+          'match_score': bestMatch!.score,
+          'match_confidence': bestMatch.confidence,
+          'match_reasons': bestMatch.reasons,
+          'match_warnings': bestMatch.warnings,
+        };
+      } catch (e) {
+        stderr.writeln('today recommendation fetch failed for $kind: $e');
+        return recommendationCache[kind] = null;
+      }
+    }
+
+    Future<List<Map<String, dynamic>>> stepsBound(String phase) async {
+      final steps = _stepsWithDone(latest, phase, done);
+      for (final step in steps) {
+        final kind = _kindForStep(step);
+        if (kind == null) continue;
+        step['kind'] = kind;
+        final fromShelf = shelfByKind[phase]?[kind];
+        if (fromShelf != null && fromShelf.isNotEmpty) {
+          // First matching shelf item wins. Users typically own one product
+          // per kind; if they own multiple, the alphabetical order from the
+          // shelf list is the deterministic pick.
+          step['product'] = fromShelf.first;
+        } else {
+          final rec = await recommendForKind(kind);
+          if (rec != null) step['recommendation'] = rec;
+        }
+      }
+      return steps;
+    }
+
+    final morningSteps = await stepsBound('morning');
+    final eveningSteps = await stepsBound('evening');
 
     return jsonResponse(200, {
       'date': dayUtc.toIso8601String(),
       'streak': streak,
       'has_routine': latest != null,
       'routine_id': latest?['id'],
-      'morning': _stepsWithDone(latest, 'morning', done),
-      'evening': _stepsWithDone(latest, 'evening', done),
+      'morning': morningSteps,
+      'evening': eveningSteps,
       'shelf_morning': shelfMorning,
       'shelf_evening': shelfEvening,
       if (tip != null) 'tip': tip,
     });
+  }
+
+  /// Detect the canonical product `kind` for a routine step using the same
+  /// Russian keyword regexes as the chat intent detector. Looks at title and
+  /// explanation — ingredient lists alone are too noisy ("вода, глицерин"
+  /// matches everything).
+  String? _kindForStep(Map<String, dynamic> step) {
+    final text = [
+      step['title'] as String? ?? '',
+      step['explanation'] as String? ?? '',
+    ].join(' ').toLowerCase().replaceAll('ё', 'е');
+    if (text.trim().isEmpty) return null;
+    for (final e in _kindPatterns.entries) {
+      if (e.value.hasMatch(text)) return e.key;
+    }
+    return null;
   }
 
   /// Mirror of CatalogHandlers._customToJson — duplicated here so MeHandlers

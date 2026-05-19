@@ -9,6 +9,9 @@ class TodayStep {
     required this.ingredients,
     required this.explanation,
     required this.done,
+    this.kind,
+    this.product,
+    this.recommendation,
   });
 
   final int index;
@@ -17,22 +20,54 @@ class TodayStep {
   final String explanation;
   final bool done;
 
+  /// Canonical product kind the backend inferred for this step
+  /// (cleanser/serum/moisturizer/…). Null when the step text didn't match
+  /// any known kind, in which case [product] / [recommendation] are also null.
+  final String? kind;
+
+  /// Concrete product from the user's shelf that fulfils this step. When
+  /// present, the UI shows the actual bottle the user owns instead of a
+  /// generic ingredient pill list.
+  final Product? product;
+
+  /// Top-matched catalog product for this step's kind, sent by the backend
+  /// only when the user has no shelf item of the right kind. Drives the
+  /// "Купить рекомендованное" CTA in the step card.
+  final Product? recommendation;
+
   TodayStep copyWith({bool? done}) => TodayStep(
         index: index,
         title: title,
         ingredients: ingredients,
         explanation: explanation,
         done: done ?? this.done,
+        kind: kind,
+        product: product,
+        recommendation: recommendation,
       );
 
-  factory TodayStep.fromJson(Map<String, dynamic> j) => TodayStep(
-        index: (j['index'] as num).toInt(),
-        title: j['title'] as String? ?? '',
-        ingredients:
-            ((j['ingredients'] as List?) ?? const []).cast<String>(),
-        explanation: j['explanation'] as String? ?? '',
-        done: j['done'] as bool? ?? false,
-      );
+  factory TodayStep.fromJson(Map<String, dynamic> j) {
+    Product? parseProd(dynamic v) {
+      if (v is! Map<String, dynamic>) return null;
+      try {
+        return Product.fromJson(v);
+      } catch (_) {
+        return null;
+      }
+    }
+
+    return TodayStep(
+      index: (j['index'] as num).toInt(),
+      title: j['title'] as String? ?? '',
+      ingredients:
+          ((j['ingredients'] as List?) ?? const []).cast<String>(),
+      explanation: j['explanation'] as String? ?? '',
+      done: j['done'] as bool? ?? false,
+      kind: j['kind'] as String?,
+      product: parseProd(j['product']),
+      recommendation: parseProd(j['recommendation']),
+    );
+  }
 }
 
 class Today {
