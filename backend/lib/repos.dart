@@ -1766,6 +1766,41 @@ class ProductRepository {
     );
   }
 
+  /// Bulk-delete products whose concern-tag list is empty. Used as a
+  /// "cleanup" pass after a feed import: anything without a Цель is
+  /// useless for ranking and clutters the admin view.
+  Future<int> deleteWithoutTags() async {
+    final r = await db.execute(
+      Sql.named(
+          "DELETE FROM products WHERE COALESCE(jsonb_array_length(tags), 0) = 0"),
+    );
+    return r.affectedRows;
+  }
+
+  /// Bulk-delete duplicate products grouped by (lower(brand), lower(name)).
+  /// In each group we keep ONE row — preferring one with a primary photo,
+  /// then the oldest by created_at — and drop the rest. Returns the count
+  /// of deleted rows.
+  Future<int> deleteDuplicatesByName() async {
+    final r = await db.execute(
+      Sql.named('''
+        DELETE FROM products
+        WHERE id IN (
+          SELECT id FROM (
+            SELECT id,
+              ROW_NUMBER() OVER (
+                PARTITION BY lower(brand), lower(name)
+                ORDER BY (photo IS NOT NULL) DESC, created_at ASC
+              ) AS rn
+            FROM products
+          ) t
+          WHERE rn > 1
+        )
+      '''),
+    );
+    return r.affectedRows;
+  }
+
   /// Mass-publish: flips every draft to `published` and backfills empty
   /// `skin_types` with `['all']` so the publish-validator's softened rule
   /// (no-skintypes → all) is consistent on bulk and per-row flows. Returns

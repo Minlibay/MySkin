@@ -108,6 +108,51 @@ export default function Products() {
   }
 
   const [publishing, setPublishing] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
+
+  async function onDeleteUntagged() {
+    if (
+      !confirm(
+        'Удалить ВСЕ товары без «Цели» (без тегов)?\n\n' +
+          'Действие необратимо.'
+      )
+    ) {
+      return;
+    }
+    setCleaning(true);
+    try {
+      const r = await api.deleteUntaggedProducts();
+      alert(`Удалено: ${r.deleted} товаров.`);
+      await load({ resetPage: true });
+    } catch (e) {
+      alert(`Не удалось удалить: ${e}`);
+    } finally {
+      setCleaning(false);
+    }
+  }
+
+  async function onDeleteDuplicates() {
+    if (
+      !confirm(
+        'Удалить дублирующиеся товары?\n\n' +
+          'В каждой группе с одинаковым брендом и названием останется ' +
+          'один (с фото и/или самый старый). Действие необратимо.'
+      )
+    ) {
+      return;
+    }
+    setCleaning(true);
+    try {
+      const r = await api.deleteDuplicateProducts();
+      alert(`Удалено дубликатов: ${r.deleted}.`);
+      await load({ resetPage: true });
+    } catch (e) {
+      alert(`Не удалось удалить: ${e}`);
+    } finally {
+      setCleaning(false);
+    }
+  }
+
   async function onPublishAllDrafts() {
     if (
       !confirm(
@@ -145,6 +190,22 @@ export default function Products() {
           </div>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={onDeleteUntagged}
+            className="btn-ghost"
+            disabled={cleaning || loading}
+            title="Удалить все товары без «Цели» (без тегов)"
+          >
+            {cleaning ? 'Чистим…' : '× Удалить товары без «Цели»'}
+          </button>
+          <button
+            onClick={onDeleteDuplicates}
+            className="btn-ghost"
+            disabled={cleaning || loading}
+            title="Удалить товары с одинаковым брендом и названием, оставив по одному"
+          >
+            {cleaning ? 'Чистим…' : '× Удалить дублирующиеся товары'}
+          </button>
           <button
             onClick={onPublishAllDrafts}
             className="btn-ghost"

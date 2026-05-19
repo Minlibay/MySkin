@@ -383,6 +383,12 @@ class AdminHandlers {
     // Bulk publish: flips all current drafts to `published`
     ..post('/admin/products/publish-drafts',
         _withAdmin(_publishAllDrafts))
+    // Bulk cleanup: drop rows with no Цели / no tags
+    ..post('/admin/products/delete-untagged',
+        _withAdmin(_deleteUntagged))
+    // Bulk cleanup: drop rows that duplicate another by brand+name
+    ..post('/admin/products/delete-duplicates',
+        _withAdmin(_deleteDuplicates))
     // Self-service password change
     ..post('/admin/change-password', _withAdmin(_changeOwnPassword));
 
@@ -1454,6 +1460,16 @@ class AdminHandlers {
   Future<Response> _publishAllDrafts(Request req) async {
     final n = await products.publishAllDrafts();
     return jsonResponse(200, {'ok': true, 'published': n});
+  }
+
+  Future<Response> _deleteUntagged(Request req) async {
+    final n = await products.deleteWithoutTags();
+    return jsonResponse(200, {'ok': true, 'deleted': n});
+  }
+
+  Future<Response> _deleteDuplicates(Request req) async {
+    final n = await products.deleteDuplicatesByName();
+    return jsonResponse(200, {'ok': true, 'deleted': n});
   }
 
   /// HTTP GET the feed body, with retries for the advcake "not ready"

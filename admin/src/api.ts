@@ -125,6 +125,20 @@ export const api = {
     );
   },
 
+  deleteUntaggedProducts() {
+    return this.request<{ ok: boolean; deleted: number }>(
+      '/admin/products/delete-untagged',
+      { method: 'POST' }
+    );
+  },
+
+  deleteDuplicateProducts() {
+    return this.request<{ ok: boolean; deleted: number }>(
+      '/admin/products/delete-duplicates',
+      { method: 'POST' }
+    );
+  },
+
   productCreate(input: ProductInput) {
     return this.request<AdminProduct>('/admin/products', {
       method: 'POST',
