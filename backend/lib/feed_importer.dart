@@ -197,13 +197,16 @@ FeedSnapshot parseFeed(String xml, {Set<String>? onlyCategoryIds}) {
   return FeedSnapshot(categories: categories, offers: offers);
 }
 
-/// Cheap heuristic: maps a feed category name (or product name fallback) to
-/// our canonical `kind` taxonomy. Returns null when nothing recognised —
-/// admin can still fix that one product manually.
-String? guessKind(String categoryName, String productName) {
-  final hay = '$categoryName $productName'.toLowerCase();
-  // Order matters: more specific tokens first (eye_patch before serum).
+/// Cheap heuristic: maps a feed category name / `Тип продукта` param /
+/// product name to our canonical `kind` taxonomy. The product-type param
+/// is the most specific signal so it wins; the rest are fallbacks.
+String? guessKind(String categoryName, String productName,
+    {String productType = ''}) {
+  // Order matters: more specific tokens first (eye_cream before cream).
   const rules = [
+    ('крем для глаз', 'eye_cream'),
+    ('сыворотка для глаз', 'eye_serum'),
+    ('eye cream', 'eye_cream'),
     ('патч', 'eye_patch'),
     ('пэд', 'pad'),
     ('скраб', 'scrub'),
@@ -212,21 +215,112 @@ String? guessKind(String categoryName, String productName) {
     ('тоник', 'toner'),
     ('эссенц', 'essence'),
     ('сывор', 'serum'),
-    ('eye cream', 'eye_cream'),
-    ('крем для глаз', 'eye_cream'),
     ('спф', 'spf'),
     ('spf', 'spf'),
-    ('защит', 'spf'),
+    ('защита от солнц', 'spf'),
     ('очищ', 'cleanser'),
     ('умыв', 'cleanser'),
-    ('гель для умы', 'cleanser'),
     ('демакияж', 'cleanser'),
+    ('масло для лица', 'moisturizer'),
+    ('флюид', 'moisturizer'),
+    ('эмульсия', 'moisturizer'),
+    ('крем-гель', 'moisturizer'),
+    ('крем для лица', 'moisturizer'),
     ('крем', 'moisturizer'),
   ];
-  for (final r in rules) {
-    if (hay.contains(r.$1)) return r.$2;
+  // Try in priority order: product type → category → product name.
+  for (final source in [productType, categoryName, productName]) {
+    if (source.isEmpty) continue;
+    final hay = source.toLowerCase();
+    for (final r in rules) {
+      if (hay.contains(r.$1)) return r.$2;
+    }
   }
   return null;
+}
+
+/// Returns true when the ingredients list contains any "active" worth
+/// warning the user about — retinoids, exfoliating acids, high-dose vit C,
+/// benzoyl peroxide, azelaic, hydroquinone. Niacinamide / hyaluronic /
+/// ceramides are NOT treated as active in this sense — they're hydration
+/// staples that don't carry the same combine-with-SPF caveat.
+bool guessIsActive(List<String> ingredients) {
+  if (ingredients.isEmpty) return false;
+  // Substrings rather than exact tokens — INCI names have suffixes
+  // (Retinyl Palmitate, Ascorbyl Glucoside, etc.).
+  const triggers = [
+    'retinol',
+    'retinal',
+    'retinaldehyde',
+    'retinoic',
+    'retinyl',
+    'tretinoin',
+    'adapalene',
+    'bakuchiol', // retinol-adjacent, photosensitising claims
+    'salicylic',
+    'glycolic',
+    'lactic acid',
+    'mandelic',
+    'malic acid',
+    'tartaric',
+    'azelaic',
+    'benzoyl peroxide',
+    'hydroquinone',
+    'ascorbic acid',
+    'l-ascorbic',
+    'ascorbyl glucoside',
+    'ascorbyl phosphate',
+    'ethyl ascorbic',
+    'tetrahexyldecyl ascorbate',
+  ];
+  final hay = ingredients.join(' | ').toLowerCase();
+  for (final t in triggers) {
+    if (hay.contains(t)) return true;
+  }
+  return false;
+}
+
+/// Returns true when the offer is meant for sensitive / reactive skin.
+/// Signals:
+///   - `Гипоаллергенно` param is "true"
+///   - `Тип кожи` includes "для чувствительной"
+///   - description / usage mentions "деликатн" / "успокаива" / "мягк"
+bool guessGentle(Map<String, String> params,
+    {String description = '', String usage = ''}) {
+  final hypo = (params['Гипоаллергенно'] ?? '').toLowerCase();
+  if (hypo == 'true' || hypo == 'да') return true;
+  final skin = (params['Тип кожи'] ?? '').toLowerCase();
+  if (skin.contains('чувствительной')) return true;
+  final hay = '$description $usage'.toLowerCase();
+  if (RegExp(r'деликатн|успокаива|мягк[оа]\s+очищ|для\s+чувствительной')
+      .hasMatch(hay)) {
+    return true;
+  }
+  return false;
+}
+
+/// Best-guess routine phase for a freshly imported product. SPF is always
+/// morning by definition. Retinoids / exfoliating acids should default to
+/// evening (UV-sensitivity). Otherwise we read time-of-day cues from the
+/// usage / description; lacking those, fall back to `any`.
+String guessRoutinePhase({
+  required String kind,
+  required bool isActive,
+  String description = '',
+  String usage = '',
+}) {
+  if (kind == 'spf') return 'morning';
+  final hay = '$description $usage'.toLowerCase();
+  final mentionsMorning =
+      RegExp(r'утром|днём|днем|перед\s+выход').hasMatch(hay);
+  final mentionsEvening =
+      RegExp(r'вечером|на\s+ночь|перед\s+сном|ночн[ыо]').hasMatch(hay);
+  if (mentionsMorning && !mentionsEvening) return 'morning';
+  if (mentionsEvening && !mentionsMorning) return 'evening';
+  // Photosensitising actives default to evening when the text didn't pick
+  // a side. Same rule dermatologists apply to retinoids / AHA.
+  if (isActive && !mentionsMorning) return 'evening';
+  return 'any';
 }
 
 /// Maps a Russian-language `Назначение` (purpose) list — and a `Тип кожи`

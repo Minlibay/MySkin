@@ -1098,7 +1098,27 @@ class AdminHandlers {
             source: source, externalId: offer.externalId);
         final categoryName =
             snap.categories[offer.categoryId]?.name ?? '';
-        final kind = guessKind(categoryName, offer.name) ?? 'serum';
+        final productType = offer.params['Тип продукта'] ?? '';
+        final kind = guessKind(
+              categoryName,
+              offer.name,
+              productType: productType,
+            ) ??
+            'serum';
+        // Derived flags for new products. Existing rows keep whatever the
+        // admin already set — guards on each field below.
+        final derivedActive = guessIsActive(offer.derivedIngredients);
+        final derivedGentle = guessGentle(
+          offer.params,
+          description: offer.description ?? '',
+          usage: offer.usage ?? '',
+        );
+        final derivedPhase = guessRoutinePhase(
+          kind: existing?.kind ?? kind,
+          isActive: derivedActive,
+          description: offer.description ?? '',
+          usage: offer.usage ?? '',
+        );
         final slug = existing?.slug ??
             _externalSlug(offer.brand, offer.name, offer.externalId);
         // Volume → extra_info on new products so admin sees "Объём: 50 мл"
@@ -1133,9 +1153,15 @@ class AdminHandlers {
           skinTypes: existing != null && existing.skinTypes.isNotEmpty
               ? existing.skinTypes
               : offer.derivedSkinTypes,
-          isActive: existing?.isActive ?? false,
-          gentle: existing?.gentle ?? false,
-          routinePhase: existing?.routinePhase ?? 'any',
+          // `isActive` / `gentle` default to false in our model, so we
+          // can't tell "admin set false" apart from "never touched".
+          // Only fill from feed when the row is new; on re-import we
+          // assume the admin's last value is intentional.
+          isActive: existing != null ? existing.isActive : derivedActive,
+          gentle: existing != null ? existing.gentle : derivedGentle,
+          routinePhase: existing != null && existing.routinePhase.isNotEmpty
+              ? existing.routinePhase
+              : derivedPhase,
           status: existing?.status ?? 'draft',
           buyUrl: offer.url,
           composition: offer.composition ?? existing?.composition,
