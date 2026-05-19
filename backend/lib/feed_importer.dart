@@ -360,6 +360,76 @@ bool guessIsActive(List<String> ingredients) {
   return false;
 }
 
+/// Returns true when the offer carries an SPF claim somewhere we can
+/// recognise. Used to spare BB/CC creams and tinted moisturisers from the
+/// makeup blocklist below — they technically count as makeup but their
+/// SPF makes them part of the daily skincare ritual.
+bool hasSpfClaim(FeedOffer offer) {
+  if ((offer.params['SPF'] ?? '').trim().isNotEmpty) return true;
+  final hay = [
+    offer.name,
+    offer.params['Тип продукта'] ?? '',
+    offer.params['Назначение'] ?? '',
+    offer.description ?? '',
+  ].join(' ').toLowerCase();
+  return RegExp(r'\bspf\s*\d|\bспф\s*\d|солнцезащит|с\s+защитой\s+от\s+солнц')
+      .hasMatch(hay);
+}
+
+/// Returns true when the offer's primary purpose is decorative makeup
+/// rather than skincare. Most makeup is filtered by this; BB/CC creams
+/// and tinted SPF products that overlap with skincare are NOT flagged
+/// here because the caller checks `hasSpfClaim` first.
+bool isMakeupCategory(FeedOffer offer) {
+  final pt = (offer.params['Тип продукта'] ?? '').toLowerCase();
+  const makeupTypes = [
+    'тональный крем',
+    'тональная основа',
+    'тональное средство',
+    'пудра',
+    'румяна',
+    'хайлайтер',
+    'бронзер',
+    'корректор',
+    'консилер',
+    'праймер',
+    'базы под макияж',
+    'фиксатор макияжа',
+    'тени для век',
+    'тушь для ресниц',
+    'тушь',
+    'подводка',
+    'карандаш',
+    'помада',
+    'блеск для губ',
+    'тинт',
+    'лайнер для губ',
+    'кисти для макияжа',
+    'спонжи',
+    'мерцающая пудра',
+  ];
+  if (makeupTypes.any(pt.contains)) return true;
+  final name = offer.name.toLowerCase();
+  const nameBlockers = [
+    'тональный крем',
+    'тональная основа',
+    'foundation',
+    'concealer',
+    'консилер',
+    'mascara',
+    'тушь',
+    'lipstick',
+    'помада',
+    'lip gloss',
+    'блеск для губ',
+    'eye shadow',
+    'тени для век',
+    'blush',
+    'румяна',
+  ];
+  return nameBlockers.any(name.contains);
+}
+
 /// Returns true when the offer is for face / eye skincare — what we actually
 /// want in the catalog. Filters out body / hand / feet / nail / lash / brow
 /// products even when their Назначение happens to overlap with skincare

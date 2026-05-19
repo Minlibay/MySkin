@@ -1124,19 +1124,29 @@ class AdminHandlers {
           productType: productType,
         );
 
-        // Primary moderation gate. Two filters here:
-        //   a) skincare-shape check: a recognised kind OR a derived
-        //      concern tag from Назначение. Tool kits and brushes fail
-        //      both.
-        //   b) face-only check: Область применения / Тип продукта /
-        //      product name must not place this in body / hand / nail /
-        //      lash / brow / lip / hair territory.
-        // An offer needs to pass BOTH gates. Failing either drops the
-        // offer and removes any previous import of the same external_id.
+        // Primary moderation gate. Three filters here, an offer must
+        // pass all three:
+        //   a) skincare-shape — recognised kind OR derived concern tag.
+        //      Tool kits and brushes fail this.
+        //   b) face-only — Область применения / Тип продукта / name
+        //      must not place this in body / hand / nail / lash / brow /
+        //      lip / hair.
+        //   c) not pure makeup — tonal foundation, powder, lipstick etc
+        //      are dropped UNLESS they carry an SPF claim (BB/CC creams
+        //      and tinted SPF moisturisers). When they do, we keep the
+        //      offer and force kind = 'spf' so they slot into the SPF
+        //      step of the routine instead of being misclassified as a
+        //      regular moisturiser.
+        // Failing any gate skips the row and removes any prior import.
         final hasUsableKind = guessedKind != null;
         final hasConcernTags = offer.derivedTags.isNotEmpty;
         final isFace = isFaceProduct(offer);
-        if ((!hasUsableKind && !hasConcernTags) || !isFace) {
+        final isMakeup = isMakeupCategory(offer);
+        final hasSpf = hasSpfClaim(offer);
+        final rejected = (!hasUsableKind && !hasConcernTags) ||
+            !isFace ||
+            (isMakeup && !hasSpf);
+        if (rejected) {
           skipped++;
           if (existing != null) {
             await products.delete(existing.id);
@@ -1144,7 +1154,7 @@ class AdminHandlers {
           }
           continue;
         }
-        final kind = guessedKind ?? 'serum';
+        final kind = (isMakeup && hasSpf) ? 'spf' : (guessedKind ?? 'serum');
         // Derived flags for new products. Existing rows keep whatever the
         // admin already set — guards on each field below.
         final derivedActive = guessIsActive(offer.derivedIngredients);
