@@ -131,6 +131,27 @@ export default function Products() {
     }
   }
 
+  async function onReslugifyCyrillic() {
+    if (
+      !confirm(
+        'Перевести все кириллические слаги товаров в латиницу?\n\n' +
+          'Старые ссылки перестанут работать. Действие необратимо.'
+      )
+    ) {
+      return;
+    }
+    setCleaning(true);
+    try {
+      const r = await api.reslugifyCyrillic();
+      alert(`Обновлено: ${r.updated} слагов.`);
+      await load({ resetPage: true });
+    } catch (e) {
+      alert(`Не удалось обновить: ${e}`);
+    } finally {
+      setCleaning(false);
+    }
+  }
+
   async function onDeleteDuplicates() {
     if (
       !confirm(
@@ -190,6 +211,14 @@ export default function Products() {
           </div>
         </div>
         <div className="flex gap-2">
+          <button
+            onClick={onReslugifyCyrillic}
+            className="btn-ghost"
+            disabled={cleaning || loading}
+            title="Перевести кириллические слаги товаров в латиницу"
+          >
+            {cleaning ? 'Чистим…' : 'A→ Перевести слаги в латиницу'}
+          </button>
           <button
             onClick={onDeleteUntagged}
             className="btn-ghost"

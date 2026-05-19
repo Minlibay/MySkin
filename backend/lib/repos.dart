@@ -6,6 +6,36 @@ import 'package:uuid/uuid.dart';
 
 const _uuid = Uuid();
 
+/// Russian → Latin transliteration table used to normalise Cyrillic product
+/// slugs to ASCII so they can travel safely through URL paths. Follows the
+/// "BGN/PCGN" school informally: keeps the slug human-readable, doesn't try
+/// to round-trip back to Cyrillic.
+const Map<String, String> _ruToLat = {
+  'а': 'a', 'б': 'b', 'в': 'v', 'г': 'g', 'д': 'd', 'е': 'e', 'ё': 'e',
+  'ж': 'zh', 'з': 'z', 'и': 'i', 'й': 'y', 'к': 'k', 'л': 'l', 'м': 'm',
+  'н': 'n', 'о': 'o', 'п': 'p', 'р': 'r', 'с': 's', 'т': 't', 'у': 'u',
+  'ф': 'f', 'х': 'h', 'ц': 'ts', 'ч': 'ch', 'ш': 'sh', 'щ': 'sch',
+  'ъ': '', 'ы': 'y', 'ь': '', 'э': 'e', 'ю': 'yu', 'я': 'ya',
+};
+
+String _transliterateSlug(String s) {
+  final buf = StringBuffer();
+  for (final ch in s.toLowerCase().split('')) {
+    final mapped = _ruToLat[ch];
+    if (mapped != null) {
+      buf.write(mapped);
+    } else if (RegExp(r'[a-z0-9]').hasMatch(ch)) {
+      buf.write(ch);
+    } else {
+      buf.write('-');
+    }
+  }
+  return buf
+      .toString()
+      .replaceAll(RegExp(r'-+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
+}
+
 class UserRow {
   UserRow({
     required this.id,
@@ -1764,6 +1794,48 @@ class ProductRepository {
       Sql.named('DELETE FROM products WHERE id = @id'),
       parameters: {'id': id},
     );
+  }
+
+  /// Walks every product slug and rewrites any Cyrillic-bearing slug to a
+  /// pure ASCII slug (Cyrillic → Latin transliteration). Returns the count
+  /// of rows updated. Idempotent — ASCII-only slugs are left alone. When a
+  /// transliterated slug would collide with an existing row, a `-N` suffix
+  /// is appended until unique.
+  Future<int> reslugifyCyrillic() async {
+    final rows = await db.execute(
+      Sql.named(
+          "SELECT id, slug FROM products WHERE slug ~ '[А-Яа-яЁё]'"),
+    );
+    if (rows.isEmpty) return 0;
+
+    final taken = <String>{};
+    final existing = await db.execute(
+      Sql.named("SELECT slug FROM products WHERE slug !~ '[А-Яа-яЁё]'"),
+    );
+    for (final r in existing) {
+      taken.add(r[0] as String);
+    }
+
+    var updated = 0;
+    for (final r in rows) {
+      final id = r[0] as String;
+      final oldSlug = r[1] as String;
+      var newSlug = _transliterateSlug(oldSlug);
+      if (newSlug.isEmpty) newSlug = 'p-$id';
+      var candidate = newSlug;
+      var n = 2;
+      while (taken.contains(candidate)) {
+        candidate = '$newSlug-$n';
+        n++;
+      }
+      taken.add(candidate);
+      await db.execute(
+        Sql.named('UPDATE products SET slug = @s WHERE id = @id'),
+        parameters: {'s': candidate, 'id': id},
+      );
+      updated++;
+    }
+    return updated;
   }
 
   /// Bulk-delete products whose concern-tag list is empty. Used as a

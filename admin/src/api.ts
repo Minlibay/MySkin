@@ -139,6 +139,13 @@ export const api = {
     );
   },
 
+  reslugifyCyrillic() {
+    return this.request<{ ok: boolean; updated: number }>(
+      '/admin/products/reslugify-cyrillic',
+      { method: 'POST' }
+    );
+  },
+
   productCreate(input: ProductInput) {
     return this.request<AdminProduct>('/admin/products', {
       method: 'POST',

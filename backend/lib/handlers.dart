@@ -389,6 +389,10 @@ class AdminHandlers {
     // Bulk cleanup: drop rows that duplicate another by brand+name
     ..post('/admin/products/delete-duplicates',
         _withAdmin(_deleteDuplicates))
+    // Bulk fix: transliterate Cyrillic product slugs to ASCII so mobile
+    // can request /catalog/<slug> without percent-encoding gymnastics.
+    ..post('/admin/products/reslugify-cyrillic',
+        _withAdmin(_reslugifyCyrillic))
     // Self-service password change
     ..post('/admin/change-password', _withAdmin(_changeOwnPassword));
 
@@ -1470,6 +1474,11 @@ class AdminHandlers {
   Future<Response> _deleteDuplicates(Request req) async {
     final n = await products.deleteDuplicatesByName();
     return jsonResponse(200, {'ok': true, 'deleted': n});
+  }
+
+  Future<Response> _reslugifyCyrillic(Request req) async {
+    final n = await products.reslugifyCyrillic();
+    return jsonResponse(200, {'ok': true, 'updated': n});
   }
 
   /// HTTP GET the feed body, with retries for the advcake "not ready"
