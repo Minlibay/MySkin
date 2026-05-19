@@ -1,11 +1,14 @@
-/// YML (Yandex Market Language) feed parser tuned for advcake / Golden Apple
-/// affiliate exports. Used by the admin import endpoint to bulk-create
-/// catalog products from a partner feed.
+/// YML (Yandex Market Language) and CSV feed parser tuned for advcake /
+/// Golden Apple affiliate exports. Used by the admin import endpoint to
+/// bulk-create catalog products from a partner feed.
 ///
-/// We deliberately keep the parser dependency-light (xml package only) and
-/// do all the field mapping in this file so the handler layer can stay thin.
+/// Advcake silently switched the same URL between XML and CSV at some
+/// point, so [parseFeed] auto-detects the format from the document head:
+/// `<?xml ` or `<yml_catalog` → XML; anything else (BOM + `id;name;…`
+/// header) → CSV. Field mapping converges into the same FeedSnapshot.
 library;
 
+import 'package:csv/csv.dart';
 import 'package:xml/xml.dart';
 
 /// One category entry from the feed's <categories> block. The feed mixes
@@ -81,10 +84,24 @@ class FeedSnapshot {
   final List<FeedOffer> offers;
 }
 
-/// Parse the entire YML document. Caller decides whether to keep all offers
-/// or filter by [onlyCategoryIds]. We keep parsing in-memory simple — the
-/// feeds we've seen are under 5 MB and well under 1000 offers.
-FeedSnapshot parseFeed(String xml, {Set<String>? onlyCategoryIds}) {
+/// Entry point — picks XML vs CSV by sniffing the first useful character
+/// after the BOM. Caller decides whether to keep all offers or filter by
+/// [onlyCategoryIds]; the filter accepts either real XML category ids
+/// ("63") or CSV-style slugified names ("category-Сыворотки") that
+/// [parseFeedCsv] generates.
+FeedSnapshot parseFeed(String raw, {Set<String>? onlyCategoryIds}) {
+  // Strip UTF-8 BOM if present — appears at the start of CSV exports.
+  final body = raw.startsWith('﻿') ? raw.substring(1) : raw;
+  final trimmedHead = body.trimLeft();
+  final isXml = trimmedHead.startsWith('<?xml') ||
+      trimmedHead.startsWith('<yml_catalog');
+  if (!isXml) {
+    return parseFeedCsv(body, onlyCategoryIds: onlyCategoryIds);
+  }
+  return _parseFeedXml(body, onlyCategoryIds: onlyCategoryIds);
+}
+
+FeedSnapshot _parseFeedXml(String xml, {Set<String>? onlyCategoryIds}) {
   final doc = XmlDocument.parse(xml);
   final categories = <String, FeedCategory>{};
   for (final c in doc.findAllElements('category')) {
@@ -433,6 +450,162 @@ String guessRoutinePhase({
   // a side. Same rule dermatologists apply to retinoids / AHA.
   if (isActive && !mentionsMorning) return 'evening';
   return 'any';
+}
+
+/// CSV path. The new advcake format is semicolon-separated with a single
+/// header row and an inline `params` field that packs the old XML `<param>`
+/// list as `key1:value1|key2:value2|…`. Embedded newlines inside the
+/// params field are properly quoted, so we let the `csv` package handle
+/// line splitting.
+FeedSnapshot parseFeedCsv(String body, {Set<String>? onlyCategoryIds}) {
+  final rows = const CsvToListConverter(
+    fieldDelimiter: ';',
+    textDelimiter: '"',
+    eol: '\n',
+    shouldParseNumbers: false,
+  ).convert(body);
+  if (rows.isEmpty) {
+    return FeedSnapshot(categories: {}, offers: const []);
+  }
+  final header = rows.first.map((c) => '$c'.trim().toLowerCase()).toList();
+  int idx(String name) => header.indexOf(name);
+  final iId = idx('id');
+  final iName = idx('name');
+  final iCategory = idx('category');
+  final iPrice = idx('price');
+  final iUrl = idx('url');
+  final iImage = idx('image');
+  final iBrand = idx('brand');
+  final iAvail = idx('available');
+  final iModel = idx('model');
+  final iDesc = idx('description');
+  final iParams = idx('params');
+
+  final categories = <String, FeedCategory>{};
+  final offers = <FeedOffer>[];
+
+  for (var r = 1; r < rows.length; r++) {
+    final row = rows[r];
+    if (row.isEmpty) continue;
+    String cell(int i) => i >= 0 && i < row.length ? '${row[i]}' : '';
+
+    final externalId = cell(iId).trim();
+    if (externalId.isEmpty) continue;
+
+    // Availability gate. Advcake uses "in stock" / "out of stock"; rows
+    // with empty avail come from continuation lines of a previous record
+    // that broke our split heuristic — skip them.
+    final avail = cell(iAvail).trim().toLowerCase();
+    if (avail.isEmpty) continue;
+    if (avail != 'in stock' && avail != 'true') continue;
+
+    final categoryName = cell(iCategory).trim();
+    // Stable id derived from the category label since CSV doesn't carry
+    // numeric ids. Same name → same id across runs, so admin's stored
+    // selections survive re-imports.
+    final categoryId = categoryName.isEmpty
+        ? 'uncategorised'
+        : 'cat-${_slugify(categoryName)}';
+    categories.putIfAbsent(categoryId,
+        () => FeedCategory(id: categoryId, name: categoryName));
+
+    if (onlyCategoryIds != null && !onlyCategoryIds.contains(categoryId)) {
+      categories[categoryId]!.offerCount++;
+      continue;
+    }
+    categories[categoryId]!.offerCount++;
+
+    final paramMap = _parseInlineParams(cell(iParams));
+
+    final name = _firstNonEmpty([
+          cell(iName),
+          cell(iModel),
+          paramMap['Наименование продукта от поставщика'],
+        ]) ??
+        '';
+    if (name.isEmpty) continue;
+
+    final brand = _firstNonEmpty([
+          cell(iBrand),
+          paramMap['Бренд'],
+        ]) ??
+        '';
+    if (brand.isEmpty) continue;
+
+    final url = cell(iUrl).trim();
+    if (url.isEmpty) continue;
+
+    final priceRub = _parsePrice(cell(iPrice));
+    if (priceRub == null) continue;
+
+    final picture = cell(iImage).trim();
+    final pictures = picture.isEmpty ? const <String>[] : [picture];
+
+    final purpose = paramMap['Назначение'] ?? '';
+    final skinTypeRaw = paramMap['Тип кожи'] ?? '';
+    final derivedTags = _derivedTags(purpose, skinTypeRaw);
+    final derivedSkin = _derivedSkinTypes(skinTypeRaw);
+    final derivedIngredients =
+        _splitIngredients(paramMap['Состав'] ?? '');
+
+    offers.add(FeedOffer(
+      externalId: externalId,
+      name: _cleanText(name),
+      url: url,
+      priceRub: priceRub,
+      brand: _cleanText(brand),
+      categoryId: categoryId,
+      description: _firstNonEmpty([
+        paramMap['Описание товара'],
+        cell(iDesc),
+      ]).maybeCleanHtml(),
+      composition: null,
+      usage: _firstNonEmpty([
+        paramMap['Как использовать'],
+        paramMap['Способ применения'],
+        paramMap['Применение'],
+        paramMap['Инструкция по применению'],
+      ]).maybeCleanHtml(),
+      precautions: _firstNonEmpty([
+        paramMap['Меры предосторожности'],
+        paramMap['Противопоказания'],
+      ]).maybeCleanHtml(),
+      country: paramMap['Страна бренда'],
+      volume: paramMap['Объем'] ?? paramMap['Объём'],
+      volumeUnit: paramMap['Единица измерения'],
+      pictures: pictures,
+      params: paramMap,
+      derivedTags: derivedTags,
+      derivedSkinTypes: derivedSkin,
+      derivedIngredients: derivedIngredients,
+    ));
+  }
+  return FeedSnapshot(categories: categories, offers: offers);
+}
+
+/// Splits the inline `params` cell into a key→value map. Format is
+/// pipe-separated entries with the first colon as the key/value boundary.
+/// Values may legitimately contain colons (URLs, "Тип:" prose), so we
+/// split on FIRST colon only.
+Map<String, String> _parseInlineParams(String raw) {
+  if (raw.isEmpty) return const {};
+  final out = <String, String>{};
+  for (final piece in raw.split('|')) {
+    final i = piece.indexOf(':');
+    if (i <= 0) continue;
+    final key = piece.substring(0, i).trim();
+    final value = piece.substring(i + 1).trim();
+    if (key.isEmpty || value.isEmpty) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+String _slugify(String s) {
+  return s
+      .toLowerCase()
+      .replaceAll(RegExp(r'[^a-zа-яё0-9]+'), '-')
+      .replaceAll(RegExp(r'^-+|-+$'), '');
 }
 
 /// Maps a Russian-language `Назначение` (purpose) list — and a `Тип кожи`
