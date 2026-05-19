@@ -84,21 +84,28 @@ class FeedSnapshot {
   final List<FeedOffer> offers;
 }
 
-/// Entry point — picks XML vs CSV by sniffing the first useful character
-/// after the BOM. Caller decides whether to keep all offers or filter by
-/// [onlyCategoryIds]; the filter accepts either real XML category ids
-/// ("63") or CSV-style slugified names ("category-Сыворотки") that
-/// [parseFeedCsv] generates.
+/// Entry point — picks YML XML, Google Shopping RSS XML, or CSV by
+/// sniffing the document head (after stripping the UTF-8 BOM). Advcake
+/// has shipped all three over the same URL at different times, so the
+/// dispatcher tries each:
+///   - `<yml_catalog` root → legacy YML
+///   - `<rss` root with `xmlns:g` namespace → Google Shopping
+///   - anything else → CSV
 FeedSnapshot parseFeed(String raw, {Set<String>? onlyCategoryIds}) {
-  // Strip UTF-8 BOM if present — appears at the start of CSV exports.
   final body = raw.startsWith('﻿') ? raw.substring(1) : raw;
-  final trimmedHead = body.trimLeft();
-  final isXml = trimmedHead.startsWith('<?xml') ||
-      trimmedHead.startsWith('<yml_catalog');
-  if (!isXml) {
-    return parseFeedCsv(body, onlyCategoryIds: onlyCategoryIds);
+  final head = body.trimLeft();
+  // Both YML and Google Shopping start with `<?xml`; we differentiate by
+  // looking ~600 bytes in for the root element tag.
+  if (head.startsWith('<?xml') || head.startsWith('<')) {
+    final probe = head.length > 1000 ? head.substring(0, 1000) : head;
+    if (probe.contains('<yml_catalog')) {
+      return _parseFeedXml(body, onlyCategoryIds: onlyCategoryIds);
+    }
+    if (probe.contains('<rss') && probe.contains('base.google.com/ns/1.0')) {
+      return parseFeedRss(body, onlyCategoryIds: onlyCategoryIds);
+    }
   }
-  return _parseFeedXml(body, onlyCategoryIds: onlyCategoryIds);
+  return parseFeedCsv(body, onlyCategoryIds: onlyCategoryIds);
 }
 
 FeedSnapshot _parseFeedXml(String xml, {Set<String>? onlyCategoryIds}) {
@@ -520,6 +527,130 @@ String guessRoutinePhase({
   // a side. Same rule dermatologists apply to retinoids / AHA.
   if (isActive && !mentionsMorning) return 'evening';
   return 'any';
+}
+
+/// Google Shopping RSS path. Each `<item>` has the standard RSS fields
+/// (title / description / link) plus `<g:*>` namespaced shopping fields:
+/// `g:id`, `g:availability`, `g:image_link`, `g:additional_image_link*`,
+/// `g:product_type`, `g:price`, `g:sale_price`, `g:brand`, `g:gtin`, and
+/// repeated `g:product_detail` blocks with `g:attribute_name` +
+/// `g:attribute_value` that carry the same params dict YML used to put in
+/// `<param name=...>` and CSV in the pipe-separated `params` field.
+FeedSnapshot parseFeedRss(String body, {Set<String>? onlyCategoryIds}) {
+  final doc = XmlDocument.parse(body);
+  final categories = <String, FeedCategory>{};
+  final offers = <FeedOffer>[];
+
+  // Local helper that pulls the first element with the given local name,
+  // regardless of XML namespace prefix (g:id vs id).
+  String? childText(XmlElement el, String localName) {
+    for (final c in el.findElements(localName)) {
+      final t = c.innerText.trim();
+      if (t.isNotEmpty) return t;
+    }
+    return null;
+  }
+
+  for (final item in doc.findAllElements('item')) {
+    final externalId = childText(item, 'g:id') ?? childText(item, 'id') ?? '';
+    if (externalId.isEmpty) continue;
+
+    final avail = (childText(item, 'g:availability') ?? '').toLowerCase();
+    if (avail.isNotEmpty && avail != 'in stock' && avail != 'true') continue;
+
+    // params: each <g:product_detail> is a name/value pair.
+    final paramMap = <String, String>{};
+    for (final pd in item.findElements('g:product_detail')) {
+      final nameEl = pd.findElements('g:attribute_name').firstOrNull;
+      final valueEl = pd.findElements('g:attribute_value').firstOrNull;
+      final n = nameEl?.innerText.trim() ?? '';
+      final v = valueEl?.innerText.trim() ?? '';
+      if (n.isEmpty || v.isEmpty) continue;
+      paramMap[n] = v;
+    }
+
+    final categoryName = childText(item, 'g:product_type') ??
+        childText(item, 'g:google_product_category') ??
+        '';
+    final categoryId = categoryName.isEmpty
+        ? 'uncategorised'
+        : 'cat-${_slugify(categoryName)}';
+    categories.putIfAbsent(categoryId,
+        () => FeedCategory(id: categoryId, name: categoryName));
+    if (onlyCategoryIds != null && !onlyCategoryIds.contains(categoryId)) {
+      categories[categoryId]!.offerCount++;
+      continue;
+    }
+    categories[categoryId]!.offerCount++;
+
+    final name = _firstNonEmpty([
+          childText(item, 'title'),
+          paramMap['Наименование продукта от поставщика'],
+        ]) ??
+        '';
+    if (name.isEmpty) continue;
+    final brand = _firstNonEmpty([
+          childText(item, 'g:brand'),
+          paramMap['Бренд'],
+        ]) ??
+        '';
+    if (brand.isEmpty) continue;
+    final url = childText(item, 'link') ?? '';
+    if (url.isEmpty) continue;
+
+    // Prefer sale_price (current cost) over the strikethrough price.
+    final priceRub = _parsePrice(
+        childText(item, 'g:sale_price') ?? childText(item, 'g:price'));
+    if (priceRub == null) continue;
+
+    final pictures = <String>[];
+    final main = childText(item, 'g:image_link');
+    if (main != null) pictures.add(main);
+    for (final extra in item.findElements('g:additional_image_link')) {
+      final u = extra.innerText.trim();
+      if (u.isNotEmpty) pictures.add(u);
+    }
+
+    final purpose = paramMap['Назначение'] ?? '';
+    final skinTypeRaw = paramMap['Тип кожи'] ?? '';
+    final derivedTags = _derivedTags(purpose, skinTypeRaw);
+    final derivedSkin = _derivedSkinTypes(skinTypeRaw);
+    final derivedIngredients =
+        _splitIngredients(paramMap['Состав'] ?? '');
+
+    offers.add(FeedOffer(
+      externalId: externalId,
+      name: _cleanText(name),
+      url: url,
+      priceRub: priceRub,
+      brand: _cleanText(brand),
+      categoryId: categoryId,
+      description: _firstNonEmpty([
+        paramMap['Описание товара'],
+        childText(item, 'description'),
+      ]).maybeCleanHtml(),
+      composition: null,
+      usage: _firstNonEmpty([
+        paramMap['Как использовать'],
+        paramMap['Способ применения'],
+        paramMap['Применение'],
+        paramMap['Инструкция по применению'],
+      ]).maybeCleanHtml(),
+      precautions: _firstNonEmpty([
+        paramMap['Меры предосторожности'],
+        paramMap['Противопоказания'],
+      ]).maybeCleanHtml(),
+      country: paramMap['Страна бренда'],
+      volume: paramMap['Объем'] ?? paramMap['Объём'],
+      volumeUnit: paramMap['Единица измерения'],
+      pictures: pictures,
+      params: paramMap,
+      derivedTags: derivedTags,
+      derivedSkinTypes: derivedSkin,
+      derivedIngredients: derivedIngredients,
+    ));
+  }
+  return FeedSnapshot(categories: categories, offers: offers);
 }
 
 /// CSV path. The new advcake format is semicolon-separated with a single

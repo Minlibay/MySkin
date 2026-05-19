@@ -378,6 +378,8 @@ class AdminHandlers {
     // Feed import (advcake / Golden Apple etc)
     ..post('/admin/feed/preview', _withAdmin(_feedPreview))
     ..post('/admin/feed/import', _withAdmin(_feedImport))
+    ..post('/admin/feed/preview-file', _withAdmin(_feedPreviewFile))
+    ..post('/admin/feed/import-file', _withAdmin(_feedImportFile))
     // Bulk publish: flips all current drafts to `published`
     ..post('/admin/products/publish-drafts',
         _withAdmin(_publishAllDrafts))
@@ -1102,7 +1104,17 @@ class AdminHandlers {
       return jsonResponse(502, {'error': 'feed_download_failed'});
     }
     final snap = parseFeed(xml, onlyCategoryIds: categoryIds);
+    return _runFeedImport(snap, source: source, adMarkerText: adMarkerText);
+  }
 
+  /// Shared body for `_feedImport` and `_feedImportFile`. Walks the parsed
+  /// FeedSnapshot, applies moderation gates, upserts products, fetches
+  /// pictures into slots and returns the summary JSON.
+  Future<Response> _runFeedImport(
+    FeedSnapshot snap, {
+    required String source,
+    required String adMarkerText,
+  }) async {
     var inserted = 0;
     var updated = 0;
     var skipped = 0;
@@ -1327,6 +1339,110 @@ class AdminHandlers {
       return (bytes: resp.bodyBytes, mime: mime);
     } catch (_) {
       return null;
+    }
+  }
+
+  /// Accepts a feed file uploaded directly from the admin (raw body =
+  /// the XML / CSV bytes). Saves the body to a /tmp file, parses it
+  /// once for the preview, and returns a `feed_token` so the follow-up
+  /// import call can re-read the same file without re-uploading.
+  Future<Response> _feedPreviewFile(Request req) async {
+    final bytes = <int>[];
+    await for (final chunk in req.read()) {
+      bytes.addAll(chunk);
+      if (bytes.length > 250 * 1024 * 1024) {
+        return jsonResponse(413, {'error': 'feed_file_too_large'});
+      }
+    }
+    if (bytes.isEmpty) {
+      return jsonResponse(400, {'error': 'empty_body'});
+    }
+    final body = utf8.decode(bytes, allowMalformed: true);
+    final FeedSnapshot snap;
+    try {
+      snap = parseFeed(body);
+    } catch (e) {
+      return jsonResponse(400, {'error': 'parse_failed', 'message': '$e'});
+    }
+    // Stash on disk so the follow-up import-file call can reuse without
+    // a second upload. /tmp is container-local; restarts evict.
+    final token = _uuid.v4();
+    final path = '${Directory.systemTemp.path}/feed-$token.dat';
+    try {
+      await File(path).writeAsBytes(bytes, flush: true);
+    } catch (e) {
+      stderr.writeln('Feed preview-file: temp write failed: $e');
+    }
+    final cats = snap.categories.values
+        .where((c) => c.offerCount > 0)
+        .toList()
+      ..sort((a, b) => b.offerCount.compareTo(a.offerCount));
+    return jsonResponse(200, {
+      'feed_token': token,
+      'total_offers': snap.offers.length,
+      'categories': cats
+          .map((c) => {
+                'id': c.id,
+                'name': c.name,
+                'offer_count': c.offerCount,
+              })
+          .toList(),
+      'sample': snap.offers.isEmpty
+          ? null
+          : {
+              'external_id': snap.offers.first.externalId,
+              'name': snap.offers.first.name,
+              'brand': snap.offers.first.brand,
+              'price_rub': snap.offers.first.priceRub,
+              'category_id': snap.offers.first.categoryId,
+              'picture':
+                  snap.offers.first.pictures.isEmpty ? null : snap.offers.first.pictures.first,
+            },
+    });
+  }
+
+  /// Imports from a previously uploaded file. Body:
+  ///   { feed_token, category_ids: [..], ad_marker_text, source }
+  /// The temp file is removed after the import finishes regardless of
+  /// outcome — token can't be reused for another import without a fresh
+  /// preview-file upload.
+  Future<Response> _feedImportFile(Request req) async {
+    final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;
+    final token = (body['feed_token'] as String? ?? '').trim();
+    if (token.isEmpty || !RegExp(r'^[a-f0-9-]+$').hasMatch(token)) {
+      return jsonResponse(400, {'error': 'missing_feed_token'});
+    }
+    final categoryIds = ((body['category_ids'] as List?) ?? const [])
+        .map((e) => '$e')
+        .toSet();
+    if (categoryIds.isEmpty) {
+      return jsonResponse(400, {'error': 'no_categories_selected'});
+    }
+    final adMarkerText =
+        (body['ad_marker_text'] as String?)?.trim() ?? '';
+    final source =
+        (body['source'] as String?)?.trim().isNotEmpty == true
+            ? (body['source'] as String).trim()
+            : 'advcake';
+
+    final path = '${Directory.systemTemp.path}/feed-$token.dat';
+    final file = File(path);
+    if (!await file.exists()) {
+      return jsonResponse(410, {'error': 'feed_token_expired'});
+    }
+    try {
+      final bytes = await file.readAsBytes();
+      final str = utf8.decode(bytes, allowMalformed: true);
+      final snap = parseFeed(str, onlyCategoryIds: categoryIds);
+      return await _runFeedImport(
+        snap,
+        source: source,
+        adMarkerText: adMarkerText,
+      );
+    } finally {
+      try {
+        if (await file.exists()) await file.delete();
+      } catch (_) {/* best-effort cleanup */}
     }
   }
 

@@ -308,6 +308,59 @@ export const api = {
       body: JSON.stringify({ url }),
     });
   },
+  async feedPreviewFile(file: File) {
+    const token = this.getToken();
+    const resp = await fetch(`${this.baseUrl}/admin/feed/preview-file`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/octet-stream',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+      },
+      body: file,
+    });
+    if (!resp.ok) {
+      throw new ApiError(`http_${resp.status}`, resp.status);
+    }
+    return (await resp.json()) as {
+      feed_token: string;
+      total_offers: number;
+      categories: Array<{ id: string; name: string; offer_count: number }>;
+      sample: {
+        external_id: string;
+        name: string;
+        brand: string;
+        price_rub: number;
+        category_id: string;
+        picture: string | null;
+      } | null;
+    };
+  },
+  feedImportFile(params: {
+    feedToken: string;
+    categoryIds: string[];
+    adMarkerText: string;
+    source?: string;
+  }) {
+    return this.request<{
+      ok: boolean;
+      inserted: number;
+      updated: number;
+      skipped: number;
+      deleted_junk: number;
+      total: number;
+      photos_fetched: number;
+      photos_failed: number;
+      errors?: Array<{ external_id: string; error: string }>;
+    }>('/admin/feed/import-file', {
+      method: 'POST',
+      body: JSON.stringify({
+        feed_token: params.feedToken,
+        category_ids: params.categoryIds,
+        ad_marker_text: params.adMarkerText,
+        source: params.source ?? 'advcake',
+      }),
+    });
+  },
   feedImport(params: {
     url: string;
     categoryIds: string[];

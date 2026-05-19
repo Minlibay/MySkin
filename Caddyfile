@@ -20,8 +20,10 @@ api.xn--80allhkb1j.xn--p1ai {
         }
     }
     request_body {
-        # Photos can be up to ~6MB after base64 inflation.
-        max_size 10MB
+        # Photos run ~6MB after base64 inflation. Feed-file uploads from
+        # the admin can be much larger (Google Shopping XMLs from Golden
+        # Apple are ~60MB) — bump to 200MB to cover those.
+        max_size 200MB
     }
 }
 

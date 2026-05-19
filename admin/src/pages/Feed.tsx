@@ -37,6 +37,9 @@ export default function Feed() {
   const [url, setUrl] = useState(DEFAULT_FEED_URL);
   const [adMarker, setAdMarker] = useState(DEFAULT_AD_MARKER);
   const [preview, setPreview] = useState<PreviewState | null>(null);
+  // When the preview came from an uploaded file, we keep the token so
+  // import-file can reuse the same /tmp blob without a second 60MB upload.
+  const [feedToken, setFeedToken] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState('');
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -51,6 +54,7 @@ export default function Feed() {
     try {
       const p = await api.feedPreview(url.trim());
       setPreview(p);
+      setFeedToken(null); // URL-based preview — no token
       setSelected(new Set());
     } catch (e) {
       const code = String(e).replace(/^.*ApiError:?\s*/, '');
@@ -64,18 +68,46 @@ export default function Feed() {
     }
   }
 
+  async function runPreviewFile(file: File) {
+    setError(null);
+    setResult(null);
+    setLoadingPreview(true);
+    try {
+      const p = await api.feedPreviewFile(file);
+      setPreview({
+        total_offers: p.total_offers,
+        categories: p.categories,
+        sample: p.sample,
+      });
+      setFeedToken(p.feed_token);
+      setSelected(new Set());
+    } catch (e) {
+      setError(`Не удалось разобрать файл: ${String(e)}`);
+    } finally {
+      setLoadingPreview(false);
+    }
+  }
+
   async function runImport() {
     if (selected.size === 0) return;
     setError(null);
     setImporting(true);
     setResult(null);
     try {
-      const r = await api.feedImport({
-        url: url.trim(),
-        categoryIds: Array.from(selected),
-        adMarkerText: adMarker.trim(),
-      });
+      const r = feedToken
+        ? await api.feedImportFile({
+            feedToken,
+            categoryIds: Array.from(selected),
+            adMarkerText: adMarker.trim(),
+          })
+        : await api.feedImport({
+            url: url.trim(),
+            categoryIds: Array.from(selected),
+            adMarkerText: adMarker.trim(),
+          });
       setResult(r);
+      // File token is one-shot — server deletes the temp file after import.
+      if (feedToken) setFeedToken(null);
     } catch (e) {
       setError(`Импорт упал: ${String(e)}`);
     } finally {
@@ -111,12 +143,11 @@ export default function Feed() {
         Из <span className="italic text-rose">фида</span>
       </h1>
       <p className="text-ink2 text-sm mb-6 max-w-2xl">
-        Загружает товары из XML-фида (Yandex Market формат — advcake, Golden
-        Apple и т.д.) Превью покажет категории и количество офферов в
-        каждой; ты отметишь нужные и нажмёшь «Импортировать». Товары
-        сохраняются как <b>черновики</b> — потом ревьюишь и публикуешь.
-        Всем импортированным автоматически проставляется маркировка
-        рекламы (текст ниже редактируется).
+        Грузит товары из XML / CSV / Google Shopping фида. Превью покажет
+        категории; отмечаешь нужные → «Импортировать». Товары сохраняются
+        как <b>черновики</b>, с автоматической маркировкой рекламы.
+        Два источника на выбор: URL (бэк сам скачает) или файл с диска
+        (если поставщик у тебя в браузере отдаёт надёжнее).
       </p>
 
       <div className="card p-6 mb-6 space-y-4">
@@ -149,12 +180,40 @@ export default function Feed() {
             onClick={runPreview}
             disabled={loadingPreview || !url.trim()}
           >
-            {loadingPreview ? 'Загружаем…' : 'Получить категории'}
+            {loadingPreview ? 'Загружаем…' : 'Получить категории по URL'}
           </button>
           {loadingPreview && (
             <span className="text-xs text-ink2">
               Advcake первый раз генерирует фид 1–3 минуты. Не закрывай
               вкладку.
+            </span>
+          )}
+        </div>
+
+        <div className="border-t border-black/5 pt-4">
+          <div className="eyebrow mb-1.5">…или загрузить файл фида</div>
+          <p className="text-[11px] text-ink2 mb-2">
+            Скачай фид у поставщика в браузере (XML / CSV / RSS) и перетащи
+            сюда — бэкенд распарсит без повторного запроса к поставщику.
+            Лимит 200 MB.
+          </p>
+          <label className="btn-ghost cursor-pointer inline-flex">
+            <input
+              type="file"
+              accept=".xml,.csv,.rss,.txt,application/xml,text/xml,text/csv"
+              className="hidden"
+              disabled={loadingPreview}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) runPreviewFile(f);
+                e.currentTarget.value = '';
+              }}
+            />
+            ⇪ Выбрать файл фида
+          </label>
+          {feedToken && (
+            <span className="ml-3 text-xs text-success">
+              ✓ Файл загружен. Выбери категории ниже и жми «Импортировать».
             </span>
           )}
         </div>
