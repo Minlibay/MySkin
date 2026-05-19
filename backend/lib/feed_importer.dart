@@ -503,19 +503,36 @@ String? _firstNonEmpty(List<String?> xs) {
 }
 
 extension on String? {
-  /// Strips simple HTML (br/p/span) from feed description fields. Feeds
-  /// often embed `&lt;br/&gt;` entities — XML already decoded them, so we
-  /// only need to strip the literal tags now.
+  /// Strips simple HTML (br/p/span) from feed description fields and trims
+  /// the dangling half-sentence the source feed routinely truncates at
+  /// (e.g. "Помогает визуально выров"). If the cleaned text doesn't end
+  /// on a sentence terminator (. ! ? …), we look backwards for the last
+  /// terminator and cut everything past it — losing the partial tail but
+  /// keeping all complete sentences before it. No terminator anywhere
+  /// means we leave the text as-is (safer than blanking a one-liner).
   String? maybeCleanHtml() {
     if (this == null) return null;
     final s = this!;
-    final stripped = s
+    var stripped = s
         .replaceAll(RegExp(r'<br\s*/?\s*>', caseSensitive: false), '\n')
         .replaceAll(RegExp(r'</?(p|div|span|strong|em|b|i)[^>]*>',
             caseSensitive: false), '')
         .replaceAll(RegExp(r'\s+\n'), '\n')
         .replaceAll(RegExp(r'\n{3,}'), '\n\n')
         .trim();
+    stripped = _trimDanglingSentence(stripped);
     return stripped.isEmpty ? null : stripped;
   }
+}
+
+String _trimDanglingSentence(String s) {
+  if (s.isEmpty) return s;
+  const terminators = {'.', '!', '?', '…'};
+  if (terminators.contains(s[s.length - 1])) return s;
+  for (var i = s.length - 1; i >= 0; i--) {
+    if (terminators.contains(s[i])) {
+      return s.substring(0, i + 1).trimRight();
+    }
+  }
+  return s;
 }
