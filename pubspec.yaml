@@ -37,13 +37,14 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  # iOS: Flutter 3.24+ auto-injects Swift Package Manager alongside CocoaPods,
+  # iOS: Flutter auto-injects Swift Package Manager alongside CocoaPods,
   # which makes Sentry-Cocoa land twice in the archive (once via SPM, once via
   # our `pod 'Sentry/HybridSDK'` pin) → "Multiple commands produce
   # Sentry.framework". Half our plugins (mlkit, secure_storage, timezone,
   # local_notifications) don't ship SPM specs anyway, so pure CocoaPods is the
   # consistent path.
-  disable-swift-package-manager: true
+  config:
+    enable-swift-package-manager: false
   fonts:
     - family: CormorantGaramond
       fonts:
