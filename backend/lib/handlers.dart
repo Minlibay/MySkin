@@ -1101,6 +1101,15 @@ class AdminHandlers {
         final kind = guessKind(categoryName, offer.name) ?? 'serum';
         final slug = existing?.slug ??
             _externalSlug(offer.brand, offer.name, offer.externalId);
+        // Volume → extra_info on new products so admin sees "Объём: 50 мл"
+        // in the card. Existing extraInfo wins so manual edits aren't lost.
+        String? volumeInfo;
+        if (offer.volume != null && offer.volume!.isNotEmpty) {
+          final unit = offer.volumeUnit?.isNotEmpty == true
+              ? offer.volumeUnit!
+              : '';
+          volumeInfo = 'Объём: ${offer.volume}${unit.isEmpty ? '' : ' $unit'}';
+        }
         final p = ProductRow(
           id: existing?.id ?? _uuid.v4(),
           slug: slug,
@@ -1111,8 +1120,14 @@ class AdminHandlers {
           priceRub: offer.priceRub,
           accentColor: existing?.accentColor ?? '#D98FA3',
           ingredients: existing?.ingredients ?? const [],
-          tags: existing?.tags ?? const [],
-          skinTypes: existing?.skinTypes ?? const [],
+          // Derived concern tags only fill the empty-tags case — once admin
+          // curates them manually, we never overwrite.
+          tags: existing != null && existing.tags.isNotEmpty
+              ? existing.tags
+              : offer.derivedTags,
+          skinTypes: existing != null && existing.skinTypes.isNotEmpty
+              ? existing.skinTypes
+              : offer.derivedSkinTypes,
           isActive: existing?.isActive ?? false,
           gentle: existing?.gentle ?? false,
           routinePhase: existing?.routinePhase ?? 'any',
@@ -1121,7 +1136,7 @@ class AdminHandlers {
           composition: offer.composition ?? existing?.composition,
           precautions: offer.precautions ?? existing?.precautions,
           usage: offer.usage ?? existing?.usage,
-          extraInfo: existing?.extraInfo,
+          extraInfo: existing?.extraInfo ?? volumeInfo,
           adMarkerVisible:
               existing?.adMarkerVisible ?? adMarkerText.isNotEmpty,
           adMarkerText: existing?.adMarkerText ??

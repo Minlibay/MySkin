@@ -38,8 +38,11 @@ class FeedOffer {
     this.precautions,
     this.country,
     this.volume,
+    this.volumeUnit,
     this.pictures = const [],
     this.params = const {},
+    this.derivedTags = const [],
+    this.derivedSkinTypes = const [],
   });
 
   final String externalId;
@@ -54,8 +57,13 @@ class FeedOffer {
   final String? precautions;
   final String? country;
   final String? volume;
+  final String? volumeUnit;
   final List<String> pictures;
   final Map<String, String> params;
+  /// Concern tags derived from `Назначение` / `Тип кожи` params.
+  final List<String> derivedTags;
+  /// Skin types derived from `Тип кожи` ('all' / 'sensitive' when present).
+  final List<String> derivedSkinTypes;
 }
 
 /// Top-level parsed feed view returned by [parseFeed] / [previewFeed].
@@ -127,6 +135,11 @@ FeedSnapshot parseFeed(String xml, {Set<String>? onlyCategoryIds}) {
         .where((s) => s.isNotEmpty)
         .toList(growable: false);
 
+    final purpose = paramMap['Назначение'] ?? '';
+    final skinTypeRaw = paramMap['Тип кожи'] ?? '';
+    final derivedTags = _derivedTags(purpose, skinTypeRaw);
+    final derivedSkin = _derivedSkinTypes(skinTypeRaw);
+
     offers.add(FeedOffer(
       externalId: externalId,
       name: _cleanText(name),
@@ -139,9 +152,13 @@ FeedSnapshot parseFeed(String xml, {Set<String>? onlyCategoryIds}) {
         _childText(o, 'description'),
       ]).maybeCleanHtml(),
       composition: _firstNonEmpty([paramMap['Состав']]).maybeCleanHtml(),
+      // Feed key is "Как использовать" — earlier guesses ("Применение")
+      // never matched, so usage stayed empty. We also accept the
+      // alternative names some partner feeds use.
       usage: _firstNonEmpty([
-        paramMap['Применение'],
+        paramMap['Как использовать'],
         paramMap['Способ применения'],
+        paramMap['Применение'],
         paramMap['Инструкция по применению'],
       ]).maybeCleanHtml(),
       precautions: _firstNonEmpty([
@@ -156,8 +173,11 @@ FeedSnapshot parseFeed(String xml, {Set<String>? onlyCategoryIds}) {
         paramMap['Объем'],
         paramMap['Объём'],
       ]),
+      volumeUnit: paramMap['Единица измерения'],
       pictures: pictures,
       params: paramMap,
+      derivedTags: derivedTags,
+      derivedSkinTypes: derivedSkin,
     ));
   }
 
@@ -194,6 +214,70 @@ String? guessKind(String categoryName, String productName) {
     if (hay.contains(r.$1)) return r.$2;
   }
   return null;
+}
+
+/// Maps a Russian-language `Назначение` (purpose) list — and a `Тип кожи`
+/// hint — onto our canonical concern tag IDs (see taxonomy.dart). Returns
+/// deduplicated tag IDs that pass our knownConcerns whitelist.
+List<String> _derivedTags(String purpose, String skinType) {
+  final hay = '${purpose.toLowerCase()} ${skinType.toLowerCase()}';
+  if (hay.trim().isEmpty) return const [];
+  final m = <String>{};
+  void add(String tag, RegExp r) {
+    if (r.hasMatch(hay)) m.add(tag);
+  }
+
+  add('dehydration', RegExp(r'увлажн'));
+  add('dryness', RegExp(r'питан'));
+  add('aging', RegExp(r'старен|возрастн|anti.?age'));
+  add('wrinkles', RegExp(r'разглажив|морщин'));
+  add('elasticity', RegExp(r'лифтинг|упруг|плотност'));
+  add('acne', RegExp(r'против\s+несоверш|акне|воспал'));
+  add('blackheads', RegExp(r'чёрн\w*\s+точ|чер\w*\s+точ|комедон'));
+  add('pih', RegExp(r'постакне|пост-?акне|след\w*\s+от\s+акне'));
+  add('pores', RegExp(r'пор\w*(\s+расш|\s+забит)|сужен\w*\s+пор'));
+  add('oiliness', RegExp(r'матир|жирн\w*\s+блеск|себум'));
+  add('pigmentation', RegExp(r'пигмент|выравнив\w*\s+тон'));
+  add('dullness', RegExp(r'тускл|сиян'));
+  add('redness', RegExp(r'покрасн'));
+  add('rosacea', RegExp(r'купероз|розацеа'));
+  add('sensitivity',
+      RegExp(r'чувствительн|для\s+чувствительной|снятие\s+раздраж'));
+  add('irritation',
+      RegExp(r'успокаив|снятие\s+раздраж|раздражен|противовоспал'));
+  add('puffiness', RegExp(r'отёчн|отечн|отек'));
+  add('dark_circles', RegExp(r'тёмн\w*\s+круг|темн\w*\s+круг'));
+  add('barrier', RegExp(r'восстановлен|барьер|защит\w*\s+барьер'));
+
+  // Only allow tags from the canonical set (defensive — keeps drift in
+  // check if someone adds a new rule but forgets the taxonomy entry).
+  return m
+      .where(knownConcernsLocal.contains)
+      .toList(growable: false);
+}
+
+/// Mirrors backend.taxonomy.knownConcerns so feed_importer doesn't have to
+/// import handlers (avoiding a circular dep). Keep in sync.
+const Set<String> knownConcernsLocal = {
+  'acne', 'blackheads', 'pih', 'pores',
+  'oiliness', 'dryness', 'dehydration',
+  'redness', 'rosacea', 'sensitivity', 'irritation',
+  'aging', 'wrinkles', 'elasticity',
+  'dullness', 'pigmentation', 'texture',
+  'dark_circles', 'puffiness',
+  'barrier', 'post_procedure',
+};
+
+List<String> _derivedSkinTypes(String raw) {
+  final hay = raw.toLowerCase();
+  if (hay.trim().isEmpty) return const [];
+  final out = <String>{};
+  if (hay.contains('для всех')) out.add('all');
+  if (hay.contains('сухой')) out.add('dry');
+  if (hay.contains('жирной')) out.add('oily');
+  if (hay.contains('комбинирован')) out.add('combo');
+  if (hay.contains('нормальной')) out.add('normal');
+  return out.toList(growable: false);
 }
 
 String? _childText(XmlElement el, String name) {
