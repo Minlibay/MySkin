@@ -1157,6 +1157,8 @@ class ProductRow {
     this.precautions,
     this.usage,
     this.extraInfo,
+    this.adMarkerVisible = false,
+    this.adMarkerText,
   });
 
   final String id;
@@ -1183,6 +1185,11 @@ class ProductRow {
   final String? precautions;
   final String? usage;
   final String? extraInfo;
+  /// Advertising marker (38-ФЗ "О рекламе"). When [adMarkerVisible] is true
+  /// and [adMarkerText] is non-empty, the product detail screen shows the
+  /// text at the bottom in a small semi-transparent font.
+  final bool adMarkerVisible;
+  final String? adMarkerText;
 
   static ProductRow fromRow(List<dynamic> r) {
     List<String> arr(int i) =>
@@ -1213,6 +1220,8 @@ class ProductRow {
       precautions: r.length > 21 ? r[21] as String? : null,
       usage: r.length > 22 ? r[22] as String? : null,
       extraInfo: r.length > 23 ? r[23] as String? : null,
+      adMarkerVisible: r.length > 24 ? (r[24] as bool? ?? false) : false,
+      adMarkerText: r.length > 25 ? r[25] as String? : null,
     );
   }
 
@@ -1241,6 +1250,8 @@ class ProductRow {
         'precautions': precautions,
         'usage': usage,
         'extra_info': extraInfo,
+        'ad_marker_visible': adMarkerVisible,
+        'ad_marker_text': adMarkerText,
       };
 }
 
@@ -1253,7 +1264,7 @@ class ProductRepository {
       'ingredients, tags, skin_types, is_active_ingredient, gentle, '
       'routine_phase, status, photo IS NOT NULL, buy_url, moderation_status, '
       'moderation_reason, submitted_by_partner_id, composition, precautions, '
-      'usage_instructions, extra_info';
+      'usage_instructions, extra_info, ad_marker_visible, ad_marker_text';
 
   Future<List<ProductRow>> list({
     String? kind,
@@ -1721,6 +1732,12 @@ class ProductRepository {
       buyUrl: patch.containsKey('buy_url')
           ? patch['buy_url'] as String?
           : existing.buyUrl,
+      adMarkerVisible: patch.containsKey('ad_marker_visible')
+          ? (patch['ad_marker_visible'] as bool? ?? existing.adMarkerVisible)
+          : existing.adMarkerVisible,
+      adMarkerText: patch.containsKey('ad_marker_text')
+          ? patch['ad_marker_text'] as String?
+          : existing.adMarkerText,
     );
     final composition = patch.containsKey('composition')
         ? patch['composition'] as String?
@@ -1743,7 +1760,8 @@ class ProductRepository {
           is_active_ingredient = @ai, gentle = @g, routine_phase = @rp,
           status = @status, buy_url = @buy_url,
           composition = @comp, precautions = @prec,
-          usage_instructions = @use, extra_info = @extra
+          usage_instructions = @use, extra_info = @extra,
+          ad_marker_visible = @adv, ad_marker_text = @adt
         WHERE id = @id
       '''),
       parameters: {
@@ -1766,6 +1784,8 @@ class ProductRepository {
         'prec': precautions,
         'use': usage,
         'extra': extraInfo,
+        'adv': updated.adMarkerVisible,
+        'adt': updated.adMarkerText,
       },
     );
     return updated;
@@ -1783,11 +1803,13 @@ class ProductRepository {
           id, slug, brand, name, kind, description, price_rub, accent_color,
           ingredients, tags, skin_types, is_active_ingredient, gentle,
           routine_phase, status, buy_url, composition, precautions,
-          usage_instructions, extra_info, brand_id
+          usage_instructions, extra_info, brand_id,
+          ad_marker_visible, ad_marker_text
         ) VALUES (
           @id, @slug, @brand, @name, @kind, @desc, @price, @ac,
           @ing::jsonb, @tags::jsonb, @st::jsonb, @ai, @g, @rp, @status,
-          @buy_url, @comp, @prec, @use, @extra, @brand_id
+          @buy_url, @comp, @prec, @use, @extra, @brand_id,
+          @adv, @adt
         )
         ON CONFLICT (slug) DO UPDATE SET
           brand = EXCLUDED.brand, name = EXCLUDED.name, kind = EXCLUDED.kind,
@@ -1801,7 +1823,9 @@ class ProductRepository {
           precautions = EXCLUDED.precautions,
           usage_instructions = EXCLUDED.usage_instructions,
           extra_info = EXCLUDED.extra_info,
-          brand_id = EXCLUDED.brand_id
+          brand_id = EXCLUDED.brand_id,
+          ad_marker_visible = EXCLUDED.ad_marker_visible,
+          ad_marker_text = EXCLUDED.ad_marker_text
       '''),
       parameters: {
         'id': p.id,
@@ -1825,6 +1849,8 @@ class ProductRepository {
         'use': p.usage,
         'extra': p.extraInfo,
         'brand_id': brandId,
+        'adv': p.adMarkerVisible,
+        'adt': p.adMarkerText,
       },
     );
   }

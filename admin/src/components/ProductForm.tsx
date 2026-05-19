@@ -84,6 +84,12 @@ export default function ProductForm({
   );
   const [isActive, setIsActive] = useState(initial?.is_active ?? false);
   const [gentle, setGentle] = useState(initial?.gentle ?? false);
+  const [adMarkerVisible, setAdMarkerVisible] = useState(
+    initial?.ad_marker_visible ?? false
+  );
+  const [adMarkerText, setAdMarkerText] = useState(
+    initial?.ad_marker_text ?? ''
+  );
   const [tags, setTags] = useState<string[]>(initial?.tags ?? []);
   const [skinTypes, setSkinTypes] = useState<string[]>(
     initial?.skin_types ?? []
@@ -269,6 +275,8 @@ export default function ProductForm({
           precautions: precautions.trim() ? precautions.trim() : null,
           usage: usage.trim() ? usage.trim() : null,
           extra_info: extraInfo.trim() ? extraInfo.trim() : null,
+          ad_marker_visible: adMarkerVisible,
+          ad_marker_text: adMarkerText.trim() ? adMarkerText.trim() : null,
         },
         photo,
         extraPhotos,
@@ -509,6 +517,31 @@ export default function ProductForm({
               className="input min-h-[60px] py-2"
               value={extraInfo}
               onChange={(e) => setExtraInfo(e.target.value)}
+            />
+          </Field>
+
+          <Field
+            label="Маркировка рекламы"
+            help="Отметь, если карточка содержит платное размещение (38-ФЗ «О рекламе»). Текст показывается мелким полупрозрачным шрифтом в самом низу экрана товара."
+          >
+            <label className="flex items-center gap-2 mb-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={adMarkerVisible}
+                onChange={(e) => setAdMarkerVisible(e.target.checked)}
+                className="w-4 h-4 accent-rose"
+              />
+              <span className="text-sm">
+                Показывать маркировку «Реклама» на экране товара
+              </span>
+            </label>
+            <textarea
+              className={`input min-h-[70px] py-2 ${
+                adMarkerVisible ? '' : 'opacity-50'
+              }`}
+              value={adMarkerText}
+              onChange={(e) => setAdMarkerText(e.target.value)}
+              placeholder="Реклама. ООО ЕКАТЕРИНБУРГ ЯБЛОКО, ИНН 6670381056, erid: LdtCKFJmG"
             />
           </Field>
 

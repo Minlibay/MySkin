@@ -440,6 +440,8 @@ export type AdminProduct = {
   precautions?: string | null;
   usage?: string | null;
   extra_info?: string | null;
+  ad_marker_visible?: boolean;
+  ad_marker_text?: string | null;
 };
 
 export type ProductInput = {
@@ -462,6 +464,8 @@ export type ProductInput = {
   precautions?: string | null;
   usage?: string | null;
   extra_info?: string | null;
+  ad_marker_visible?: boolean;
+  ad_marker_text?: string | null;
 };
 
 export const PRODUCT_KINDS: Array<{ id: string; label: string }> = [

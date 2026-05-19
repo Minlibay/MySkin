@@ -294,6 +294,22 @@ class _Body extends StatelessWidget {
                 body: product.extraInfo!,
               ),
             ],
+            if (product.adMarkerVisible &&
+                product.adMarkerText != null &&
+                product.adMarkerText!.isNotEmpty) ...[
+              const SizedBox(height: AppSpacing.xxl),
+              Center(
+                child: Text(
+                  product.adMarkerText!,
+                  textAlign: TextAlign.center,
+                  style: AppTypography.caption.copyWith(
+                    color: AppColors.textSecondary.withOpacity(0.5),
+                    fontSize: 10,
+                    height: 1.3,
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
         Positioned(

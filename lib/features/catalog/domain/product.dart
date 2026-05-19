@@ -37,6 +37,8 @@ class Product {
     this.openedAt,
     this.expiresAt,
     this.paoMonths,
+    this.adMarkerVisible = false,
+    this.adMarkerText,
   });
 
   final String id;
@@ -108,6 +110,12 @@ class Product {
   final String? precautions;
   final String? usage;
   final String? extraInfo;
+
+  /// Advertising marker per 38-ФЗ. When [adMarkerVisible] is true and
+  /// [adMarkerText] is non-empty, product detail renders it small and
+  /// semi-transparent at the very bottom of the screen.
+  final bool adMarkerVisible;
+  final String? adMarkerText;
 
   /// True when the product was added by the user themselves (not in the
   /// public catalog). Custom products live in `user_custom_products` server
@@ -210,6 +218,8 @@ class Product {
       openedAt: _dateOrNull(j['opened_at']),
       expiresAt: _dateOrNull(j['expires_at']),
       paoMonths: (j['pao_months'] as num?)?.toInt(),
+      adMarkerVisible: j['ad_marker_visible'] as bool? ?? false,
+      adMarkerText: _stringOrNull(j['ad_marker_text']),
     );
   }
 

@@ -722,6 +722,10 @@ class AdminHandlers {
       extraInfo: (body['extra_info'] as String?)?.trim().isNotEmpty == true
           ? (body['extra_info'] as String).trim()
           : null,
+      adMarkerVisible: body['ad_marker_visible'] as bool? ?? false,
+      adMarkerText: (body['ad_marker_text'] as String?)?.trim().isNotEmpty == true
+          ? (body['ad_marker_text'] as String).trim()
+          : null,
     );
     await products.upsert(p);
     return jsonResponse(200, p.toJson());
