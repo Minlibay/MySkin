@@ -36,7 +36,11 @@ class BackendApi {
       : _dio = dio ??
             Dio(BaseOptions(
               connectTimeout: const Duration(seconds: 10),
-              receiveTimeout: const Duration(seconds: 15),
+              // Scan upload goes through GigaChat Vision (≈10s) + the
+              // MediaPipe face-mesh sidecar (≈1-5s cold, <500ms warm).
+              // 60s gives healthy headroom for both, plus mobile cellular.
+              receiveTimeout: const Duration(seconds: 60),
+              sendTimeout: const Duration(seconds: 30),
               headers: {'content-type': 'application/json'},
             ));
 

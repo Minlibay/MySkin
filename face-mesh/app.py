@@ -49,6 +49,16 @@ _face_mesh = mp.solutions.face_mesh.FaceMesh(
     min_detection_confidence=0.4,
 )
 
+# Trigger MediaPipe graph initialisation at import time, not on the first
+# real request. Without this the first user scan pays a ~3-5s cold start
+# that often trips the upstream client's timeout. We pass a tiny blank
+# image — the graph initialises the same way as for a real call.
+try:
+    _warmup = np.zeros((128, 128, 3), dtype=np.uint8)
+    _face_mesh.process(_warmup)
+except Exception as _warm_err:  # pragma: no cover
+    print(f"face-mesh warmup skipped: {_warm_err}")
+
 # Canonical 36-point face-oval polygon (MediaPipe Face Mesh indices),
 # ordered around the perimeter. Used to draw the dashed outline overlay.
 FACE_OVAL = [

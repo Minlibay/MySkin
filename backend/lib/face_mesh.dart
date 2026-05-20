@@ -24,7 +24,11 @@ import 'package:http/http.dart' as http;
 class FaceMeshClient {
   FaceMeshClient({
     required this.baseUrl,
-    this.timeout = const Duration(seconds: 8),
+    // MediaPipe cold-start initialises the graph (~3-5s on first request).
+    // Subsequent calls are <500ms. 20s leaves room for cold start plus a
+    // big JPEG upload over the docker bridge without blocking forever if
+    // the sidecar wedges.
+    this.timeout = const Duration(seconds: 20),
     http.Client? httpClient,
   }) : _http = httpClient ?? http.Client();
 
