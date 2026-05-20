@@ -383,6 +383,16 @@ class _HeatmapState extends ConsumerState<_Heatmap>
 
   late final AnimationController _reveal;
 
+  /// Per-zone insight futures, kicked off in initState so by the time the
+  /// user actually taps a zone the AI response is already in flight (or
+  /// finished). Each tap reuses the cached Future via the bottom sheet's
+  /// FutureBuilder — no redundant network call.
+  late final Map<_ZoneKey, Future<ZoneInsight>> _zoneFutures = {};
+
+  /// Which prefetches have finished. Drives the "Лина изучает зоны…"
+  /// skeleton row — once all 5 land we hide it.
+  final Set<_ZoneKey> _zoneLoaded = {};
+
   _FaceShape? _shapeFromScan() {
     final face = widget.scan.face;
     if (face == null) return null;
@@ -410,6 +420,19 @@ class _HeatmapState extends ConsumerState<_Heatmap>
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _reveal.forward(from: 0),
       );
+      _prefetchZoneInsights();
+    }
+  }
+
+  void _prefetchZoneInsights() {
+    final api = ref.read(backendApiProvider);
+    for (final key in _ZoneKey.values) {
+      final future = api.fetchZoneInsight(widget.scan.id, _zoneApiKey(key));
+      _zoneFutures[key] = future;
+      future.whenComplete(() {
+        if (!mounted) return;
+        setState(() => _zoneLoaded.add(key));
+      });
     }
   }
 
@@ -494,6 +517,13 @@ class _HeatmapState extends ConsumerState<_Heatmap>
               ],
             ),
           ),
+          if (shape != null &&
+              _zoneFutures.isNotEmpty &&
+              _zoneLoaded.length < _ZoneKey.values.length)
+            _ZonePrefetchSkeleton(
+              total: _ZoneKey.values.length,
+              done: _zoneLoaded.length,
+            ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
             child: Wrap(
@@ -544,7 +574,14 @@ class _HeatmapState extends ConsumerState<_Heatmap>
       _ZoneKey.leftCheek || _ZoneKey.rightCheek => zones.cheeks,
       _ZoneKey.chin => zones.chin,
     };
-    final api = ref.read(backendApiProvider);
+    // Prefer the in-flight prefetch — instant open if it already
+    // finished, just awaits otherwise. Falls back to a fresh fetch on
+    // the no-face path where prefetch never started.
+    final future = _zoneFutures[key] ??
+        ref.read(backendApiProvider).fetchZoneInsight(
+              widget.scan.id,
+              _zoneApiKey(key),
+            );
     showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
@@ -552,7 +589,7 @@ class _HeatmapState extends ConsumerState<_Heatmap>
       builder: (_) => _ZoneSheet(
         zoneKey: key,
         score: score,
-        insightFuture: api.fetchZoneInsight(widget.scan.id, _zoneApiKey(key)),
+        insightFuture: future,
         onOpenCatalog: widget.onOpenCatalog,
       ),
     );
@@ -1429,6 +1466,69 @@ class _ZoneBlock extends StatelessWidget {
 /// Shown over the photo when ML Kit couldn't find a face at scan time.
 /// We don't draw a fake heatmap — instead we say so honestly and invite
 /// the user to retake. The photo and metrics still display below.
+/// Subtle skeleton row shown between the photo and the zone pills while
+/// Лина's per-zone insights are being prefetched in the background. The
+/// pills are already tappable — this just signals that the bottom sheets
+/// will open with content instantly, not a spinner.
+class _ZonePrefetchSkeleton extends StatefulWidget {
+  const _ZonePrefetchSkeleton({required this.total, required this.done});
+  final int total;
+  final int done;
+
+  @override
+  State<_ZonePrefetchSkeleton> createState() => _ZonePrefetchSkeletonState();
+}
+
+class _ZonePrefetchSkeletonState extends State<_ZonePrefetchSkeleton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _shimmer = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1200),
+  )..repeat(reverse: true);
+
+  @override
+  void dispose() {
+    _shimmer.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+      child: Row(
+        children: [
+          AnimatedBuilder(
+            animation: _shimmer,
+            builder: (_, __) {
+              final t = (1 - _shimmer.value).clamp(0.4, 1.0);
+              return Container(
+                width: 6,
+                height: 6,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: AppColors.primaryAccent.withOpacity(t),
+                ),
+              );
+            },
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              'Лина подбирает рекомендации по зонам · ${widget.done}/${widget.total}',
+              style: AppTypography.caption.copyWith(
+                color: AppColors.textSecondary,
+                fontSize: 12,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 class _NoFaceOverlay extends StatelessWidget {
   const _NoFaceOverlay();
 

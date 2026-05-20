@@ -265,13 +265,30 @@ class _AppShellState extends ConsumerState<_AppShell> {
     }
   }
 
-  Future<void> _runStandard({Map<String, String>? checkIn}) async {
+  Future<void> _runStandard({
+    Map<String, String>? checkIn,
+    ScanResult? fromScan,
+  }) async {
     setState(() => _view = _Shell.standardLoading);
     try {
       final ai = ref.read(aiServiceProvider);
       final api = ref.read(backendApiProvider);
-      final result =
-          await ai.generateRoutine(_profile, checkIn: checkIn);
+      var result = await ai.generateRoutine(_profile, checkIn: checkIn);
+      // Scan is the source of truth for "what does the skin look like
+      // right now". generateRoutine produces its own opinion as a
+      // side-effect and on re-analysis can disagree by a few points,
+      // which the user sees as the score "jumping" between the scan
+      // result screen and the routine screen. When the routine is being
+      // generated FROM a scan, force the two screens to show the same
+      // numbers by inheriting from the scan.
+      if (fromScan != null) {
+        result = result.copyWith(
+          skinScore: fromScan.score,
+          skinSummary: fromScan.insight.isNotEmpty
+              ? fromScan.insight
+              : result.skinSummary,
+        );
+      }
       if (!mounted) return;
       setState(() {
         _lastResult = result;
@@ -486,7 +503,7 @@ class _AppShellState extends ConsumerState<_AppShell> {
         return ScanResultScreen(
           scan: _lastScan!,
           onBack: () => setState(() => _view = _Shell.home),
-          onAccept: _runStandard,
+          onAccept: () => _runStandard(fromScan: _lastScan),
           onOpenCatalog: (concern) => setState(() {
             _catalogInitialConcern = concern.isEmpty ? null : concern;
             _view = _Shell.catalog;

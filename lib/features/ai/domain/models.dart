@@ -146,6 +146,21 @@ class RoutineResult {
   final int? skinScore;
   final double? confidence;
 
+  RoutineResult copyWith({
+    String? skinSummary,
+    int? skinScore,
+    double? confidence,
+  }) =>
+      RoutineResult(
+        morning: morning,
+        evening: evening,
+        warnings: warnings,
+        tips: tips,
+        skinSummary: skinSummary ?? this.skinSummary,
+        skinScore: skinScore ?? this.skinScore,
+        confidence: confidence ?? this.confidence,
+      );
+
   factory RoutineResult.fromJson(Map<String, dynamic> j) {
     final analysis = j['analysis'] as Map<String, dynamic>?;
     List<RoutineStep> parseSteps(dynamic v) {
