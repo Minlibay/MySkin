@@ -3,4 +3,5 @@
     <!-- App brand palette references for native theme resources. Keep these
          in sync with AppColors in lib/core/theme/app_colors.dart. -->
     <color name="brand_blush">#FCEEF2</color>
+	<color name="ic_launcher_background">#F4D9C9</color>
 </resources>

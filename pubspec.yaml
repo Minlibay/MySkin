@@ -35,6 +35,21 @@ dev_dependencies:
   build_runner: ^2.4.9
   freezed: ^2.5.2
   json_serializable: ^6.8.0
+  flutter_launcher_icons: ^0.14.1
+
+# Generates iOS / Android launcher icons from a single 1024×1024 source.
+# Re-run with `dart run flutter_launcher_icons` whenever the source changes.
+flutter_launcher_icons:
+  image_path: "assets/icon/app_icon.png"
+  android: "ic_launcher"
+  ios: true
+  remove_alpha_ios: true
+  # Adaptive icon for Android (Android 8.0+). Foreground is the source image
+  # masked; background is the brand peach so the system masks (round/squircle)
+  # frame the M consistently across launchers.
+  adaptive_icon_background: "#F4D9C9"
+  adaptive_icon_foreground: "assets/icon/app_icon.png"
+  min_sdk_android: 21
 
 flutter:
   uses-material-design: true
