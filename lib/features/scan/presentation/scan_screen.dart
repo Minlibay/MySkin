@@ -57,6 +57,13 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   DetectedFace? _face;
   DateTime _faceSeenAt = DateTime.fromMillisecondsSinceEpoch(0);
 
+  /// Frozen snapshot waiting for the user's confirmation. While non-null,
+  /// the camera stream is stopped and the UI swaps to the preview layout
+  /// — two buttons "Снять снова" / "Использовать". Null restores the
+  /// live capture flow.
+  Uint8List? _previewBytes;
+  String? _previewMime;
+
   @override
   void initState() {
     super.initState();
@@ -431,16 +438,12 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       await _stopStream();
       final pic = await cam.takePicture();
       final bytes = await File(pic.path).readAsBytes();
-      // Face geometry is computed on the server (MediaPipe sidecar) from
-      // the same bytes we upload — no client-side detection needed.
-      await _uploadAndFinish(bytes, mime: 'image/jpeg');
-    } on ScanQualityException catch (e) {
       if (!mounted) return;
       setState(() {
+        _previewBytes = Uint8List.fromList(bytes);
+        _previewMime = 'image/jpeg';
         _busy = false;
-        _error = e.message;
       });
-      await _startStream();
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -470,13 +473,14 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         return;
       }
       final bytes = await picked.readAsBytes();
-      await _uploadAndFinish(bytes,
-          mime: picked.mimeType ?? 'image/jpeg');
-    } on ScanQualityException catch (e) {
       if (!mounted) return;
+      // Show the picked photo in the same preview UI as a capture, so
+      // the confirm-or-retake choice works for both flows.
+      await _stopStream();
       setState(() {
+        _previewBytes = bytes;
+        _previewMime = picked.mimeType ?? 'image/jpeg';
         _busy = false;
-        _error = e.message;
       });
     } catch (e) {
       if (!mounted) return;
@@ -485,6 +489,44 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         _error = 'Не получилось загрузить: $e';
       });
     }
+  }
+
+  /// User confirmed the preview — push it through the upload pipeline.
+  Future<void> _acceptPreview() async {
+    final bytes = _previewBytes;
+    final mime = _previewMime;
+    if (bytes == null || mime == null) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    try {
+      await _uploadAndFinish(bytes, mime: mime);
+    } on ScanQualityException catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = e.message;
+        // Keep the preview so the user can decide: retake or send again
+        // (e.g. lighting tip rather than a hard rejection).
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _error = 'Не получилось загрузить: $e';
+      });
+    }
+  }
+
+  /// User wants to retake — drop the snapshot and resume the live stream.
+  Future<void> _discardPreview() async {
+    setState(() {
+      _previewBytes = null;
+      _previewMime = null;
+      _error = null;
+    });
+    await _startStream();
   }
 
   Future<void> _uploadAndFinish(List<int> bytes,
@@ -506,16 +548,23 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
 
   @override
   Widget build(BuildContext context) {
+    final inPreview = _previewBytes != null;
     return Scaffold(
       backgroundColor: const Color(0xFF0F0A0C),
       body: Stack(
         children: [
           Positioned.fill(
-            child: ScanCameraBackdrop(
-              controller: _camera,
-              initFuture: _initFuture,
-              errorText: _cameraError,
-            ),
+            child: inPreview
+                ? Image.memory(
+                    _previewBytes!,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                  )
+                : ScanCameraBackdrop(
+                    controller: _camera,
+                    initFuture: _initFuture,
+                    errorText: _cameraError,
+                  ),
           ),
           Positioned.fill(
             child: IgnorePointer(
@@ -550,15 +599,18 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                       children: [
                         GlassButton(
                           icon: Icons.close_rounded,
-                          onTap: widget.onBack,
+                          onTap: inPreview
+                              ? (_busy ? () {} : _discardPreview)
+                              : widget.onBack,
                         ),
                         const Spacer(),
-                        LightStatusPill(level: _light),
+                        if (!inPreview) LightStatusPill(level: _light),
                         const Spacer(),
-                        GlassButton(
-                          icon: Icons.photo_library_rounded,
-                          onTap: _busy ? () {} : _pickFromGallery,
-                        ),
+                        if (!inPreview)
+                          GlassButton(
+                            icon: Icons.photo_library_rounded,
+                            onTap: _busy ? () {} : _pickFromGallery,
+                          ),
                       ],
                     ),
                   ),
@@ -568,7 +620,7 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                     child: Column(
                       children: [
                         Text(
-                          _headline(),
+                          inPreview ? 'Как тебе кадр?' : _headline(),
                           textAlign: TextAlign.center,
                           style: AppTypography.serifItalic(
                             fontSize: 26,
@@ -577,7 +629,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                         ),
                         const SizedBox(height: 8),
                         Text(
-                          _hint(),
+                          inPreview
+                              ? 'Если всё ровно — отправь на анализ. Иначе сними заново.'
+                              : _hint(),
                           textAlign: TextAlign.center,
                           style: AppTypography.caption.copyWith(
                             color: Colors.white.withOpacity(0.6),
@@ -587,65 +641,73 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
                     ),
                   ),
                   const Spacer(),
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
-                    child: Container(
-                      padding: const EdgeInsets.all(20),
-                      decoration: BoxDecoration(
-                        color: Colors.black.withOpacity(0.55),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(
-                            color: Colors.white.withOpacity(0.1)),
-                      ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  _busy
-                                      ? 'Анализируем кожу…'
-                                      : 'Анализ за 6 секунд',
-                                  style: AppTypography.body.copyWith(
-                                    color: Colors.white,
-                                    fontWeight: FontWeight.w500,
+                  if (inPreview)
+                    _PreviewActions(
+                      busy: _busy,
+                      error: _error,
+                      onRetake: _busy ? null : _discardPreview,
+                      onAccept: _busy ? null : _acceptPreview,
+                    )
+                  else
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+                      child: Container(
+                        padding: const EdgeInsets.all(20),
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.55),
+                          borderRadius: BorderRadius.circular(24),
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.1)),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    _busy
+                                        ? 'Анализируем кожу…'
+                                        : 'Анализ за 6 секунд',
+                                    style: AppTypography.body.copyWith(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w500,
+                                    ),
                                   ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  _error ??
-                                      _cameraError ??
-                                      '12 параметров · фото не покидает наш сервер',
-                                  style: AppTypography.caption.copyWith(
-                                    color: (_error != null ||
-                                            _cameraError != null)
-                                        ? AppColors.warning
-                                        : Colors.white.withOpacity(0.55),
-                                    fontSize: 12,
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    _error ??
+                                        _cameraError ??
+                                        '12 параметров · фото не покидает наш сервер',
+                                    style: AppTypography.caption.copyWith(
+                                      color: (_error != null ||
+                                              _cameraError != null)
+                                          ? AppColors.warning
+                                          : Colors.white.withOpacity(0.55),
+                                      fontSize: 12,
+                                    ),
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
+                                ],
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 12),
-                          if (_cameraError != null &&
-                              _cameraError!
-                                  .toLowerCase()
-                                  .contains('нет доступа'))
-                            _SettingsCta(
-                              onTap: () =>
-                                  AppSettings.openAppSettings(),
-                            )
-                          else
-                            ShutterButton(
-                                busy: _busy, onTap: _capture),
-                        ],
+                            const SizedBox(width: 12),
+                            if (_cameraError != null &&
+                                _cameraError!
+                                    .toLowerCase()
+                                    .contains('нет доступа'))
+                              _SettingsCta(
+                                onTap: () =>
+                                    AppSettings.openAppSettings(),
+                              )
+                            else
+                              ShutterButton(
+                                  busy: _busy, onTap: _capture),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
                 ],
               ),
             ),
@@ -659,6 +721,108 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
 /// Replacement for the shutter button when camera permission was denied.
 /// Opens the OS app-settings so the user can grant access without leaving
 /// the app for a third-party flow.
+/// Bottom panel shown over a frozen snapshot — "Снять снова" (secondary)
+/// and "Использовать" (primary). Same dark-glass background as the live
+/// capture bar for visual continuity.
+class _PreviewActions extends StatelessWidget {
+  const _PreviewActions({
+    required this.busy,
+    required this.error,
+    required this.onRetake,
+    required this.onAccept,
+  });
+
+  final bool busy;
+  final String? error;
+  final VoidCallback? onRetake;
+  final VoidCallback? onAccept;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(20, 0, 20, 16),
+      child: Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.black.withOpacity(0.55),
+          borderRadius: BorderRadius.circular(24),
+          border: Border.all(color: Colors.white.withOpacity(0.1)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            if (error != null) ...[
+              Text(
+                error!,
+                textAlign: TextAlign.center,
+                style: AppTypography.caption.copyWith(
+                  color: AppColors.warning,
+                  fontSize: 12,
+                ),
+              ),
+              const SizedBox(height: 10),
+            ],
+            Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 52,
+                    child: OutlinedButton.icon(
+                      onPressed: onRetake,
+                      icon: const Icon(Icons.refresh_rounded, size: 18),
+                      label: const Text('Снять снова'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.white,
+                        side: BorderSide(
+                            color: Colors.white.withOpacity(0.3)),
+                        shape: const StadiumBorder(),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: SizedBox(
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed: onAccept,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: AppColors.roseDeep,
+                        foregroundColor: Colors.white,
+                        elevation: 0,
+                        shape: const StadiumBorder(),
+                      ),
+                      child: busy
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(
+                                    Colors.white),
+                              ),
+                            )
+                          : Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Text('Использовать',
+                                    style: AppTypography.button),
+                                const SizedBox(width: 8),
+                                const Icon(Icons.check_rounded, size: 18),
+                              ],
+                            ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _SettingsCta extends StatelessWidget {
   const _SettingsCta({required this.onTap});
   final VoidCallback onTap;
