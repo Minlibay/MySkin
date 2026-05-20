@@ -109,14 +109,16 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     final cam = _camera;
-    if (cam == null || !cam.value.isInitialized) return;
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
+      if (cam == null || !cam.value.isInitialized) return;
       _stopStream();
       cam.dispose();
       _camera = null;
       if (mounted) setState(() {});
     } else if (state == AppLifecycleState.resumed) {
+      // Re-init even if the controller was never created — this covers the
+      // round-trip to iOS Settings to grant a previously denied permission.
       _initFuture = _initCamera();
       if (mounted) setState(() {});
     }
@@ -133,6 +135,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
     if (status.isPermanentlyDenied || status.isDenied || status.isRestricted) {
       setState(() => _cameraBlocked = true);
       return;
+    }
+    if (_cameraBlocked) {
+      setState(() => _cameraBlocked = false);
     }
     try {
       final cameras = await availableCameras();
