@@ -11,6 +11,7 @@ import 'package:shelf_router/shelf_router.dart';
 
 import 'package:uuid/uuid.dart';
 import 'ai_client.dart';
+import 'face_mesh.dart';
 import 'feed_importer.dart';
 import 'gigachat.dart';
 import 'repos.dart';
@@ -309,6 +310,7 @@ class AdminHandlers {
     required this.appSettings,
     required this.partners,
     required this.brands,
+    required this.faceMesh,
     this.availableProviders = const ['gigachat'],
   });
 
@@ -323,6 +325,7 @@ class AdminHandlers {
   final AppSettingsRepository appSettings;
   final PartnerRepository partners;
   final BrandRepository brands;
+  final FaceMeshClient faceMesh;
   /// Which AI providers actually have API keys wired at startup. Admin UI
   /// uses this to grey out providers whose keys are missing instead of
   /// letting users pick a provider that can't run.
@@ -394,7 +397,14 @@ class AdminHandlers {
     ..post('/admin/products/reslugify-cyrillic',
         _withAdmin(_reslugifyCyrillic))
     // Self-service password change
-    ..post('/admin/change-password', _withAdmin(_changeOwnPassword));
+    ..post('/admin/change-password', _withAdmin(_changeOwnPassword))
+    // Face-mesh recompute: re-run MediaPipe over saved scan photos and
+    // overwrite the stored face_geom. One-by-one for spot fixes, batch
+    // for the migration sweep from the old multi-source pipeline.
+    ..post('/admin/scans/<id>/recompute_geom',
+        _withAdmin(_recomputeScanGeom))
+    ..post('/admin/scans/recompute_geom',
+        _withAdmin(_recomputeScansBatch));
 
   Handler _withAdmin(Handler inner) => (Request req) async {
         final token = _bearer(req);
@@ -1048,6 +1058,68 @@ class AdminHandlers {
     return jsonResponse(200, {'ok': true});
   }
 
+  /// Recompute face_geom for a single scan by re-running it through the
+  /// MediaPipe sidecar. Used both for ad-hoc fixes from the user-detail
+  /// page and as the inner loop of the batch sweep below.
+  Future<Response> _recomputeScanGeom(Request req) async {
+    final id = req.params['id']!;
+    final photo = await scans.getPhotoAny(id);
+    if (photo == null) {
+      return jsonResponse(404, {'error': 'scan_not_found_or_no_photo'});
+    }
+    final geom = await faceMesh.detect(photo.bytes);
+    if (geom == null) {
+      // Don't wipe a possibly-good old geom just because today's detection
+      // missed — admin can clear manually if they really want it gone.
+      return jsonResponse(422, {'error': 'no_face'});
+    }
+    await scans.updateFaceGeom(id, geom);
+    return jsonResponse(200, {'ok': true, 'face_geom': geom});
+  }
+
+  /// Batch sweep — recompute geometry for many scans in one call. Body:
+  ///   { "only_missing": bool = true, "limit": int = 200 }
+  /// Returns counters so the admin UI can show a progress summary.
+  Future<Response> _recomputeScansBatch(Request req) async {
+    final body = await req.readAsString();
+    final json = body.isEmpty
+        ? <String, dynamic>{}
+        : (jsonDecode(body) as Map<String, dynamic>);
+    final onlyMissing = (json['only_missing'] as bool?) ?? true;
+    final limit =
+        ((json['limit'] as num?)?.toInt() ?? 200).clamp(1, 2000);
+
+    final ids = await scans.listIdsForRecompute(
+      onlyMissing: onlyMissing,
+      limit: limit,
+    );
+    var updated = 0;
+    var skipped = 0;
+    final failures = <String>[];
+    for (final id in ids) {
+      final photo = await scans.getPhotoAny(id);
+      if (photo == null) {
+        skipped++;
+        continue;
+      }
+      final geom = await faceMesh.detect(photo.bytes);
+      if (geom == null) {
+        skipped++;
+        failures.add(id);
+        continue;
+      }
+      await scans.updateFaceGeom(id, geom);
+      updated++;
+    }
+    return jsonResponse(200, {
+      'ok': true,
+      'considered': ids.length,
+      'updated': updated,
+      'skipped': skipped,
+      'no_face_ids': failures,
+    });
+  }
+
   /// Downloads the feed at [body.url], parses it, returns the category list
   /// (with offer counts) plus a sample offer so the admin can decide which
   /// categories to import. No DB writes.
@@ -1551,64 +1623,6 @@ String _slugify(String s) {
       .replaceAll(RegExp(r'^-+|-+$'), '');
 }
 
-/// Validate and trim down a `face_geom` payload from the client. We
-/// trust the client (it ran ML Kit on-device) but defend against
-/// malformed JSON or hostile values — every coordinate is clamped to
-/// [0..1], outlier point counts are rejected, missing pieces drop to
-/// null instead of poisoning the row.
-Map<String, dynamic>? _sanitiseFaceGeom(Map<String, dynamic> raw) {
-  final rb = raw['bbox'];
-  if (rb is! List || rb.length != 4) return null;
-  final bbox = rb
-      .whereType<num>()
-      .map((n) => n.toDouble().clamp(0.0, 1.0))
-      .toList();
-  if (bbox.length != 4) return null;
-  if (bbox[2] <= bbox[0] || bbox[3] <= bbox[1]) return null;
-
-  List<List<double>>? contour;
-  final rc = raw['contour'];
-  if (rc is List && rc.length >= 8 && rc.length <= 200) {
-    final pts = <List<double>>[];
-    for (final p in rc) {
-      if (p is List && p.length >= 2 && p[0] is num && p[1] is num) {
-        pts.add([
-          (p[0] as num).toDouble().clamp(0.0, 1.0),
-          (p[1] as num).toDouble().clamp(0.0, 1.0),
-        ]);
-      }
-    }
-    if (pts.length >= 8) contour = pts;
-  }
-
-  Map<String, List<double>>? landmarks;
-  final rl = raw['landmarks'];
-  if (rl is Map) {
-    final out = <String, List<double>>{};
-    for (final key in const [
-      'forehead',
-      'tzone',
-      'left_cheek',
-      'right_cheek',
-      'chin',
-    ]) {
-      final v = rl[key];
-      if (v is List && v.length >= 2 && v[0] is num && v[1] is num) {
-        out[key] = [
-          (v[0] as num).toDouble().clamp(0.0, 1.0),
-          (v[1] as num).toDouble().clamp(0.0, 1.0),
-        ];
-      }
-    }
-    if (out.length == 5) landmarks = out;
-  }
-
-  return {
-    'bbox': bbox,
-    if (contour != null) 'contour': contour,
-    if (landmarks != null) 'landmarks': landmarks,
-  };
-}
 
 /// Normalise Лина's raw model output into a JSON envelope the mobile parser
 /// is guaranteed to read. The vision/chat models occasionally truncate,
@@ -2385,15 +2399,6 @@ ScanAnalysis _mergeAiAnalysis(ScanAnalysis local, Map<String, dynamic> ai) {
   }
   final aiWarnings =
       ((ai['quality_warnings'] as List?) ?? const []).cast<String>();
-  // GigaChat Vision now ships face geometry alongside the metrics. We
-  // build a face_geom payload from it (bbox + 5 landmarks → matching the
-  // mobile builder's shape) and stash it here. The handler chooses
-  // between client and vision faceGeom at write time, preferring client.
-  Map<String, dynamic>? visionFaceGeom;
-  final rawFace = ai['face'];
-  if (rawFace is Map) {
-    visionFaceGeom = _faceGeomFromVision(rawFace.cast<String, dynamic>());
-  }
 
   return ScanAnalysis(
     score: clamp(ai['score'] as num?, local.score),
@@ -2412,7 +2417,6 @@ ScanAnalysis _mergeAiAnalysis(ScanAnalysis local, Map<String, dynamic> ai) {
       'source': 'gigachat-vision',
       if (ai['concerns'] is List) 'ai_concerns': ai['concerns'],
     },
-    faceGeom: visionFaceGeom,
   );
 }
 
@@ -2448,72 +2452,6 @@ String _scanQualityMessage(List<String> warnings) {
   return 'Фото не получилось проанализировать. Попробуй ещё раз.';
 }
 
-/// Pulls the {bbox, forehead, tzone, left_cheek, right_cheek, chin}
-/// structure out of GigaChat Vision's response and reshapes it into the
-/// `face_geom` schema the mobile client expects. Returns null if the
-/// bbox is missing or unusable so we don't poison the row with garbage.
-Map<String, dynamic>? _faceGeomFromVision(Map<String, dynamic> raw) {
-  final rawBbox = raw['bbox'];
-  if (rawBbox is! List || rawBbox.length != 4) return null;
-  final bbox = rawBbox
-      .whereType<num>()
-      .map((n) => n.toDouble().clamp(0.0, 1.0))
-      .toList();
-  if (bbox.length != 4) return null;
-  if (bbox[2] <= bbox[0] || bbox[3] <= bbox[1]) return null;
-  // Reject obviously useless bboxes (full frame or microscopic).
-  final w = bbox[2] - bbox[0], h = bbox[3] - bbox[1];
-  if (w < 0.1 || h < 0.1 || w > 0.95 || h > 0.95) return null;
-
-  List<double>? point(Object? v) {
-    if (v is! List || v.length < 2) return null;
-    if (v[0] is! num || v[1] is! num) return null;
-    return [
-      (v[0] as num).toDouble().clamp(0.0, 1.0),
-      (v[1] as num).toDouble().clamp(0.0, 1.0),
-    ];
-  }
-
-  final landmarks = <String, List<double>>{};
-  for (final key in const [
-    'forehead',
-    'tzone',
-    'left_cheek',
-    'right_cheek',
-    'chin',
-  ]) {
-    final p = point(raw[key]);
-    if (p != null) landmarks[key] = p;
-  }
-
-  // Synth landmarks from the bbox if the model didn't return them. Ratios
-  // tuned to land on the actual skin zones dermatologists evaluate, not on
-  // ML Kit-style "geometric centre" points that fall near the nose for
-  // cheeks or on the labio-mental crease for chin:
-  //   forehead — 18% down  (mid-forehead, well below hairline)
-  //   t-zone   — 42% down  (nose bridge midpoint)
-  //   cheeks   — 60% down × 18%/82% wide  (apple of the cheek, well lateral)
-  //   chin     — 90% down  (chin pad, just above contour bottom)
-  if (landmarks.length != 5) {
-    final cx = (bbox[0] + bbox[2]) / 2;
-    final y0 = bbox[1], y1 = bbox[3];
-    final h = y1 - y0;
-    landmarks.putIfAbsent('forehead', () => [cx, y0 + h * 0.18]);
-    landmarks.putIfAbsent('tzone', () => [cx, y0 + h * 0.42]);
-    landmarks.putIfAbsent(
-        'left_cheek', () => [bbox[0] + w * 0.18, y0 + h * 0.60]);
-    landmarks.putIfAbsent(
-        'right_cheek', () => [bbox[0] + w * 0.82, y0 + h * 0.60]);
-    landmarks.putIfAbsent('chin', () => [cx, y0 + h * 0.90]);
-  }
-
-  return {
-    'bbox': bbox,
-    'landmarks': landmarks,
-    // No contour from Vision — the mobile renderer's bbox-only branch
-    // synthesises an ellipse, same as the old fallback.
-  };
-}
 
 class ScanHandlers {
   ScanHandlers({
@@ -2522,6 +2460,7 @@ class ScanHandlers {
     required this.profiles,
     required this.appSettings,
     required this.notifications,
+    required this.faceMesh,
     this.giga,
   });
 
@@ -2530,6 +2469,7 @@ class ScanHandlers {
   final ProfileRepository profiles;
   final AppSettingsRepository appSettings;
   final NotificationRepository notifications;
+  final FaceMeshClient faceMesh;
   final AiClient? giga;
 
   Router router() => Router()
@@ -2599,60 +2539,31 @@ class ScanHandlers {
         stderr.writeln('Vision scan failed, using local analysis: $e');
       }
     }
-    // Face geometry priority:
-    //   1. Client face_geom (on-device ML Kit, gives full contour)  ← best
-    //   2. Client face_bbox (legacy clients before the geom rollout)
-    //   3. Vision face (bbox + landmarks)                           ← fallback
-    //   4. null → result screen shows "Лицо не распозналось"
+    // Face geometry — single source of truth: the MediaPipe Face Mesh
+    // sidecar. Runs server-side on the saved photo, so every scan goes
+    // through the same model and we never have to reconcile multiple
+    // sources (client ML Kit, Vision-LLM, bbox synth) again.
     //
-    // We then optionally OVERRIDE just the 5 zone landmarks with vision's
-    // version when they look anatomically plausible — ML Kit's contour is
-    // still authoritative for the dashed face outline.
-    //
-    // We deliberately do NOT fall back to the server's skin-colour
-    // heuristic (analyzeScan.faceGeom) — it routinely captured neck and
-    // shoulders, dragging the heatmap overlay off.
+    // No face → 422 scan_quality. We don't persist a scan we can't draw
+    // a map on; the user is asked to retake. This is also why the call
+    // happens BEFORE scans.create — failure costs nothing.
     Map<String, dynamic>? faceGeom;
-    final rawGeom = body['face_geom'];
-    if (rawGeom is Map) {
-      faceGeom = _sanitiseFaceGeom(rawGeom.cast<String, dynamic>());
-    } else {
-      final legacy = body['face_bbox'];
-      if (legacy is List && legacy.length == 4) {
-        final v = legacy.map((e) => (e as num).toDouble()).toList();
-        final ok = v.every((e) => e >= 0 && e <= 1) &&
-            v[2] > v[0] &&
-            v[3] > v[1] &&
-            (v[2] - v[0]) < 0.95 &&
-            (v[3] - v[1]) < 0.95;
-        if (ok) faceGeom = {'bbox': v};
-      }
+    if (bytes != null && bytes.length > 1000) {
+      faceGeom = await faceMesh.detect(bytes);
     }
-    // Last resort — re-sanitise vision's bbox+landmarks through the same
-    // guard the client payload uses (clamps, validates landmark count)
-    // so downstream code can assume a consistent shape.
-    if (faceGeom == null && analysis.faceGeom != null) {
-      faceGeom = _sanitiseFaceGeom(analysis.faceGeom!);
-    }
-
-    // We previously overrode the client's landmarks with vision-model
-    // coordinates, hoping anatomy-aware placement would beat ML Kit. In
-    // practice the VLM kept putting cheeks next to the nose and the
-    // forehead in the hairline, while the new client builder now anchors
-    // to direct ML Kit landmarks (eyes, noseBase, mouth) — those are far
-    // more reliable than any coord a VLM produces. So we trust the
-    // client's landmarks again and ignore aiGeom for that field.
-    // Quality gate: if the photo can't be analysed (no face, too dark/blurry),
-    // refuse the scan instead of persisting garbage metrics that would then
-    // poison Лина's recommendations and the user's progress chart.
-    final critical = analysis.qualityWarnings
-        .where(criticalScanWarnings.contains)
-        .toList();
-    if (critical.isNotEmpty) {
+    // Quality gate. If the sidecar couldn't find a face we synthesise the
+    // critical 'no_face_detected' warning so the rejection path below is
+    // unified — same message, same status code, same client handling as
+    // the pre-existing dark/blurry checks.
+    final criticalSet = <String>{
+      ...analysis.qualityWarnings.where(criticalScanWarnings.contains),
+      if (bytes != null && faceGeom == null) 'no_face_detected',
+    };
+    if (criticalSet.isNotEmpty) {
       return jsonResponse(422, {
         'error': 'scan_quality',
-        'quality_warnings': critical,
-        'message': _scanQualityMessage(critical),
+        'quality_warnings': criticalSet.toList(),
+        'message': _scanQualityMessage(criticalSet.toList()),
       });
     }
 

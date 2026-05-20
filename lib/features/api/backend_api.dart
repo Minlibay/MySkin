@@ -448,7 +448,6 @@ class BackendApi {
   Future<ScanResult> uploadScan({
     required String photoBase64,
     String mime = 'image/jpeg',
-    Map<String, dynamic>? faceGeom,
   }) async {
     try {
       final r = await _dio.post(
@@ -456,7 +455,6 @@ class BackendApi {
         data: {
           'photo_b64': photoBase64,
           'mime': mime,
-          if (faceGeom != null) 'face_geom': faceGeom,
         },
         options: _auth(),
       );
@@ -509,22 +507,6 @@ class BackendApi {
       options: _auth(),
     );
     return ZoneInsight.fromJson(r.data as Map<String, dynamic>);
-  }
-
-  /// Raw scan photo bytes — used by the result screen when it needs to run
-  /// ML Kit again on the saved image (older scans that pre-date face_bbox
-  /// support, or scans where the backend skin-colour bbox is too broad to
-  /// be useful for the heatmap).
-  Future<List<int>?> scanPhotoBytes(String id) async {
-    try {
-      final r = await _dio.get<List<int>>(
-        '$baseUrl/me/scans/$id/photo',
-        options: _auth().copyWith(responseType: ResponseType.bytes),
-      );
-      return r.data;
-    } catch (_) {
-      return null;
-    }
   }
 
   String productPhotoUrl(String id, {int? slot}) =>

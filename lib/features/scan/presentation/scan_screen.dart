@@ -2,8 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 
 import 'package:app_settings/app_settings.dart';
 import 'package:camera/camera.dart';
@@ -20,7 +18,6 @@ import 'widgets/scan_overlay_widgets.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_typography.dart';
 import '../../api/backend_api.dart';
-import '../data/face_geom_builder.dart';
 import '../domain/scan_result.dart';
 
 class ScanScreen extends ConsumerStatefulWidget {
@@ -434,12 +431,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
       await _stopStream();
       final pic = await cam.takePicture();
       final bytes = await File(pic.path).readAsBytes();
-      // Detect face directly on the saved photo. Far more accurate than
-      // re-using the stream bbox because the still picture and the preview
-      // frames have different FOVs / aspect ratios — a stream bbox would
-      // land in the wrong place once we project it onto the photo.
-      final faceGeom = await _faceGeomFromFile(pic.path, bytes);
-      await _uploadAndFinish(bytes, mime: 'image/jpeg', faceGeom: faceGeom);
+      // Face geometry is computed on the server (MediaPipe sidecar) from
+      // the same bytes we upload — no client-side detection needed.
+      await _uploadAndFinish(bytes, mime: 'image/jpeg');
     } on ScanQualityException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -476,12 +470,8 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
         return;
       }
       final bytes = await picked.readAsBytes();
-      // Same as the camera path — run ML Kit on the chosen file so the
-      // server gets the full face_geom (polygon + landmarks) and the
-      // result screen never needs to re-detect.
-      final faceGeom = await _faceGeomFromFile(picked.path, bytes);
       await _uploadAndFinish(bytes,
-          mime: picked.mimeType ?? 'image/jpeg', faceGeom: faceGeom);
+          mime: picked.mimeType ?? 'image/jpeg');
     } on ScanQualityException catch (e) {
       if (!mounted) return;
       setState(() {
@@ -498,141 +488,20 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   }
 
   Future<void> _uploadAndFinish(List<int> bytes,
-      {required String mime, Map<String, dynamic>? faceGeom}) async {
+      {required String mime}) async {
     final b64 = base64Encode(bytes);
     final result = await ref.read(backendApiProvider).uploadScan(
           photoBase64: b64,
           mime: mime,
-          faceGeom: faceGeom,
         );
     Telemetry.event('scan_uploaded', data: {
       'photo_kb': (bytes.length / 1024).round(),
       'score': result.score,
-      'had_face_geom': faceGeom != null,
-      'had_face_contour': faceGeom?['contour'] != null,
+      'had_face_geom': result.face != null,
+      'had_face_contour': result.face?.contour != null,
     });
     if (!mounted) return;
     widget.onResult(result);
-  }
-
-  /// Run ML Kit on the saved photo file and normalise the bbox into [0..1]
-  /// against the decoded photo's pixel dimensions. EXIF rotation is honoured
-  /// by InputImage.fromFilePath and by Flutter's image decoder, so the
-  /// resulting rect lines up with how the photo is later displayed.
-  /// Detects the user's face on a saved photo and produces the full
-  /// `face_geom` payload. We deliberately do NOT reuse [_faceDetector]
-  /// here — it has `enableTracking: true` for the live preview, and per
-  /// ML Kit docs tracking conflicts with contour detection on single
-  /// images (iOS silently returns no faces). Each pass below builds a
-  /// fresh detector with the right options.
-  ///
-  /// 3-pass cascade:
-  ///   1. accurate + contours + landmarks @ 0.15  ← preferred (full data)
-  ///   2. accurate + landmarks only       @ 0.08
-  ///   3. fast, plain                     @ 0.05  ← last resort
-  Future<Map<String, dynamic>?> _faceGeomFromFile(
-      String path, List<int> bytes) async {
-    final size = await _decodedImageSize(Uint8List.fromList(bytes));
-    if (size == null) {
-      Telemetry.event('scan_face_detect',
-          data: {'outcome': 'decode_failed'});
-      return null;
-    }
-
-    Face? face = await _runDetector(
-      FaceDetector(
-        options: FaceDetectorOptions(
-          performanceMode: FaceDetectorMode.accurate,
-          enableContours: true,
-          enableLandmarks: true,
-          minFaceSize: 0.15,
-        ),
-      ),
-      path,
-      pass: 'accurate_contours_015',
-      dispose: true,
-    );
-    face ??= await _runDetector(
-      FaceDetector(
-        options: FaceDetectorOptions(
-          performanceMode: FaceDetectorMode.accurate,
-          enableLandmarks: true,
-          minFaceSize: 0.08,
-        ),
-      ),
-      path,
-      pass: 'accurate_landmarks_008',
-      dispose: true,
-    );
-    face ??= await _runDetector(
-      FaceDetector(
-        options: FaceDetectorOptions(
-          performanceMode: FaceDetectorMode.fast,
-          minFaceSize: 0.05,
-        ),
-      ),
-      path,
-      pass: 'fast_005',
-      dispose: true,
-    );
-    if (face == null) {
-      Telemetry.event('scan_face_detect', data: {
-        'outcome': 'no_face',
-        'image_w': size.width.toInt(),
-        'image_h': size.height.toInt(),
-      });
-      return null;
-    }
-    final geom = buildFaceGeomJson(face, size.width, size.height);
-    Telemetry.event('scan_face_detect', data: {
-      'outcome': 'ok',
-      'has_contour': geom?['contour'] != null,
-      'image_w': size.width.toInt(),
-      'image_h': size.height.toInt(),
-    });
-    return geom;
-  }
-
-  Future<Face?> _runDetector(
-    FaceDetector detector,
-    String path, {
-    String pass = '',
-    bool dispose = false,
-  }) async {
-    try {
-      final input = InputImage.fromFilePath(path);
-      final faces = await detector.processImage(input);
-      if (faces.isEmpty) {
-        debugPrint('face detect pass=$pass returned 0 faces');
-        return null;
-      }
-      faces.sort((a, b) =>
-          (b.boundingBox.width * b.boundingBox.height)
-              .compareTo(a.boundingBox.width * a.boundingBox.height));
-      debugPrint(
-          'face detect pass=$pass found ${faces.length} face(s)');
-      return faces.first;
-    } catch (e) {
-      debugPrint('face detect pass=$pass failed: $e');
-      return null;
-    } finally {
-      if (dispose) await detector.close();
-    }
-  }
-
-  Future<({double width, double height})?> _decodedImageSize(
-      Uint8List bytes) async {
-    try {
-      final codec = await ui.instantiateImageCodec(bytes);
-      final frame = await codec.getNextFrame();
-      final img = frame.image;
-      final w = img.width.toDouble();
-      final h = img.height.toDouble();
-      img.dispose();
-      return (width: w, height: h);
-    } catch (_) {
-      return null;
-    }
   }
 
   @override

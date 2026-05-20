@@ -204,6 +204,29 @@ function Field({ label, value }: { label: string; value: string }) {
 }
 
 function ScanRow({ scan }: { scan: AdminScan }) {
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<'idle' | 'ok' | 'no_face' | 'err'>(
+    'idle'
+  );
+
+  async function recompute() {
+    if (!scan.has_photo) return;
+    setBusy(true);
+    setStatus('idle');
+    try {
+      await api.recomputeScanGeom(scan.id);
+      setStatus('ok');
+    } catch (e: unknown) {
+      const code =
+        e && typeof e === 'object' && 'code' in e
+          ? (e as { code?: string }).code
+          : undefined;
+      setStatus(code === 'no_face' ? 'no_face' : 'err');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="card p-3 flex items-center gap-4">
       <div className="font-serif text-3xl text-rose w-12 text-center">
@@ -218,7 +241,26 @@ function ScanRow({ scan }: { scan: AdminScan }) {
         </div>
       </div>
       {scan.has_photo && (
-        <span className="text-ink2 text-xs">📷</span>
+        <>
+          <button
+            onClick={recompute}
+            disabled={busy}
+            className="text-xs text-rose hover:underline disabled:opacity-50"
+            title="Пересчитать карту улучшений через MediaPipe"
+          >
+            {busy ? '…' : '↻ геом'}
+          </button>
+          {status === 'ok' && (
+            <span className="text-success text-xs">✓</span>
+          )}
+          {status === 'no_face' && (
+            <span className="text-warning text-xs">нет лица</span>
+          )}
+          {status === 'err' && (
+            <span className="text-warning text-xs">ошибка</span>
+          )}
+          <span className="text-ink2 text-xs">📷</span>
+        </>
       )}
     </div>
   );

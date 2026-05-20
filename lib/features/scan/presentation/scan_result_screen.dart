@@ -1,13 +1,7 @@
-import 'dart:io';
 import 'dart:math' as math;
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
-import '../../../core/telemetry/telemetry.dart';
 import '../../../core/theme/app_colors.dart';
 import '../../../core/theme/app_spacing.dart';
 import '../../../core/theme/app_typography.dart';
@@ -18,7 +12,6 @@ import '../../../core/widgets/medical_disclaimer_note.dart';
 import '../../../core/widgets/metric_ring.dart';
 import '../../../core/widgets/pill.dart';
 import '../../api/backend_api.dart';
-import '../data/face_geom_builder.dart';
 import '../domain/scan_result.dart';
 
 class ScanResultScreen extends ConsumerWidget {
@@ -382,27 +375,29 @@ class _Heatmap extends ConsumerStatefulWidget {
 
 class _HeatmapState extends ConsumerState<_Heatmap>
     with SingleTickerProviderStateMixin {
-  /// Face shape. Initialised synchronously from `widget.scan.face` when the
-  /// scan upload included a valid face_geom; otherwise built async after a
-  /// safety-net ML Kit pass on the result screen (covers older client
-  /// builds and scans where on-device detection failed during capture).
-  _FaceShape? _shape;
-
-  /// Actual pixel size of the photo. Needed because the photo is rendered
-  /// with BoxFit.cover into a 3:4 widget — when the original aspect differs,
-  /// part of the image is cropped and bbox-space coordinates must be
-  /// mapped through the same transform.
-  double? _imgW;
-  double? _imgH;
-
-  /// True once we've decided whether a face exists — covers both the
-  /// "scan.face was good" and "fallback ML Kit finished" cases. Until
-  /// this flips, the build() method shows nothing (no fake oval, no
-  /// "не распозналось" card — both would be lies while we're still
-  /// trying).
-  bool _detectionComplete = false;
+  /// Face shape — built synchronously from the server-stored face_geom
+  /// (MediaPipe Face Mesh on the backend). No on-device detection: the
+  /// shape is either present from the upload or it isn't, and we show
+  /// the empty state in the latter case.
+  late final _FaceShape? _shape = _shapeFromScan();
 
   late final AnimationController _reveal;
+
+  _FaceShape? _shapeFromScan() {
+    final face = widget.scan.face;
+    if (face == null) return null;
+    return _FaceShape.fromGeometry(face);
+  }
+
+  /// Source photo dimensions, taken from the face_geom payload. Needed
+  /// because the photo is rendered with BoxFit.cover into a 3:4 widget —
+  /// when the original aspect differs, part of the image is cropped and
+  /// bbox-space coordinates must be mapped through the same transform.
+  /// Null on legacy scans without image_size — overlay then uses the
+  /// widget rect directly, which is wrong only by a few percent for
+  /// near-square photos.
+  double? get _imgW => widget.scan.face?.imageSize?[0].toDouble();
+  double? get _imgH => widget.scan.face?.imageSize?[1].toDouble();
 
   @override
   void initState() {
@@ -411,24 +406,10 @@ class _HeatmapState extends ConsumerState<_Heatmap>
       vsync: this,
       duration: const Duration(milliseconds: 1100),
     );
-
-    // Prefer scan-time face_geom: usually present and avoids a ~500ms
-    // detection round-trip. When the payload only carries the bbox
-    // (older client builds, fast-mode fallback) we still upgrade to a
-    // full contour-aware shape on this screen if possible.
-    final face = widget.scan.face;
-    if (face?.contour != null && face?.landmarks != null) {
-      _shape = _FaceShape.fromGeometry(face!);
-      _detectionComplete = true;
+    if (_shape != null) {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _reveal.forward(from: 0),
       );
-    }
-
-    if (widget.scan.hasPhoto) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _runDetectionFlow());
-    } else {
-      _detectionComplete = true;
     }
   }
 
@@ -436,172 +417,6 @@ class _HeatmapState extends ConsumerState<_Heatmap>
   void dispose() {
     _reveal.dispose();
     super.dispose();
-  }
-
-  /// Fetches photo bytes, decodes their pixel size (needed for the cover
-  /// transform), and — when we don't already have a rich shape — runs ML
-  /// Kit locally as a safety net. Either path ends with [_detectionComplete]
-  /// set to true and the appropriate UI (heatmap or _NoFaceOverlay).
-  Future<void> _runDetectionFlow() async {
-    try {
-      final bytes = await ref
-          .read(backendApiProvider)
-          .scanPhotoBytes(widget.scan.id);
-      if (bytes == null || bytes.isEmpty || !mounted) {
-        if (mounted) setState(() => _detectionComplete = true);
-        return;
-      }
-      final size = await _decodeSize(Uint8List.fromList(bytes));
-      if (size != null && mounted) {
-        setState(() {
-          _imgW = size.width;
-          _imgH = size.height;
-        });
-      }
-
-      // If scan-time data was good (full contour + landmarks), nothing
-      // more to do. We may still have a bbox-only shape from initState —
-      // try to upgrade it to a richer one via local detection below.
-      if (_shape != null && widget.scan.face?.contour != null) return;
-
-      if (size == null) {
-        // Can't run ML Kit without dimensions. Keep whatever shape we
-        // managed to build from the bbox; otherwise reveal _NoFaceOverlay.
-        if (mounted) {
-          setState(() {
-            _detectionComplete = true;
-            if (_shape != null) _reveal.forward(from: 0);
-          });
-        }
-        return;
-      }
-
-      final face = await _safetyNetDetect(bytes);
-      if (!mounted) return;
-      if (face != null) {
-        final richGeom =
-            buildFaceGeomJson(face, size.width, size.height);
-        if (richGeom != null) {
-          final geom = FaceGeometry.tryFromJson(richGeom);
-          if (geom != null) {
-            setState(() {
-              _shape = _FaceShape.fromGeometry(geom);
-              _detectionComplete = true;
-            });
-            _reveal.forward(from: 0);
-            return;
-          }
-        }
-      }
-
-      // Detection failed locally AND scan-time. Fall back to whatever
-      // bbox-only shape initState built; otherwise show the no-face card.
-      setState(() {
-        _detectionComplete = true;
-        if (_shape == null && widget.scan.face != null) {
-          _shape = _FaceShape.fromGeometry(widget.scan.face!);
-        }
-        if (_shape != null) _reveal.forward(from: 0);
-      });
-    } catch (e) {
-      debugPrint('Result-screen detection flow failed: $e');
-      if (mounted) setState(() => _detectionComplete = true);
-    }
-  }
-
-  /// Three-pass ML Kit cascade on the saved photo. Mirrors the one in
-  /// scan_screen so we have the same chance of finding a face that the
-  /// upload flow had — useful when the scan itself was uploaded by an
-  /// old client build that didn't run this cascade.
-  Future<Face?> _safetyNetDetect(List<int> bytes) async {
-    final tmp =
-        File('${Directory.systemTemp.path}/scan-${widget.scan.id}.jpg');
-    try {
-      await tmp.writeAsBytes(bytes, flush: true);
-      Face? face = await _tryDetect(
-        tmp.path,
-        pass: 'safety_accurate_contours_015',
-        accurate: true,
-        contours: true,
-        minFaceSize: 0.15,
-      );
-      face ??= await _tryDetect(
-        tmp.path,
-        pass: 'safety_accurate_landmarks_008',
-        accurate: true,
-        contours: false,
-        landmarks: true,
-        minFaceSize: 0.08,
-      );
-      face ??= await _tryDetect(
-        tmp.path,
-        pass: 'safety_fast_005',
-        accurate: false,
-        contours: false,
-        landmarks: false,
-        minFaceSize: 0.05,
-      );
-      Telemetry.event('scan_safety_detect', data: {
-        'outcome': face != null ? 'ok' : 'no_face',
-      });
-      return face;
-    } finally {
-      try {
-        await tmp.delete();
-      } catch (_) {/* ignore */}
-    }
-  }
-
-  Future<Face?> _tryDetect(
-    String path, {
-    required bool accurate,
-    required bool contours,
-    bool? landmarks,
-    required double minFaceSize,
-    String pass = '',
-  }) async {
-    final detector = FaceDetector(
-      options: FaceDetectorOptions(
-        performanceMode:
-            accurate ? FaceDetectorMode.accurate : FaceDetectorMode.fast,
-        enableContours: contours,
-        enableLandmarks: landmarks ?? contours,
-        minFaceSize: minFaceSize,
-      ),
-    );
-    try {
-      final input = InputImage.fromFilePath(path);
-      final faces = await detector.processImage(input);
-      if (faces.isEmpty) {
-        debugPrint('safety detect pass=$pass returned 0 faces');
-        return null;
-      }
-      faces.sort((a, b) =>
-          (b.boundingBox.width * b.boundingBox.height)
-              .compareTo(a.boundingBox.width * a.boundingBox.height));
-      debugPrint('safety detect pass=$pass found ${faces.length} face(s)');
-      return faces.first;
-    } catch (e) {
-      debugPrint('safety detect pass=$pass failed: $e');
-      return null;
-    } finally {
-      await detector.close();
-    }
-  }
-
-  Future<({double width, double height})?> _decodeSize(
-      Uint8List bytes) async {
-    try {
-      final codec = await ui.instantiateImageCodec(bytes);
-      final frame = await codec.getNextFrame();
-      final img = frame.image;
-      final w = img.width.toDouble();
-      final h = img.height.toDouble();
-      img.dispose();
-      return (width: w, height: h);
-    } catch (_) {
-      return null;
-    }
   }
 
   @override
@@ -671,12 +486,10 @@ class _HeatmapState extends ConsumerState<_Heatmap>
                       onTap: (key) => _showZoneSheet(context, key),
                     ),
                   ),
-                if (shape == null &&
-                    scan.hasPhoto &&
-                    _detectionComplete)
-                  // Honest empty-state — heatmap is hidden because ML Kit
-                  // didn't find a face at scan time AND the safety-net
-                  // detection on this screen also returned nothing.
+                if (shape == null && scan.hasPhoto)
+                  // No face_geom on the scan — server's MediaPipe sweep
+                  // couldn't find a face. Honest empty state instead of
+                  // a fake oval.
                   const _NoFaceOverlay(),
               ],
             ),

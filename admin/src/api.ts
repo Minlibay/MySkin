@@ -90,6 +90,35 @@ export const api = {
     );
   },
 
+  // Re-run the MediaPipe face-mesh sidecar over one saved scan and
+  // overwrite its stored face_geom. Used to spot-fix scans where the
+  // overlay points landed in the wrong place under the old pipeline.
+  recomputeScanGeom(scanId: string) {
+    return this.request<{ ok: true; face_geom: unknown }>(
+      `/admin/scans/${scanId}/recompute_geom`,
+      { method: 'POST' }
+    );
+  },
+
+  // Batch recompute. `only_missing: true` is the safe default — touches
+  // only scans whose face_geom is null or lacks landmarks. Set false to
+  // overwrite everything (the post-migration full sweep).
+  recomputeAllScansGeom(args: { only_missing?: boolean; limit?: number } = {}) {
+    return this.request<{
+      ok: true;
+      considered: number;
+      updated: number;
+      skipped: number;
+      no_face_ids: string[];
+    }>('/admin/scans/recompute_geom', {
+      method: 'POST',
+      body: JSON.stringify({
+        only_missing: args.only_missing ?? true,
+        limit: args.limit ?? 200,
+      }),
+    });
+  },
+
   userShelf(userId: string) {
     return this.request<{ items: ShelfProduct[] }>(
       `/admin/users/${userId}/shelf`

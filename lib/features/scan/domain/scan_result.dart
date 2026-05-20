@@ -84,19 +84,25 @@ class FaceGeometry {
     required this.bbox,
     this.contour,
     this.landmarks,
+    this.imageSize,
   });
 
-  /// `[x0, y0, x1, y1]` ML Kit bounding box.
+  /// `[x0, y0, x1, y1]` face bounding box in normalised image coords.
   final List<double> bbox;
 
-  /// Face outline polygon. Null when ML Kit didn't return contours
-  /// (older devices, fast-mode fallback, …) — renderer falls back to a
-  /// synthesised ellipse from the bbox.
+  /// Face outline polygon. Null on legacy scans without MediaPipe contour
+  /// — renderer falls back to a synthesised ellipse from the bbox.
   final List<List<double>>? contour;
 
   /// Zone landmark points, keyed by zone id: `forehead`, `tzone`,
   /// `left_cheek`, `right_cheek`, `chin`. Null when contour is null.
   final Map<String, List<double>>? landmarks;
+
+  /// Original photo pixel dimensions `[width, height]`. Sent by the
+  /// MediaPipe sidecar so the mobile renderer can apply BoxFit.cover
+  /// math without fetching and decoding the JPEG itself. Null on legacy
+  /// scans created before this field was added.
+  final List<int>? imageSize;
 
   double get x0 => bbox[0];
   double get y0 => bbox[1];
@@ -153,7 +159,20 @@ class FaceGeometry {
       if (out.length == 5) landmarks = out;
     }
 
-    return FaceGeometry(bbox: bbox, contour: contour, landmarks: landmarks);
+    List<int>? imageSize;
+    final rawSize = j['image_size'];
+    if (rawSize is List && rawSize.length == 2) {
+      final w = (rawSize[0] is num) ? (rawSize[0] as num).toInt() : 0;
+      final h = (rawSize[1] is num) ? (rawSize[1] as num).toInt() : 0;
+      if (w > 0 && h > 0) imageSize = [w, h];
+    }
+
+    return FaceGeometry(
+      bbox: bbox,
+      contour: contour,
+      landmarks: landmarks,
+      imageSize: imageSize,
+    );
   }
 }
 

@@ -4,6 +4,7 @@ import 'package:dotenv/dotenv.dart';
 import 'package:myskin_backend/ai_client.dart';
 import 'package:myskin_backend/ai_router.dart';
 import 'package:myskin_backend/db.dart';
+import 'package:myskin_backend/face_mesh.dart';
 import 'package:myskin_backend/gigachat.dart';
 import 'package:myskin_backend/handlers.dart';
 import 'package:myskin_backend/qwen.dart';
@@ -73,6 +74,13 @@ void main(List<String> args) async {
           settings: appSettings,
         );
 
+  final faceMesh = FaceMeshClient(
+    baseUrl: env['FACE_MESH_URL'] ?? '',
+  );
+  if (!faceMesh.configured) {
+    stderr.writeln(
+        'WARNING: FACE_MESH_URL is empty — scans will be rejected with no_face_detected');
+  }
   final admin = AdminHandlers(
     admins: admins,
     users: users,
@@ -85,6 +93,7 @@ void main(List<String> args) async {
     appSettings: appSettings,
     partners: partners,
     brands: brands,
+    faceMesh: faceMesh,
     availableProviders: availableProviders,
   );
   final partner = PartnerHandlers(
@@ -124,6 +133,7 @@ void main(List<String> args) async {
     giga: giga,
     appSettings: appSettings,
     notifications: notifications,
+    faceMesh: faceMesh,
   );
 
   final notificationHandlers = NotificationHandlers(

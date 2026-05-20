@@ -27,6 +27,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      face-mesh:
+        condition: service_healthy
     environment:
       PORT: 8080
       DATABASE_URL: postgres://${POSTGRES_USER:-myskin}:${POSTGRES_PASSWORD:-myskin}@db:5432/${POSTGRES_DB:-myskin}
@@ -45,8 +47,22 @@ services:
       ADMIN_LOGIN: ${ADMIN_LOGIN:-admin}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-admin}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+      # MediaPipe Face Mesh sidecar — single source of truth for face_geom.
+      FACE_MESH_URL: http://face-mesh:8000
     ports:
       - "8080:8080"
+
+  face-mesh:
+    build:
+      context: ./face-mesh
+    container_name: myskin-face-mesh
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2).status == 200 else 1)\""]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 30s
 
   admin:
     build:

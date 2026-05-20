@@ -2678,6 +2678,56 @@ class ScanRepository {
     );
   }
 
+  /// Replace just the `face_geom` column for an existing scan. Used by the
+  /// admin recompute flow — keeps photo and metrics untouched.
+  Future<void> updateFaceGeom(
+      String id, Map<String, dynamic>? faceGeom) async {
+    await db.execute(
+      Sql.named('UPDATE scans SET face_geom = @fg::jsonb WHERE id = @id'),
+      parameters: {
+        'id': id,
+        'fg': faceGeom == null ? null : jsonEncode(faceGeom),
+      },
+    );
+  }
+
+  /// Admin: fetch the saved JPEG bytes for any scan regardless of owner.
+  /// Returns null when the scan doesn't exist or has no photo (legacy rows).
+  Future<({List<int> bytes, String mime})?> getPhotoAny(String id) async {
+    final r = await db.execute(
+      Sql.named('SELECT photo, photo_mime FROM scans WHERE id = @id'),
+      parameters: {'id': id},
+    );
+    if (r.isEmpty || r.first[0] == null) return null;
+    return (
+      bytes: r.first[0] as List<int>,
+      mime: (r.first[1] as String?) ?? 'image/jpeg',
+    );
+  }
+
+  /// Admin: list scan IDs eligible for face_geom recompute. Only scans with
+  /// a saved photo are returned (recompute is impossible without one).
+  /// When [onlyMissing] is true, restrict to rows where face_geom is NULL
+  /// or lacks landmarks — the rest already have something usable.
+  Future<List<String>> listIdsForRecompute({
+    bool onlyMissing = false,
+    int limit = 500,
+  }) async {
+    final whereGeom = onlyMissing
+        ? "AND (face_geom IS NULL OR NOT (face_geom ? 'landmarks'))"
+        : '';
+    final r = await db.execute(
+      Sql.named('''
+        SELECT id FROM scans
+        WHERE photo IS NOT NULL $whereGeom
+        ORDER BY created_at DESC
+        LIMIT @lim
+      '''),
+      parameters: {'lim': limit},
+    );
+    return r.map((row) => row[0] as String).toList();
+  }
+
   Future<List<ScanRow>> listForUser(String userId, {int limit = 50}) async {
     final r = await db.execute(
       Sql.named('''
@@ -2724,7 +2774,6 @@ class ScanAnalysis {
     required this.insight,
     required this.qualityWarnings,
     required this.meta,
-    this.faceGeom,
   });
 
   final int score;
@@ -2736,10 +2785,6 @@ class ScanAnalysis {
   final String insight;
   final List<String> qualityWarnings;
   final Map<String, dynamic> meta;
-  /// Normalised face bounding box on the source photo:
-  /// `{"bbox": [x0, y0, x1, y1]}` with values in [0..1]. Null when no
-  /// face could be located (e.g. fallback path with no photo).
-  final Map<String, dynamic>? faceGeom;
 }
 
 /// Heuristic skin-tone detection in RGB (Kovac et al., simplified).
@@ -2800,19 +2845,11 @@ ScanAnalysis analyzeScan({
   final xCenter = w / 2;
   final tzoneHalfW = w * 0.12;
 
-  // Face bbox in pixel coords. Grows to include each detected skin pixel.
-  var faceMinX = w, faceMaxX = 0, faceMinY = h, faceMaxY = 0;
-
   for (var y = 0; y < h; y += 2) {
     for (var x = 0; x < w; x += 2) {
       final px = image.getPixel(x, y);
       final r = px.r.toInt(), g = px.g.toInt(), b = px.b.toInt();
       if (!_isSkinPixel(r, g, b)) continue;
-
-      if (x < faceMinX) faceMinX = x;
-      if (x > faceMaxX) faceMaxX = x;
-      if (y < faceMinY) faceMinY = y;
-      if (y > faceMaxY) faceMaxY = y;
 
       final lum = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0;
       final all = regions['all']!;
@@ -2931,27 +2968,6 @@ ScanAnalysis analyzeScan({
   meta['processing_ms'] =
       DateTime.now().difference(t0).inMilliseconds;
 
-  Map<String, dynamic>? faceGeom;
-  if (faceMaxX > faceMinX && faceMaxY > faceMinY) {
-    // Tighten the bbox slightly — skin detection picks up neck/edges and
-    // the raw extents drift outside the actual face. 4 % inset works well
-    // for selfie framing.
-    final pad = 0.04;
-    final x0 = (faceMinX / w).clamp(0.0, 1.0);
-    final y0 = (faceMinY / h).clamp(0.0, 1.0);
-    final x1 = (faceMaxX / w).clamp(0.0, 1.0);
-    final y1 = (faceMaxY / h).clamp(0.0, 1.0);
-    final bw = x1 - x0, bh = y1 - y0;
-    faceGeom = {
-      'bbox': [
-        (x0 + bw * pad).clamp(0.0, 1.0),
-        (y0 + bh * pad).clamp(0.0, 1.0),
-        (x1 - bw * pad).clamp(0.0, 1.0),
-        (y1 - bh * pad).clamp(0.0, 1.0),
-      ],
-    };
-  }
-
   return ScanAnalysis(
     score: score,
     hydration: hydration,
@@ -2967,7 +2983,6 @@ ScanAnalysis analyzeScan({
     insight: insight,
     qualityWarnings: warnings,
     meta: meta,
-    faceGeom: faceGeom,
   );
 }
 

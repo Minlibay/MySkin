@@ -175,6 +175,100 @@ export default function Settings() {
           </span>
         )}
       </div>
+
+      <FaceMeshRecompute />
+    </div>
+  );
+}
+
+function FaceMeshRecompute() {
+  const [busy, setBusy] = useState(false);
+  const [onlyMissing, setOnlyMissing] = useState(true);
+  const [limit, setLimit] = useState(200);
+  const [result, setResult] = useState<{
+    considered: number;
+    updated: number;
+    skipped: number;
+    no_face_ids: string[];
+  } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run() {
+    setBusy(true);
+    setErr(null);
+    setResult(null);
+    try {
+      const r = await api.recomputeAllScansGeom({
+        only_missing: onlyMissing,
+        limit,
+      });
+      setResult(r);
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="card p-6 mt-8">
+      <div className="eyebrow text-rose mb-1">Геометрия лица</div>
+      <h2 className="font-serif text-2xl mb-2">Пересчёт карты улучшений</h2>
+      <p className="text-ink2 text-sm mb-4">
+        Прогоняет сохранённые сканы через сервис MediaPipe и переписывает
+        face_geom. Используй для миграции старых сканов на новый
+        источник геометрии.
+      </p>
+      <div className="flex items-center gap-4 mb-4">
+        <label className="flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={onlyMissing}
+            onChange={(e) => setOnlyMissing(e.target.checked)}
+          />
+          только без landmarks
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          лимит за раз
+          <input
+            type="number"
+            className="input w-24"
+            value={limit}
+            min={1}
+            max={2000}
+            onChange={(e) =>
+              setLimit(Math.max(1, Math.min(2000, Number(e.target.value) || 1)))
+            }
+          />
+        </label>
+      </div>
+      <button className="btn-primary" onClick={run} disabled={busy}>
+        {busy ? 'Пересчитываем…' : 'Запустить пересчёт'}
+      </button>
+      {err && (
+        <div className="mt-3 text-warning text-sm">{err}</div>
+      )}
+      {result && (
+        <div className="mt-4 text-sm">
+          <div>Рассмотрено: <b>{result.considered}</b></div>
+          <div className="text-success">Обновлено: <b>{result.updated}</b></div>
+          <div className="text-ink2">
+            Пропущено (нет лица или нет фото): <b>{result.skipped}</b>
+          </div>
+          {result.no_face_ids.length > 0 && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-ink2">
+                ID без лица ({result.no_face_ids.length})
+              </summary>
+              <div className="font-mono text-xs mt-2 max-h-40 overflow-y-auto">
+                {result.no_face_ids.map((id) => (
+                  <div key={id}>{id}</div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
     </div>
   );
 }
