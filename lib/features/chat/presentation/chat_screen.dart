@@ -37,6 +37,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final _speech = stt.SpeechToText();
   bool _speechReady = false;
   bool _listening = false;
+  bool _bannerDismissed = false;
   // Text already in the input when dictation started — keeps the user's
   // typed prefix while we append recognised words after a space.
   String _speechBase = '';
@@ -228,6 +229,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
           Expanded(
             child: ListView.builder(
               controller: _scroll,
+              keyboardDismissBehavior:
+                  ScrollViewKeyboardDismissBehavior.onDrag,
               padding: const EdgeInsets.fromLTRB(
                   20, AppSpacing.sm, 20, AppSpacing.md),
               itemCount: state.messages.length + (state.sending ? 1 : 0),
@@ -266,18 +269,22 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  _LinaMedicalBanner(
-                    onTap: () => Navigator.of(context).push(
-                      MaterialPageRoute<void>(
-                        builder: (ctx) => LegalViewerScreen(
-                          docKey: 'legal_medical',
-                          title: 'Медицинская оговорка',
-                          onBack: () => Navigator.of(ctx).pop(),
+                  if (!_bannerDismissed) ...[
+                    _LinaMedicalBanner(
+                      onTap: () => Navigator.of(context).push(
+                        MaterialPageRoute<void>(
+                          builder: (ctx) => LegalViewerScreen(
+                            docKey: 'legal_medical',
+                            title: 'Медицинская оговорка',
+                            onBack: () => Navigator.of(ctx).pop(),
+                          ),
                         ),
                       ),
+                      onClose: () =>
+                          setState(() => _bannerDismissed = true),
                     ),
-                  ),
-                  const SizedBox(height: 8),
+                    const SizedBox(height: 8),
+                  ],
                   _InputBar(
                     controller: _input,
                     focus: _focus,
@@ -949,8 +956,9 @@ class _InputBar extends StatelessWidget {
 }
 
 class _LinaMedicalBanner extends StatelessWidget {
-  const _LinaMedicalBanner({required this.onTap});
+  const _LinaMedicalBanner({required this.onTap, required this.onClose});
   final VoidCallback onTap;
+  final VoidCallback onClose;
 
   @override
   Widget build(BuildContext context) {
@@ -993,6 +1001,16 @@ class _LinaMedicalBanner extends StatelessWidget {
               ),
               const Icon(Icons.chevron_right_rounded,
                   size: 14, color: AppColors.roseDeep),
+              const SizedBox(width: 4),
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: onClose,
+                child: const Padding(
+                  padding: EdgeInsets.all(4),
+                  child: Icon(Icons.close_rounded,
+                      size: 16, color: AppColors.textSecondary),
+                ),
+              ),
             ],
           ),
         ),

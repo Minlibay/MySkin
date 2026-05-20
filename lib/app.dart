@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'core/telemetry/telemetry.dart';
 import 'core/theme/app_theme.dart';
+import 'core/widgets/swipe_back.dart';
 import 'features/ai/domain/models.dart';
 import 'features/derm2/presentation/derm_state_machine_controller.dart' show aiServiceProvider;
 import 'features/api/backend_api.dart';
@@ -289,6 +290,49 @@ class _AppShellState extends ConsumerState<_AppShell> {
 
   @override
   Widget build(BuildContext context) {
+    final body = _buildView(context);
+    final back = _backForCurrentView();
+    if (back == null) return body;
+    return SwipeBack(onBack: back, child: body);
+  }
+
+  VoidCallback? _backForCurrentView() {
+    switch (_view) {
+      case _Shell.bootstrapping:
+      case _Shell.bootstrapError:
+      case _Shell.onboarding:
+      case _Shell.tutorial:
+      case _Shell.home:
+        return null;
+      case _Shell.standardLoading:
+      case _Shell.standardResult:
+      case _Shell.derm2:
+      case _Shell.catalog:
+      case _Shell.shelf:
+      case _Shell.profile:
+      case _Shell.scan:
+      case _Shell.scanResult:
+      case _Shell.chat:
+      case _Shell.notifications:
+      case _Shell.quickCheckIn:
+        return () => setState(() => _view = _Shell.home);
+      case _Shell.addCustomProduct:
+      case _Shell.customProductDetail:
+        return () => setState(() => _view = _Shell.shelf);
+      case _Shell.productDetail:
+        return () => setState(() => _view = _previousView);
+      case _Shell.ritual:
+        return () {
+          _refreshToday();
+          setState(() => _view = _Shell.home);
+        };
+      case _Shell.progress:
+      case _Shell.favorites:
+        return () => setState(() => _view = _Shell.profile);
+    }
+  }
+
+  Widget _buildView(BuildContext context) {
     switch (_view) {
       case _Shell.bootstrapping:
         return const SplashScreen();

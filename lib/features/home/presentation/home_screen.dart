@@ -687,7 +687,7 @@ class _TodayHeroCard extends StatelessWidget {
                 Text(
                   '«${summary.trim()}»',
                   style: AppTypography.serifItalic(
-                    fontSize: 15,
+                    fontSize: 17,
                     color: AppColors.roseDeep,
                   ).copyWith(height: 1.4),
                 ),
