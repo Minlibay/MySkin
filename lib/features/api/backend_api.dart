@@ -4,6 +4,7 @@ import '../ai/domain/models.dart';
 import '../catalog/domain/product.dart';
 import '../notifications/domain/app_notification.dart';
 import '../profile/domain/user_settings.dart';
+import '../pro/domain/pro_status.dart';
 import '../progress/domain/progress.dart';
 import '../ritual/domain/today.dart';
 import '../scan/domain/scan_result.dart';
@@ -426,6 +427,14 @@ class BackendApi {
   Future<UserSettings> getSettings() async {
     final r = await _dio.get('$baseUrl/me/settings', options: _auth());
     return UserSettings.fromJson(
+        (r.data as Map?)?.cast<String, dynamic>() ?? const {});
+  }
+
+  /// Returns whether the user is on the Pro tier plus the expiry.
+  /// Free users get `{is_pro: false, pro_until: null}`.
+  Future<ProStatus> getProStatus() async {
+    final r = await _dio.get('$baseUrl/me/pro/status', options: _auth());
+    return ProStatus.fromJson(
         (r.data as Map?)?.cast<String, dynamic>() ?? const {});
   }
 

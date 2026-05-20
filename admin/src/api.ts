@@ -90,6 +90,22 @@ export const api = {
     );
   },
 
+  // Extend the user's Pro subscription by N days. Used for beta users
+  // and promo-code redemptions until real payment integration ships.
+  grantPro(userId: string, days: number) {
+    return this.request<{ ok: true; pro_until: string }>(
+      `/admin/users/${userId}/pro/grant`,
+      { method: 'POST', body: JSON.stringify({ days }) }
+    );
+  },
+
+  revokePro(userId: string) {
+    return this.request<{ ok: true }>(
+      `/admin/users/${userId}/pro/revoke`,
+      { method: 'POST' }
+    );
+  },
+
   // Re-run the MediaPipe face-mesh sidecar over one saved scan and
   // overwrite its stored face_geom. Used to spot-fix scans where the
   // overlay points landed in the wrong place under the old pipeline.
@@ -532,6 +548,8 @@ export type AdminUser = {
   created_at: string;
   last_login_at: string | null;
   is_blocked: boolean;
+  is_pro?: boolean;
+  pro_until?: string | null;
 };
 
 export type UsersPage = {

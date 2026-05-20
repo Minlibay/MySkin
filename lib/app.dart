@@ -23,6 +23,7 @@ import 'features/derm2/presentation/derm2_screen.dart';
 import 'features/home/presentation/home_screen.dart';
 import 'features/notifications/data/local_notifications.dart';
 import 'features/notifications/presentation/notifications_screen.dart';
+import 'features/pro/presentation/pro_upgrade_screen.dart';
 import 'features/tutorial/presentation/welcome_tutorial_screen.dart';
 import 'features/onboarding/presentation/onboarding_screen.dart';
 import 'features/profile/domain/user_settings.dart';
@@ -158,6 +159,7 @@ enum _Shell {
   favorites,
   addCustomProduct,
   customProductDetail,
+  pro,
 }
 
 class _AppShell extends ConsumerStatefulWidget {
@@ -378,6 +380,7 @@ class _AppShellState extends ConsumerState<_AppShell> {
         };
       case _Shell.progress:
       case _Shell.favorites:
+      case _Shell.pro:
         return () => setState(() => _view = _Shell.profile);
     }
   }
@@ -518,6 +521,7 @@ class _AppShellState extends ConsumerState<_AppShell> {
           onOpenProgress: () => setState(() => _view = _Shell.progress),
           onProfileUpdated: (p) => setState(() => _profile = p),
           onOpenFavorites: () => setState(() => _view = _Shell.favorites),
+          onOpenPro: () => setState(() => _view = _Shell.pro),
           onOpenRoutineHistory: () => Navigator.of(context).push(
             MaterialPageRoute<void>(
               builder: (ctx) => RoutineHistoryScreen(
@@ -581,6 +585,10 @@ class _AppShellState extends ConsumerState<_AppShell> {
             _openProductSlug = p.slug;
             _view = _Shell.productDetail;
           }),
+        );
+      case _Shell.pro:
+        return ProUpgradeScreen(
+          onBack: () => setState(() => _view = _Shell.profile),
         );
     }
   }

@@ -404,7 +404,11 @@ class AdminHandlers {
     ..post('/admin/scans/<id>/recompute_geom',
         _withAdmin(_recomputeScanGeom))
     ..post('/admin/scans/recompute_geom',
-        _withAdmin(_recomputeScansBatch));
+        _withAdmin(_recomputeScansBatch))
+    // Pro subscription — manual grant/revoke for beta users and promo
+    // codes until real payment integration lands.
+    ..post('/admin/users/<id>/pro/grant', _withAdmin(_grantPro))
+    ..post('/admin/users/<id>/pro/revoke', _withAdmin(_revokePro));
 
   Handler _withAdmin(Handler inner) => (Request req) async {
         final token = _bearer(req);
@@ -1075,6 +1079,34 @@ class AdminHandlers {
     }
     await scans.updateFaceGeom(id, geom);
     return jsonResponse(200, {'ok': true, 'face_geom': geom});
+  }
+
+  /// Extend a user's Pro subscription by N days. Body: { "days": int }.
+  /// Used for beta access and promo-code redemptions; real payment flows
+  /// (StoreKit / ЮKassa) will call the same repo method via a different
+  /// authenticated path.
+  Future<Response> _grantPro(Request req) async {
+    final id = req.params['id']!;
+    final body = await req.readAsString();
+    final json = body.isEmpty
+        ? <String, dynamic>{}
+        : (jsonDecode(body) as Map<String, dynamic>);
+    final days = ((json['days'] as num?)?.toInt() ?? 30).clamp(1, 3650);
+    try {
+      final until = await users.grantPro(id, days);
+      return jsonResponse(200, {
+        'ok': true,
+        'pro_until': until.toUtc().toIso8601String(),
+      });
+    } on StateError catch (_) {
+      return jsonResponse(404, {'error': 'user_not_found'});
+    }
+  }
+
+  Future<Response> _revokePro(Request req) async {
+    final id = req.params['id']!;
+    await users.revokePro(id);
+    return jsonResponse(200, {'ok': true});
   }
 
   /// Batch sweep — recompute geometry for many scans in one call. Body:
@@ -3517,8 +3549,16 @@ class MeHandlers {
     ..get('/me/avatar', _withUser(_getAvatar))
     ..put('/me/avatar', _withUser(_setAvatar))
     ..delete('/me/avatar', _withUser(_removeAvatar))
+    ..get('/me/pro/status', _withUser(_proStatus))
     // Catalog interaction telemetry. Batched, fire-and-forget from the app.
     ..post('/events/product', _withUser(_logProductEvents));
+
+  Future<Response> _proStatus(Request req, UserRow user) async {
+    return jsonResponse(200, {
+      'is_pro': user.isPro,
+      'pro_until': user.proUntil?.toUtc().toIso8601String(),
+    });
+  }
 
   Future<Response> _logProductEvents(Request req, UserRow user) async {
     final body = jsonDecode(await req.readAsString()) as Map<String, dynamic>;

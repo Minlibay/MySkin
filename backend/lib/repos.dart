@@ -43,6 +43,7 @@ class UserRow {
     required this.createdAt,
     this.lastLoginAt,
     required this.isBlocked,
+    this.proUntil,
   });
   final String id;
   final String phone;
@@ -50,17 +51,29 @@ class UserRow {
   final DateTime? lastLoginAt;
   final bool isBlocked;
 
+  /// Expiry of the Pro subscription. NULL or in the past → user is on
+  /// the free tier. Storing an expiry instead of a boolean lets us
+  /// extend by N days (promo / beta / paid month) with a single column.
+  final DateTime? proUntil;
+
+  bool get isPro =>
+      proUntil != null && proUntil!.isAfter(DateTime.now().toUtc());
+
   Map<String, dynamic> toAdminJson() => {
         'id': id,
         'phone': phone,
         'created_at': createdAt.toUtc().toIso8601String(),
         'last_login_at': lastLoginAt?.toUtc().toIso8601String(),
         'is_blocked': isBlocked,
+        'is_pro': isPro,
+        'pro_until': proUntil?.toUtc().toIso8601String(),
       };
 
   Map<String, dynamic> toClientJson() => {
         'id': id,
         'phone': phone,
+        'is_pro': isPro,
+        'pro_until': proUntil?.toUtc().toIso8601String(),
       };
 
   static UserRow fromRow(List<dynamic> r) => UserRow(
@@ -69,6 +82,7 @@ class UserRow {
         createdAt: r[2] as DateTime,
         lastLoginAt: r[3] as DateTime?,
         isBlocked: r[4] as bool,
+        proUntil: r[5] as DateTime?,
       );
 }
 
@@ -79,7 +93,7 @@ class UserRepository {
   Future<UserRow> findOrCreateByPhone(String phone) async {
     final existing = await db.execute(
       Sql.named(
-          'SELECT id, phone, created_at, last_login_at, is_blocked FROM users WHERE phone = @phone'),
+          'SELECT id, phone, created_at, last_login_at, is_blocked, pro_until FROM users WHERE phone = @phone'),
       parameters: {'phone': phone},
     );
     if (existing.isNotEmpty) return UserRow.fromRow(existing.first);
@@ -87,10 +101,39 @@ class UserRepository {
     final id = _uuid.v4();
     final inserted = await db.execute(
       Sql.named(
-          'INSERT INTO users (id, phone) VALUES (@id, @phone) RETURNING id, phone, created_at, last_login_at, is_blocked'),
+          'INSERT INTO users (id, phone) VALUES (@id, @phone) RETURNING id, phone, created_at, last_login_at, is_blocked, pro_until'),
       parameters: {'id': id, 'phone': phone},
     );
     return UserRow.fromRow(inserted.first);
+  }
+
+  /// Extends the user's Pro subscription by [days]. If `pro_until` is in
+  /// the past (or null), the new expiry is `now + days`; otherwise the
+  /// existing expiry is pushed forward by [days]. Returns the new expiry.
+  Future<DateTime> grantPro(String userId, int days) async {
+    final r = await db.execute(
+      Sql.named('''
+        UPDATE users
+        SET pro_until = GREATEST(COALESCE(pro_until, now()), now())
+                        + (@d || ' days')::interval
+        WHERE id = @id
+        RETURNING pro_until
+      '''),
+      parameters: {'id': userId, 'd': days},
+    );
+    if (r.isEmpty) {
+      throw StateError('user_not_found');
+    }
+    return r.first[0] as DateTime;
+  }
+
+  /// Clears the Pro subscription immediately. Used by admin "revoke" and
+  /// by future refund flows.
+  Future<void> revokePro(String userId) async {
+    await db.execute(
+      Sql.named('UPDATE users SET pro_until = NULL WHERE id = @id'),
+      parameters: {'id': userId},
+    );
   }
 
   Future<void> markLogin(String userId) async {
@@ -103,7 +146,7 @@ class UserRepository {
   Future<UserRow?> findById(String id) async {
     final r = await db.execute(
       Sql.named(
-          'SELECT id, phone, created_at, last_login_at, is_blocked FROM users WHERE id = @id'),
+          'SELECT id, phone, created_at, last_login_at, is_blocked, pro_until FROM users WHERE id = @id'),
       parameters: {'id': id},
     );
     if (r.isEmpty) return null;
@@ -305,7 +348,7 @@ class UserRepository {
     final countParams = {if (hasQuery) 'q': query.trim()};
     final rows = await db.execute(
       Sql.named('''
-        SELECT id, phone, created_at, last_login_at, is_blocked
+        SELECT id, phone, created_at, last_login_at, is_blocked, pro_until
         FROM users $filter
         ORDER BY created_at DESC
         LIMIT @limit OFFSET @offset
@@ -342,7 +385,7 @@ class SessionRepository {
   Future<UserRow?> userForToken(String token) async {
     final r = await db.execute(
       Sql.named('''
-        SELECT u.id, u.phone, u.created_at, u.last_login_at, u.is_blocked
+        SELECT u.id, u.phone, u.created_at, u.last_login_at, u.is_blocked, u.pro_until
         FROM sessions s
         JOIN users u ON u.id = s.user_id
         WHERE s.token = @t AND s.expires_at > now()

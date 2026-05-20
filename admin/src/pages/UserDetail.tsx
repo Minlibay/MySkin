@@ -95,6 +95,8 @@ export default function UserDetail() {
         />
       </div>
 
+      <ProSection user={user} onChange={(u) => setData({ ...data, user: u })} />
+
       {profile && <ProfileCard profile={profile} />}
 
       {data.last_scan && (
@@ -147,6 +149,97 @@ function Stat({ label, value }: { label: string; value: string | number }) {
     <div className="card p-4">
       <div className="eyebrow mb-1">{label}</div>
       <div className="text-2xl font-serif text-ink">{value}</div>
+    </div>
+  );
+}
+
+function ProSection({
+  user,
+  onChange,
+}: {
+  user: import('../api').AdminUser;
+  onChange: (u: import('../api').AdminUser) => void;
+}) {
+  const [busy, setBusy] = useState<'grant' | 'revoke' | null>(null);
+  const [days, setDays] = useState(30);
+  const [err, setErr] = useState<string | null>(null);
+
+  const isPro = !!user.is_pro;
+  const until = user.pro_until ? new Date(user.pro_until) : null;
+
+  async function grant() {
+    setBusy('grant');
+    setErr(null);
+    try {
+      const r = await api.grantPro(user.id, days);
+      onChange({ ...user, is_pro: true, pro_until: r.pro_until });
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function revoke() {
+    if (!confirm('Снять Pro-подписку у пользователя?')) return;
+    setBusy('revoke');
+    setErr(null);
+    try {
+      await api.revokePro(user.id);
+      onChange({ ...user, is_pro: false, pro_until: null });
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="card p-5 mt-6">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <div className="eyebrow text-rose mb-1">Pro-подписка</div>
+          <div className="text-ink font-medium">
+            {isPro ? 'Активна' : 'Не активна'}
+            {until && (
+              <span className="text-ink2 ml-2">
+                до {fmtDate(until.toISOString())}
+              </span>
+            )}
+          </div>
+        </div>
+        {isPro && (
+          <button
+            onClick={revoke}
+            disabled={busy !== null}
+            className="text-warning text-sm hover:underline disabled:opacity-50"
+          >
+            {busy === 'revoke' ? '…' : 'Снять Pro'}
+          </button>
+        )}
+      </div>
+      <div className="flex items-center gap-2">
+        <label className="text-sm text-ink2">Выдать на</label>
+        <input
+          type="number"
+          min={1}
+          max={3650}
+          value={days}
+          onChange={(e) =>
+            setDays(Math.max(1, Math.min(3650, Number(e.target.value) || 1)))
+          }
+          className="input w-20"
+        />
+        <span className="text-sm text-ink2">дней</span>
+        <button
+          onClick={grant}
+          disabled={busy !== null}
+          className="btn-primary text-sm disabled:opacity-50"
+        >
+          {busy === 'grant' ? 'Выдаём…' : isPro ? 'Продлить' : 'Выдать'}
+        </button>
+      </div>
+      {err && <div className="text-warning text-sm mt-2">{err}</div>}
     </div>
   );
 }

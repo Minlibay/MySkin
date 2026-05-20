@@ -32,6 +32,7 @@ class ProfileScreen extends ConsumerStatefulWidget {
     required this.onProfileUpdated,
     this.onOpenRoutineHistory,
     this.onOpenFavorites,
+    this.onOpenPro,
     this.skinScore,
     this.streak,
   });
@@ -44,6 +45,7 @@ class ProfileScreen extends ConsumerStatefulWidget {
   final ValueChanged<SkinProfile> onProfileUpdated;
   final VoidCallback? onOpenRoutineHistory;
   final VoidCallback? onOpenFavorites;
+  final VoidCallback? onOpenPro;
 
   /// Latest skin index from the most recent scan/routine — drives the centre
   /// stat. Null while bootstrap hasn't loaded a result yet.
@@ -819,6 +821,10 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
                     shelf: shelfText,
                   ),
                 ),
+                if (widget.onOpenPro != null) ...[
+                  const SizedBox(height: AppSpacing.lg),
+                  _ProBanner(onTap: widget.onOpenPro!),
+                ],
                 const SizedBox(height: AppSpacing.lg),
                 _Group(
                   title: 'Моё',
@@ -1372,6 +1378,84 @@ class _ReminderTile extends StatelessWidget {
             activeColor: AppColors.roseDeep,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Compact upsell tile shown above the navigation groups. Always visible
+/// for free users — the destination screen handles "already Pro" by
+/// hiding the CTA itself, so we don't need to fetch pro_status here.
+class _ProBanner extends StatelessWidget {
+  const _ProBanner({required this.onTap});
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(20),
+        child: Ink(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(20),
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [AppColors.roseDeep, AppColors.roseShadow],
+            ),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(18, 16, 16, 16),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: const Icon(
+                    Icons.workspace_premium_rounded,
+                    color: Colors.white,
+                    size: 22,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Перейти на Pro',
+                        style: AppTypography.bodyMedium.copyWith(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'Промокоды партнёров, безлимит чата, ранний доступ',
+                        style: AppTypography.caption.copyWith(
+                          color: Colors.white.withOpacity(0.85),
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                const Icon(
+                  Icons.arrow_forward_rounded,
+                  color: Colors.white,
+                  size: 18,
+                ),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
