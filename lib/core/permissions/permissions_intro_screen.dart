@@ -36,14 +36,6 @@ class _PermissionsIntroScreenState extends State<PermissionsIntroScreen> {
     }
   }
 
-  Future<void> _skip() async {
-    // User chose "later" — mark the initial sweep done so we don't keep
-    // re-prompting on every launch. Per-feature gates will still ask in
-    // context when the user tries to actually use the feature.
-    await AppPermissions.instance.markInitialAsked();
-    if (mounted) widget.onDone();
-  }
-
   @override
   Widget build(BuildContext context) {
     final items = <_PermItem>[
@@ -143,18 +135,8 @@ class _PermissionsIntroScreenState extends State<PermissionsIntroScreen> {
                                     Colors.white),
                               ),
                             )
-                          : Text('Разрешить',
+                          : Text('Продолжить',
                               style: AppTypography.button),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Center(
-                    child: TextButton(
-                      onPressed: _busy ? null : _skip,
-                      style: TextButton.styleFrom(
-                        foregroundColor: AppColors.textSecondary,
-                      ),
-                      child: const Text('Не сейчас'),
                     ),
                   ),
                 ],
