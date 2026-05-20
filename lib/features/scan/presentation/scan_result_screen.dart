@@ -9,6 +9,7 @@ import '../../../core/widgets/eyebrow_text.dart';
 import '../../../core/widgets/glow_background.dart';
 import '../../../core/widgets/lina_avatar.dart';
 import '../../../core/widgets/medical_disclaimer_note.dart';
+import '../../../core/widgets/medical_sources_note.dart';
 import '../../../core/widgets/metric_ring.dart';
 import '../../../core/widgets/pill.dart';
 import '../../api/backend_api.dart';
@@ -76,6 +77,8 @@ class ScanResultScreen extends ConsumerWidget {
                         _AnalysisMeta(meta: scan.meta),
                       ],
                       const SizedBox(height: AppSpacing.lg),
+                      const MedicalSourcesNote(),
+                      const SizedBox(height: AppSpacing.md),
                       const MedicalDisclaimerNote(),
                     ],
                   ),
