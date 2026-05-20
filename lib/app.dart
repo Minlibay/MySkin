@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'core/permissions/permissions_intro_screen.dart';
 import 'core/telemetry/telemetry.dart';
 import 'core/theme/app_theme.dart';
 import 'core/widgets/swipe_back.dart';
@@ -136,6 +137,7 @@ class _AuthGate extends ConsumerWidget {
 enum _Shell {
   bootstrapping,
   bootstrapError,
+  permissionsIntro,
   onboarding,
   tutorial,
   home,
@@ -191,17 +193,26 @@ class _AppShellState extends ConsumerState<_AppShell> {
         api.listRoutines(),
         api.getToday(),
         api.getSettings(),
+        shouldShowPermissionsIntro(),
       ]);
       final profile = results[0] as SkinProfile?;
       final routines = results[1] as List<RoutineRecord>;
       final today = results[2] as Today;
       final settings = results[3] as UserSettings;
+      final needsPermissions = results[4] as bool;
       if (!mounted) return;
       setState(() {
         if (profile != null) _profile = profile;
         if (routines.isNotEmpty) _lastResult = routines.first.result;
         _today = today;
-        if (profile == null) {
+        // Permissions sweep is the first thing after auth — before any
+        // feature that actually needs them runs, so the user has only
+        // seen the OS dialog once when they later try to scan or talk
+        // to Лина. Skipped for users who already did the sweep on a
+        // previous launch.
+        if (needsPermissions) {
+          _view = _Shell.permissionsIntro;
+        } else if (profile == null) {
           _view = _Shell.onboarding;
         } else if (!settings.tutorialSeen) {
           // Existing user from a build that pre-dates the tutorial — show it
@@ -218,6 +229,27 @@ class _AppShellState extends ConsumerState<_AppShell> {
     } catch (_) {
       if (!mounted) return;
       setState(() => _view = _Shell.bootstrapError);
+    }
+  }
+
+  /// Called after the user finishes (or skips) the initial permission
+  /// sweep. Continues to whatever screen would have come next: onboarding
+  /// for new users, tutorial for users on a fresh install, otherwise home.
+  Future<void> _onPermissionsIntroDone() async {
+    try {
+      final settings = await ref.read(backendApiProvider).getSettings();
+      if (!mounted) return;
+      setState(() {
+        if (_profile.skinType == null) {
+          _view = _Shell.onboarding;
+        } else if (!settings.tutorialSeen) {
+          _view = _Shell.tutorial;
+        } else {
+          _view = _Shell.home;
+        }
+      });
+    } catch (_) {
+      if (mounted) setState(() => _view = _Shell.home);
     }
   }
 
@@ -317,6 +349,7 @@ class _AppShellState extends ConsumerState<_AppShell> {
     switch (_view) {
       case _Shell.bootstrapping:
       case _Shell.bootstrapError:
+      case _Shell.permissionsIntro:
       case _Shell.onboarding:
       case _Shell.tutorial:
       case _Shell.home:
@@ -355,6 +388,8 @@ class _AppShellState extends ConsumerState<_AppShell> {
         return const SplashScreen();
       case _Shell.bootstrapError:
         return _BootstrapErrorScreen(onRetry: _bootstrap);
+      case _Shell.permissionsIntro:
+        return PermissionsIntroScreen(onDone: _onPermissionsIntroDone);
       case _Shell.onboarding:
         return OnboardingScreen(onComplete: _onOnboardingComplete);
       case _Shell.tutorial:

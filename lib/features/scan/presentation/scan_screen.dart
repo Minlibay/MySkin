@@ -10,6 +10,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:permission_handler/permission_handler.dart';
+import '../../../core/permissions/permission_denied_screen.dart';
+import '../../../core/permissions/permissions.dart';
 import '../../../core/telemetry/telemetry.dart';
 import 'widgets/scan_camera_backdrop.dart';
 import 'widgets/scan_face_overlay.dart' show DetectedFace;
@@ -64,6 +67,12 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   Uint8List? _previewBytes;
   String? _previewMime;
 
+  /// Tracks whether the OS will let us touch the camera at all. Set to
+  /// `true` after a permanent denial — at that point we swap the whole
+  /// scan screen for [PermissionDeniedScreen.camera]; no point spinning
+  /// up CameraController, ML Kit etc.
+  bool _cameraBlocked = false;
+
   @override
   void initState() {
     super.initState();
@@ -114,6 +123,17 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
   }
 
   Future<void> _initCamera() async {
+    // Gate the whole camera init on a real permission grant. The camera
+    // package will throw CameraAccessDenied on iOS, but on a permanent
+    // denial the user can't fix it without going to Settings — show the
+    // dedicated screen instead of the live-camera UI with a tiny pill.
+    final status =
+        await AppPermissions.instance.ensure(Permission.camera);
+    if (!mounted) return;
+    if (status.isPermanentlyDenied || status.isDenied || status.isRestricted) {
+      setState(() => _cameraBlocked = true);
+      return;
+    }
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
@@ -548,6 +568,9 @@ class _ScanScreenState extends ConsumerState<ScanScreen>
 
   @override
   Widget build(BuildContext context) {
+    if (_cameraBlocked) {
+      return PermissionDeniedScreen.camera(onBack: widget.onBack);
+    }
     final inPreview = _previewBytes != null;
     return Scaffold(
       backgroundColor: const Color(0xFF0F0A0C),
